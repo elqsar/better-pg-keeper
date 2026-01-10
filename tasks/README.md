@@ -71,7 +71,7 @@ Update this section as tasks are completed:
 
 - [x] 01 - Project Setup (completed 2026-01-10)
 - [x] 02 - Configuration (completed 2026-01-10)
-- [ ] 03 - Storage (SQLite)
+- [x] 03 - Storage (SQLite) (completed 2026-01-10)
 - [ ] 04 - PostgreSQL Client
 - [ ] 05 - Collectors
 - [ ] 06 - Analyzer
@@ -143,3 +143,39 @@ task
 - Comprehensive tests in `internal/config/config_test.go`:
   - 22 test cases covering all functionality
   - Tests for YAML parsing, env var expansion, validation errors, defaults
+
+## What Was Completed in Task 03
+
+- Data models defined in `internal/models/models.go`:
+  - `Instance`, `Snapshot`, `QueryStat`, `QueryStatDelta`
+  - `TableStat`, `IndexStat`, `Suggestion`, `ExplainPlan`
+  - Severity and Status constants
+- Migration system in `internal/storage/sqlite/migrations.go`:
+  - Embedded SQL migrations using `embed.FS`
+  - `_migrations` table to track applied migrations
+  - `Migrate()`, `Rollback()`, `GetMigrationStatus()` functions
+  - Transaction-safe migration application
+- Schema migrations in `internal/storage/sqlite/migrations/`:
+  - `001_create_instances.sql` - instances table with unique constraint
+  - `002_create_snapshots.sql` - snapshots table with index
+  - `003_create_query_stats.sql` - query_stats with queryid index
+  - `004_create_table_stats.sql` - table_stats table
+  - `005_create_index_stats.sql` - index_stats table
+  - `006_create_suggestions.sql` - suggestions with deduplication
+  - `007_create_explain_plans.sql` - explain_plans table
+  - All tables support cascade deletes via foreign keys
+- Storage implementation in `internal/storage/sqlite/storage.go`:
+  - `Storage` interface with all CRUD operations
+  - `NewStorage(dbPath)` with auto-migration
+  - Connection pooling with WAL mode and foreign keys enabled
+  - Instance operations: Get, GetByName, Create, GetOrCreate, List
+  - Snapshot operations: Create, GetByID, GetLatest, List
+  - Query stats: Save, Get, GetDelta (with stats reset handling)
+  - Table/Index stats: Save, Get
+  - Suggestions: Upsert, GetActive, GetByID, Dismiss, Resolve
+  - Explain plans: Save, Get (returns latest)
+  - Maintenance: PurgeOldSnapshots with cascade deletes
+- Comprehensive tests in `internal/storage/sqlite/storage_test.go`:
+  - 30+ test cases covering all operations
+  - Tests for migrations, CRUD, delta calculation, cascade deletes
+  - Stats reset detection testing
