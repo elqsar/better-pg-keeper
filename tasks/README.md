@@ -72,7 +72,7 @@ Update this section as tasks are completed:
 - [x] 01 - Project Setup (completed 2026-01-10)
 - [x] 02 - Configuration (completed 2026-01-10)
 - [x] 03 - Storage (SQLite) (completed 2026-01-10)
-- [ ] 04 - PostgreSQL Client
+- [x] 04 - PostgreSQL Client (completed 2026-01-10)
 - [ ] 05 - Collectors
 - [ ] 06 - Analyzer
 - [ ] 07 - Suggester
@@ -179,3 +179,37 @@ task
   - 30+ test cases covering all operations
   - Tests for migrations, CRUD, delta calculation, cascade deletes
   - Stats reset detection testing
+
+## What Was Completed in Task 04
+
+- Extended models in `internal/models/models.go`:
+  - Added `DatabaseStats` struct for database-level statistics (cache hit ratio)
+  - Added `BloatInfo` struct for table bloat information
+  - Added `IndexDetail` struct for extended index information
+- Client interface in `internal/postgres/client.go`:
+  - Defined `Client` interface with all required methods
+  - Defined `ClientConfig` struct with connection pool settings
+  - `DefaultClientConfig()` function with sensible defaults
+- PostgreSQL client in `internal/postgres/pgx_client.go`:
+  - Connection management: `NewClient()`, `Connect()`, `Close()`, `Ping()`
+  - Uses `pgxpool` for connection pooling with configurable pool settings
+  - Stats collection:
+    - `GetStatStatements()` - query statistics from pg_stat_statements
+    - `GetStatTables()` - table statistics from pg_stat_user_tables
+    - `GetStatIndexes()` - index statistics from pg_stat_user_indexes
+    - `GetDatabaseStats()` - cache hit ratio from pg_stat_database
+  - Schema analysis:
+    - `GetTableBloat()` - tables with significant dead tuples
+    - `GetIndexDetails()` - extended index info with definitions
+  - Query analysis:
+    - `Explain()` - EXPLAIN with JSON format, BUFFERS, VERBOSE, SETTINGS
+    - Safety check prevents ANALYZE on write queries (INSERT/UPDATE/DELETE)
+  - Metadata queries:
+    - `GetVersion()` - PostgreSQL version string
+    - `GetStatsResetTime()` - stats reset time from pg_stat_statements_info (PG14+)
+- Comprehensive tests in `internal/postgres/client_test.go`:
+  - Config validation tests
+  - Connection string building tests
+  - Not-connected error handling tests
+  - Write query detection tests
+  - Model structure tests

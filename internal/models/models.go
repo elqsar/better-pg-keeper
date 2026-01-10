@@ -132,3 +132,36 @@ type ExplainPlan struct {
 	CapturedAt    time.Time  `json:"captured_at"`
 	ExecutionTime *float64   `json:"execution_time,omitempty"` // if ANALYZE was used
 }
+
+// DatabaseStats represents database-level statistics.
+type DatabaseStats struct {
+	DatabaseName  string  `json:"database_name"`
+	BlksHit       int64   `json:"blks_hit"`
+	BlksRead      int64   `json:"blks_read"`
+	CacheHitRatio float64 `json:"cache_hit_ratio"` // 0-100 percentage
+}
+
+// BloatInfo represents table bloat information.
+type BloatInfo struct {
+	SchemaName   string  `json:"schemaname"`
+	RelName      string  `json:"relname"`
+	NDeadTup     int64   `json:"n_dead_tup"`
+	NLiveTup     int64   `json:"n_live_tup"`
+	BloatPercent float64 `json:"bloat_percent"` // dead tuples as percentage of live
+}
+
+// IndexDetail represents extended index information.
+type IndexDetail struct {
+	SchemaName   string `json:"schemaname"`
+	TableName    string `json:"table_name"`
+	IndexName    string `json:"index_name"`
+	IndexDef     string `json:"index_def"`
+	IndexSize    int64  `json:"index_size"`
+	IdxScan      int64  `json:"idx_scan"`
+	IdxTupRead   int64  `json:"idx_tup_read"`
+	IdxTupFetch  int64  `json:"idx_tup_fetch"`
+	IsUnique     bool   `json:"is_unique"`
+	IsPrimary    bool   `json:"is_primary"`
+	IsValid      bool   `json:"is_valid"`
+	TableSize    int64  `json:"table_size"`
+}
