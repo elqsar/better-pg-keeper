@@ -3,6 +3,7 @@ package api
 import (
 	"context"
 	"fmt"
+	"io/fs"
 	"log"
 	"net/http"
 	"time"
@@ -16,6 +17,7 @@ import (
 	"github.com/user/pganalyzer/internal/postgres"
 	"github.com/user/pganalyzer/internal/scheduler"
 	"github.com/user/pganalyzer/internal/storage/sqlite"
+	"github.com/user/pganalyzer/internal/web"
 )
 
 // Server represents the HTTP API server.
@@ -27,6 +29,7 @@ type Server struct {
 	scheduler  *scheduler.Scheduler
 	instanceID int64
 	logger     *log.Logger
+	version    string
 }
 
 // ServerConfig holds configuration for creating a Server.
@@ -37,6 +40,7 @@ type ServerConfig struct {
 	Scheduler  *scheduler.Scheduler
 	InstanceID int64
 	Logger     *log.Logger
+	Version    string
 }
 
 // NewServer creates a new API server.
@@ -63,6 +67,20 @@ func NewServer(cfg ServerConfig) (*Server, error) {
 	e.HideBanner = true
 	e.HidePort = true
 
+	// Set up template renderer
+	renderer, err := web.NewTemplateRenderer()
+	if err != nil {
+		return nil, fmt.Errorf("failed to create template renderer: %w", err)
+	}
+	e.Renderer = renderer
+
+	// Set up static file serving from embedded filesystem
+	staticFS, err := fs.Sub(web.StaticFS(), "static")
+	if err != nil {
+		return nil, fmt.Errorf("failed to create static filesystem: %w", err)
+	}
+	e.GET("/static/*", echo.WrapHandler(http.StripPrefix("/static/", http.FileServer(http.FS(staticFS)))))
+
 	// Set custom error handler
 	e.HTTPErrorHandler = CustomHTTPErrorHandler
 
@@ -81,6 +99,11 @@ func NewServer(cfg ServerConfig) (*Server, error) {
 	// Apply Basic Auth middleware
 	e.Use(middleware.BasicAuth(cfg.Config.Auth))
 
+	version := cfg.Version
+	if version == "" {
+		version = "dev"
+	}
+
 	server := &Server{
 		echo:       e,
 		config:     cfg.Config,
@@ -89,6 +112,7 @@ func NewServer(cfg ServerConfig) (*Server, error) {
 		scheduler:  cfg.Scheduler,
 		instanceID: cfg.InstanceID,
 		logger:     logger,
+		version:    version,
 	}
 
 	// Register routes
@@ -106,9 +130,17 @@ func (s *Server) registerRoutes() {
 	schemaHandler := handlers.NewSchemaHandler(s.storage, s.instanceID)
 	suggestionsHandler := handlers.NewSuggestionsHandler(s.storage, s.instanceID)
 	snapshotsHandler := handlers.NewSnapshotsHandler(s.storage, s.scheduler, s.instanceID)
+	pageHandler := handlers.NewPageHandler(s.storage, s.instanceID, s.version)
 
 	// Health endpoint (no auth required - handled in middleware)
 	s.echo.GET("/health", healthHandler.GetHealth)
+
+	// Web UI routes (HTML pages)
+	s.echo.GET("/", pageHandler.Dashboard)
+	s.echo.GET("/queries", pageHandler.Queries)
+	s.echo.GET("/queries/:id", pageHandler.QueryDetail)
+	s.echo.GET("/schema", pageHandler.Schema)
+	s.echo.GET("/suggestions", pageHandler.Suggestions)
 
 	// API v1 routes
 	apiV1 := s.echo.Group("/api/v1")

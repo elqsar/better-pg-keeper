@@ -1,0 +1,148 @@
+{{define "dashboard"}}
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>{{.Title}} - PG Analyzer</title>
+    <link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+    <header class="header">
+        <div class="header-content">
+            <div class="logo">
+                <a href="/">PG Analyzer</a>
+            </div>
+            <nav class="nav">
+                <a href="/" class="nav-link active">Dashboard</a>
+                <a href="/queries" class="nav-link">Queries</a>
+                <a href="/schema" class="nav-link">Schema</a>
+                <a href="/suggestions" class="nav-link">Suggestions</a>
+            </nav>
+        </div>
+    </header>
+
+    <main class="main">
+        <div class="container">
+            <div class="page-header">
+                <h1 class="page-title">Dashboard</h1>
+                <p class="page-subtitle">PostgreSQL performance overview</p>
+            </div>
+
+            <!-- Stats Cards -->
+            <div class="stats-grid">
+                <div class="stat-card">
+                    <div class="stat-label">Cache Hit Ratio</div>
+                    {{if .CacheHitRatio}}
+                    <div class="stat-value {{cacheRatioClass .CacheHitRatio}}">{{formatPercent .CacheHitRatio}}</div>
+                    <div class="stat-hint">Target: &gt;99%</div>
+                    {{else}}
+                    <div class="stat-value text-muted">N/A</div>
+                    <div class="stat-hint">No data available</div>
+                    {{end}}
+                </div>
+                <div class="stat-card">
+                    <div class="stat-label">Total Queries</div>
+                    <div class="stat-value">{{formatNumber .TotalQueries}}</div>
+                    <div class="stat-hint">Tracked in pg_stat_statements</div>
+                </div>
+                <div class="stat-card">
+                    <div class="stat-label">Slow Queries</div>
+                    <div class="stat-value{{if gt .SlowQueriesCount 0}} severity-warning{{end}}">{{.SlowQueriesCount}}</div>
+                    <div class="stat-hint">Mean exec time &gt;1s</div>
+                </div>
+                <div class="stat-card">
+                    <div class="stat-label">Active Suggestions</div>
+                    <div class="stat-value{{if gt .ActiveSuggestions 0}} severity-warning{{end}}">{{.ActiveSuggestions}}</div>
+                    <div class="stat-hint"><a href="/suggestions">View all</a></div>
+                </div>
+            </div>
+
+            <div class="grid-2">
+                <!-- Top Queries -->
+                <div class="card">
+                    <div class="card-header">
+                        Top Queries by Total Time
+                        <a href="/queries?sort=total_time" class="btn btn-sm btn-secondary" style="float: right;">View All</a>
+                    </div>
+                    <div class="card-body">
+                        {{if .TopQueries}}
+                        <div class="table-container">
+                            <table>
+                                <thead>
+                                    <tr>
+                                        <th>Query</th>
+                                        <th class="text-right">Calls</th>
+                                        <th class="text-right">Mean Time</th>
+                                        <th class="text-right">Total Time</th>
+                                    </tr>
+                                </thead>
+                                <tbody>
+                                    {{range .TopQueries}}
+                                    <tr>
+                                        <td class="query-text">{{truncate .QueryPreview 60}}</td>
+                                        <td class="text-right">{{formatNumber .Calls}}</td>
+                                        <td class="text-right">{{formatDuration .MeanExecTimeMs}}</td>
+                                        <td class="text-right">{{formatDuration .TotalExecTimeMs}}</td>
+                                    </tr>
+                                    {{end}}
+                                </tbody>
+                            </table>
+                        </div>
+                        {{else}}
+                        <div class="empty-state">
+                            <div class="empty-state-title">No query data</div>
+                            <p>Waiting for first snapshot</p>
+                        </div>
+                        {{end}}
+                    </div>
+                </div>
+
+                <!-- Recent Suggestions -->
+                <div class="card">
+                    <div class="card-header">
+                        Recent Suggestions
+                        <a href="/suggestions" class="btn btn-sm btn-secondary" style="float: right;">View All</a>
+                    </div>
+                    <div class="card-body">
+                        {{if .RecentSuggestions}}
+                        <div class="suggestions-list">
+                            {{range .RecentSuggestions}}
+                            <div class="suggestion-card {{.Severity}}">
+                                <div class="suggestion-header">
+                                    <div>
+                                        <span class="severity-badge {{severityClass .Severity}}">{{.Severity}}</span>
+                                        <span class="suggestion-title">{{.Title}}</span>
+                                    </div>
+                                </div>
+                                <div class="suggestion-target">{{.TargetObject}}</div>
+                                <div class="suggestion-meta">
+                                    <span>First seen: {{formatTimeShort .FirstSeenAt}}</span>
+                                </div>
+                            </div>
+                            {{end}}
+                        </div>
+                        {{else}}
+                        <div class="empty-state">
+                            <div class="empty-state-title">No suggestions</div>
+                            <p>Your database is performing well</p>
+                        </div>
+                        {{end}}
+                    </div>
+                </div>
+            </div>
+        </div>
+    </main>
+
+    <footer class="footer">
+        <div class="footer-content">
+            <span>PG Analyzer {{.Version}}</span>
+            {{if not .LastSnapshot.IsZero}}
+            <span class="separator">|</span>
+            <span>Last snapshot: {{formatTime .LastSnapshot}}</span>
+            {{end}}
+        </div>
+    </footer>
+</body>
+</html>
+{{end}}

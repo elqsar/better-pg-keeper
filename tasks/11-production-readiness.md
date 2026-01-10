@@ -91,6 +91,7 @@ Location: `docs/postgresql-setup.md`
 - [ ] Config file permissions warning
 - [ ] SQL injection audit
 - [ ] Input validation audit
+- [ ] No analyzed database modifications
 
 ## Acceptance Criteria
 - [ ] Docker build succeeds

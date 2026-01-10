@@ -1,0 +1,188 @@
+{{define "query_detail"}}
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>{{.Title}} - PG Analyzer</title>
+    <link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+    <header class="header">
+        <div class="header-content">
+            <div class="logo">
+                <a href="/">PG Analyzer</a>
+            </div>
+            <nav class="nav">
+                <a href="/" class="nav-link">Dashboard</a>
+                <a href="/queries" class="nav-link active">Queries</a>
+                <a href="/schema" class="nav-link">Schema</a>
+                <a href="/suggestions" class="nav-link">Suggestions</a>
+            </nav>
+        </div>
+    </header>
+
+    <main class="main">
+        <div class="container">
+            <div class="page-header">
+                <h1 class="page-title">Query Details</h1>
+                <p class="page-subtitle">Query ID: {{.Query.QueryID}}</p>
+            </div>
+
+            <div class="grid-2 mb-4">
+                <!-- Stats Card -->
+                <div class="card">
+                    <div class="card-header">Execution Statistics</div>
+                    <div class="card-body">
+                        <table>
+                            <tr>
+                                <td class="text-muted">Total Calls</td>
+                                <td class="text-right"><strong>{{formatNumber .Query.Calls}}</strong></td>
+                            </tr>
+                            <tr>
+                                <td class="text-muted">Mean Execution Time</td>
+                                <td class="text-right"><strong>{{formatDuration .Query.MeanExecTime}}</strong></td>
+                            </tr>
+                            <tr>
+                                <td class="text-muted">Total Execution Time</td>
+                                <td class="text-right"><strong>{{formatDuration .Query.TotalExecTime}}</strong></td>
+                            </tr>
+                            <tr>
+                                <td class="text-muted">Min Execution Time</td>
+                                <td class="text-right">{{formatDuration .Query.MinExecTime}}</td>
+                            </tr>
+                            <tr>
+                                <td class="text-muted">Max Execution Time</td>
+                                <td class="text-right">{{formatDuration .Query.MaxExecTime}}</td>
+                            </tr>
+                            <tr>
+                                <td class="text-muted">Total Rows</td>
+                                <td class="text-right">{{formatNumber .Query.Rows}}</td>
+                            </tr>
+                            <tr>
+                                <td class="text-muted">Rows per Call</td>
+                                <td class="text-right">{{printf "%.1f" .Query.RowsPerCall}}</td>
+                            </tr>
+                        </table>
+                    </div>
+                </div>
+
+                <!-- Cache Stats Card -->
+                <div class="card">
+                    <div class="card-header">Cache Statistics</div>
+                    <div class="card-body">
+                        <table>
+                            <tr>
+                                <td class="text-muted">Cache Hit Ratio</td>
+                                <td class="text-right">
+                                    <strong class="{{cacheRatioClass .Query.CacheHitRatio}}">{{formatPercent .Query.CacheHitRatio}}</strong>
+                                </td>
+                            </tr>
+                            <tr>
+                                <td class="text-muted">Shared Blocks Hit</td>
+                                <td class="text-right">{{formatNumber .Query.SharedBlksHit}}</td>
+                            </tr>
+                            <tr>
+                                <td class="text-muted">Shared Blocks Read</td>
+                                <td class="text-right">{{formatNumber .Query.SharedBlksRead}}</td>
+                            </tr>
+                            {{if gt .Query.Plans 0}}
+                            <tr>
+                                <td class="text-muted">Plans</td>
+                                <td class="text-right">{{formatNumber .Query.Plans}}</td>
+                            </tr>
+                            <tr>
+                                <td class="text-muted">Total Plan Time</td>
+                                <td class="text-right">{{formatDuration .Query.TotalPlanTime}}</td>
+                            </tr>
+                            {{end}}
+                        </table>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Query Text -->
+            <div class="card mb-4">
+                <div class="card-header">Query Text</div>
+                <div class="card-body">
+                    <pre class="query-full">{{.Query.Query}}</pre>
+                </div>
+            </div>
+
+            <!-- EXPLAIN Plan -->
+            <div class="card mb-4">
+                <div class="card-header">
+                    EXPLAIN Plan
+                    <button class="btn btn-sm btn-primary" style="float: right;" onclick="refreshExplain()" id="explain-btn">
+                        {{if .ExplainPlan}}Refresh{{else}}Generate{{end}}
+                    </button>
+                </div>
+                <div class="card-body">
+                    <div id="explain-content">
+                        {{if .ExplainPlan}}
+                        <pre class="explain-plan">{{.ExplainPlan.PlanText}}</pre>
+                        <p class="text-muted mt-2">Captured: {{formatTime .ExplainPlan.CapturedAt}}</p>
+                        {{else}}
+                        <div class="empty-state">
+                            <div class="empty-state-title">No EXPLAIN plan available</div>
+                            <p>Click "Generate" to create an EXPLAIN plan for this query</p>
+                        </div>
+                        {{end}}
+                    </div>
+                </div>
+            </div>
+
+            <!-- Back link -->
+            <a href="/queries" class="btn btn-secondary">Back to Queries</a>
+        </div>
+    </main>
+
+    <footer class="footer">
+        <div class="footer-content">
+            <span>PG Analyzer {{.Version}}</span>
+            {{if not .LastSnapshot.IsZero}}
+            <span class="separator">|</span>
+            <span>Last snapshot: {{formatTime .LastSnapshot}}</span>
+            {{end}}
+        </div>
+    </footer>
+
+    <script>
+    function refreshExplain() {
+        const btn = document.getElementById('explain-btn');
+        const content = document.getElementById('explain-content');
+
+        btn.disabled = true;
+        btn.innerHTML = '<span class="loading"></span> Loading...';
+
+        fetch('/api/v1/queries/{{.Query.QueryID}}/explain', {
+            method: 'POST'
+        })
+        .then(response => response.json())
+        .then(data => {
+            btn.disabled = false;
+            btn.innerHTML = 'Refresh';
+
+            if (data.error) {
+                content.innerHTML = '<div class="severity-critical">Error: ' + escapeHtml(data.error) + '</div>';
+            } else {
+                content.innerHTML = '<pre class="explain-plan">' + escapeHtml(data.plan_text) + '</pre>' +
+                    '<p class="text-muted mt-2">Captured: just now</p>';
+            }
+        })
+        .catch(error => {
+            btn.disabled = false;
+            btn.innerHTML = 'Refresh';
+            content.innerHTML = '<div class="severity-critical">Failed to load EXPLAIN plan</div>';
+        });
+    }
+
+    function escapeHtml(text) {
+        const div = document.createElement('div');
+        div.textContent = text;
+        return div.innerHTML;
+    }
+    </script>
+</body>
+</html>
+{{end}}

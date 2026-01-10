@@ -1,0 +1,200 @@
+{{define "schema"}}
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>{{.Title}} - PG Analyzer</title>
+    <link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+    <header class="header">
+        <div class="header-content">
+            <div class="logo">
+                <a href="/">PG Analyzer</a>
+            </div>
+            <nav class="nav">
+                <a href="/" class="nav-link">Dashboard</a>
+                <a href="/queries" class="nav-link">Queries</a>
+                <a href="/schema" class="nav-link active">Schema</a>
+                <a href="/suggestions" class="nav-link">Suggestions</a>
+            </nav>
+        </div>
+    </header>
+
+    <main class="main">
+        <div class="container">
+            <div class="page-header">
+                <h1 class="page-title">Schema</h1>
+                <p class="page-subtitle">Database schema analysis</p>
+            </div>
+
+            <!-- Tabs -->
+            <div class="tabs">
+                <a href="/schema?tab=tables" class="tab{{if eq .ActiveTab "tables"}} active{{end}}">Tables</a>
+                <a href="/schema?tab=indexes" class="tab{{if eq .ActiveTab "indexes"}} active{{end}}">Indexes</a>
+                <a href="/schema?tab=bloat" class="tab{{if eq .ActiveTab "bloat"}} active{{end}}">Bloat</a>
+            </div>
+
+            <div class="card">
+                <div class="card-body">
+                    {{if eq .ActiveTab "tables"}}
+                    <!-- Tables Tab -->
+                    {{if .Tables}}
+                    <div class="table-container">
+                        <table>
+                            <thead>
+                                <tr>
+                                    <th>Table</th>
+                                    <th class="text-right">Size</th>
+                                    <th class="text-right">Rows</th>
+                                    <th class="text-right">Dead Tuples</th>
+                                    <th class="text-right">Seq Scans</th>
+                                    <th class="text-right">Idx Scans</th>
+                                    <th>Last Vacuum</th>
+                                    <th>Last Analyze</th>
+                                </tr>
+                            </thead>
+                            <tbody>
+                                {{range .Tables}}
+                                <tr>
+                                    <td>
+                                        <strong>{{.SchemaName}}.{{.RelName}}</strong>
+                                    </td>
+                                    <td class="text-right">{{formatBytes .TableSize}}</td>
+                                    <td class="text-right">{{formatNumber .NLiveTup}}</td>
+                                    <td class="text-right{{if gt .NDeadTup 10000}} severity-warning{{end}}">{{formatNumber .NDeadTup}}</td>
+                                    <td class="text-right">{{formatNumber .SeqScan}}</td>
+                                    <td class="text-right">{{formatNumber .IdxScan}}</td>
+                                    <td class="text-muted">
+                                        {{if .LastVacuum}}{{formatTimeShort .LastVacuum}}{{else if .LastAutovacuum}}{{formatTimeShort .LastAutovacuum}} (auto){{else}}Never{{end}}
+                                    </td>
+                                    <td class="text-muted">
+                                        {{if .LastAnalyze}}{{formatTimeShort .LastAnalyze}}{{else}}Never{{end}}
+                                    </td>
+                                </tr>
+                                {{end}}
+                            </tbody>
+                        </table>
+                    </div>
+                    {{else}}
+                    <div class="empty-state">
+                        <div class="empty-state-title">No tables found</div>
+                        <p>Waiting for first snapshot</p>
+                    </div>
+                    {{end}}
+
+                    {{else if eq .ActiveTab "indexes"}}
+                    <!-- Indexes Tab -->
+                    {{if .Indexes}}
+                    <div class="table-container">
+                        <table>
+                            <thead>
+                                <tr>
+                                    <th>Index</th>
+                                    <th>Table</th>
+                                    <th class="text-right">Scans</th>
+                                    <th class="text-right">Size</th>
+                                    <th class="text-center">Type</th>
+                                    <th class="text-center">Status</th>
+                                </tr>
+                            </thead>
+                            <tbody>
+                                {{range .Indexes}}
+                                <tr>
+                                    <td><strong>{{.IndexRelName}}</strong></td>
+                                    <td class="text-muted">{{.SchemaName}}.{{.RelName}}</td>
+                                    <td class="text-right">{{formatNumber .IdxScan}}</td>
+                                    <td class="text-right">{{formatBytes .IndexSize}}</td>
+                                    <td class="text-center">
+                                        {{if .IsPrimary}}
+                                        <span class="status-badge status-active">PK</span>
+                                        {{else if .IsUnique}}
+                                        <span class="status-badge status-active">UQ</span>
+                                        {{else}}
+                                        <span class="text-muted">Idx</span>
+                                        {{end}}
+                                    </td>
+                                    <td class="text-center">
+                                        {{if and (eq .IdxScan 0) (not .IsPrimary) (not .IsUnique)}}
+                                        <span class="severity-badge severity-warning">Unused</span>
+                                        {{else}}
+                                        <span class="text-muted">Active</span>
+                                        {{end}}
+                                    </td>
+                                </tr>
+                                {{end}}
+                            </tbody>
+                        </table>
+                    </div>
+                    {{else}}
+                    <div class="empty-state">
+                        <div class="empty-state-title">No indexes found</div>
+                        <p>Waiting for first snapshot</p>
+                    </div>
+                    {{end}}
+
+                    {{else if eq .ActiveTab "bloat"}}
+                    <!-- Bloat Tab -->
+                    {{if .Bloat}}
+                    <div class="table-container">
+                        <table>
+                            <thead>
+                                <tr>
+                                    <th>Table</th>
+                                    <th class="text-right">Live Tuples</th>
+                                    <th class="text-right">Dead Tuples</th>
+                                    <th class="text-right">Bloat %</th>
+                                    <th>Recommendation</th>
+                                </tr>
+                            </thead>
+                            <tbody>
+                                {{range .Bloat}}
+                                <tr>
+                                    <td><strong>{{.SchemaName}}.{{.RelName}}</strong></td>
+                                    <td class="text-right">{{formatNumber .NLiveTup}}</td>
+                                    <td class="text-right">{{formatNumber .NDeadTup}}</td>
+                                    <td class="text-right">
+                                        <span class="{{if gt .BloatPercent 50.0}}severity-critical{{else if gt .BloatPercent 20.0}}severity-warning{{else}}text-muted{{end}}">
+                                            {{formatPercent .BloatPercent}}
+                                        </span>
+                                    </td>
+                                    <td>
+                                        {{if gt .BloatPercent 50.0}}
+                                        <code>VACUUM FULL {{.SchemaName}}.{{.RelName}};</code>
+                                        {{else if gt .BloatPercent 20.0}}
+                                        <code>VACUUM {{.SchemaName}}.{{.RelName}};</code>
+                                        {{else}}
+                                        <span class="text-muted">No action needed</span>
+                                        {{end}}
+                                    </td>
+                                </tr>
+                                {{end}}
+                            </tbody>
+                        </table>
+                    </div>
+                    {{else}}
+                    <div class="empty-state">
+                        <div class="empty-state-title">No bloated tables</div>
+                        <p>All tables have acceptable dead tuple ratios</p>
+                    </div>
+                    {{end}}
+
+                    {{end}}
+                </div>
+            </div>
+        </div>
+    </main>
+
+    <footer class="footer">
+        <div class="footer-content">
+            <span>PG Analyzer {{.Version}}</span>
+            {{if not .LastSnapshot.IsZero}}
+            <span class="separator">|</span>
+            <span>Last snapshot: {{formatTime .LastSnapshot}}</span>
+            {{end}}
+        </div>
+    </footer>
+</body>
+</html>
+{{end}}

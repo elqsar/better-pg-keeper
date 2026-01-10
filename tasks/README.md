@@ -78,7 +78,7 @@ Update this section as tasks are completed:
 - [x] 07 - Suggester (completed 2026-01-10)
 - [x] 08 - Scheduler (completed 2026-01-10)
 - [x] 09 - API Server (completed 2026-01-10)
-- [ ] 10 - Web UI
+- [x] 10 - Web UI (completed 2026-01-10)
 - [ ] 11 - Production Readiness
 
 ## Quick Commands
@@ -523,3 +523,78 @@ task
     - Error response format validation
     - Pagination behavior
     - Snapshots list endpoint
+
+## What Was Completed in Task 10
+
+- Template engine in `internal/web/templates.go`:
+  - `TemplateRenderer` struct implementing Echo's `Renderer` interface
+  - Embedded filesystem using `embed.FS` for templates and static files
+  - Template helper functions:
+    - `formatTime`, `formatTimeShort` for timestamp formatting
+    - `formatDuration` for milliseconds to human-readable duration
+    - `formatBytes` for bytes to human-readable size (B, KB, MB, GB)
+    - `formatNumber` with thousand separators
+    - `formatPercent` for percentage formatting
+    - `truncate` for string truncation
+    - `severityClass`, `severityIcon` for severity styling
+    - `cacheRatioClass` for cache hit ratio coloring
+    - Math functions: `add`, `sub`, `mul`, `div`, `seq`
+    - `safeHTML` for rendering trusted HTML
+  - `StaticFS()` function exposing embedded static files
+- CSS styles in `internal/web/static/style.css`:
+  - Clean, minimal design with CSS custom properties
+  - Responsive layout with mobile breakpoints
+  - Component styles: cards, tables, buttons, forms
+  - Severity color indicators (critical/warning/info)
+  - Cache ratio color indicators (excellent/good/warning/critical)
+  - Modal and pagination styling
+  - Loading spinner animation
+- Dashboard page in `internal/web/templates/dashboard.html`:
+  - Overview stats cards (cache hit ratio, queries, slow queries, suggestions)
+  - Top 5 queries by total execution time table
+  - Recent 5 suggestions list with severity badges
+  - Links to detailed views
+- Queries page in `internal/web/templates/queries.html`:
+  - Sortable table (total_time, mean_time, calls, rows)
+  - Pagination controls with page navigation
+  - Cache hit ratio per query with color indicators
+  - Details and EXPLAIN buttons for each query
+  - EXPLAIN modal with async fetch via JavaScript
+- Schema page in `internal/web/templates/schema.html`:
+  - Three tabs: Tables, Indexes, Bloat
+  - Tables tab: size, rows, dead tuples, scan counts, vacuum/analyze times
+  - Indexes tab: scans, size, type (PK/UQ/Idx), unused detection
+  - Bloat tab: dead/live tuples ratio, VACUUM recommendations
+- Suggestions page in `internal/web/templates/suggestions.html`:
+  - Filter by severity (critical, warning, info)
+  - Filter by status (active, dismissed)
+  - Summary cards with counts per severity
+  - Suggestion cards with dismiss functionality
+  - Async dismiss via JavaScript with UI feedback
+- Query detail page in `internal/web/templates/query_detail.html`:
+  - Full query text display
+  - Execution statistics (calls, mean/min/max/total time, rows)
+  - Cache statistics (hit ratio, blocks hit/read, plans)
+  - EXPLAIN plan display with refresh button
+- Page handlers in `internal/api/handlers/pages.go`:
+  - `PageHandler` struct with storage interface
+  - `Dashboard` handler with stats aggregation
+  - `Queries` handler with sorting and pagination
+  - `QueryDetail` handler with EXPLAIN plan loading
+  - `Schema` handler with tab switching (tables/indexes/bloat)
+  - `Suggestions` handler with severity filtering
+  - Helper functions for data transformation
+- Server integration in `internal/api/server.go`:
+  - Template renderer initialization
+  - Static file serving from embedded filesystem at `/static/*`
+  - Web UI routes at root level (`/`, `/queries`, `/queries/:id`, `/schema`, `/suggestions`)
+- Comprehensive tests:
+  - Template helper function tests in `internal/web/templates_test.go`
+  - Page handler tests in `internal/api/handlers/pages_test.go`:
+    - Dashboard page with data and without snapshot
+    - Queries page with sorting and pagination
+    - Query detail page (found and not found cases)
+    - Schema page for all three tabs
+    - Suggestions page with and without filters
+    - Helper function unit tests
+    - Sort function tests

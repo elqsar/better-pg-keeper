@@ -1,0 +1,167 @@
+{{define "suggestions"}}
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>{{.Title}} - PG Analyzer</title>
+    <link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+    <header class="header">
+        <div class="header-content">
+            <div class="logo">
+                <a href="/">PG Analyzer</a>
+            </div>
+            <nav class="nav">
+                <a href="/" class="nav-link">Dashboard</a>
+                <a href="/queries" class="nav-link">Queries</a>
+                <a href="/schema" class="nav-link">Schema</a>
+                <a href="/suggestions" class="nav-link active">Suggestions</a>
+            </nav>
+        </div>
+    </header>
+
+    <main class="main">
+        <div class="container">
+            <div class="page-header">
+                <h1 class="page-title">Suggestions</h1>
+                <p class="page-subtitle">Performance recommendations and issues</p>
+            </div>
+
+            <!-- Filters -->
+            <div class="filters">
+                <div class="filter-group">
+                    <label class="filter-label">Severity:</label>
+                    <select id="severity-select" onchange="updateFilter('severity', this.value)">
+                        <option value="">All</option>
+                        <option value="critical"{{if eq .SeverityFilter "critical"}} selected{{end}}>Critical</option>
+                        <option value="warning"{{if eq .SeverityFilter "warning"}} selected{{end}}>Warning</option>
+                        <option value="info"{{if eq .SeverityFilter "info"}} selected{{end}}>Info</option>
+                    </select>
+                </div>
+                <div class="filter-group">
+                    <label class="filter-label">Status:</label>
+                    <select id="status-select" onchange="updateFilter('status', this.value)">
+                        <option value="active"{{if eq .StatusFilter "active"}} selected{{end}}>Active</option>
+                        <option value="dismissed"{{if eq .StatusFilter "dismissed"}} selected{{end}}>Dismissed</option>
+                    </select>
+                </div>
+            </div>
+
+            <!-- Summary -->
+            {{if .Suggestions}}
+            <div class="stats-grid mb-4">
+                <div class="stat-card">
+                    <div class="stat-label">Critical</div>
+                    <div class="stat-value severity-critical">{{.CriticalCount}}</div>
+                </div>
+                <div class="stat-card">
+                    <div class="stat-label">Warnings</div>
+                    <div class="stat-value" style="color: #856404;">{{.WarningCount}}</div>
+                </div>
+                <div class="stat-card">
+                    <div class="stat-label">Info</div>
+                    <div class="stat-value" style="color: #055160;">{{.InfoCount}}</div>
+                </div>
+                <div class="stat-card">
+                    <div class="stat-label">Total</div>
+                    <div class="stat-value">{{.TotalCount}}</div>
+                </div>
+            </div>
+            {{end}}
+
+            <!-- Suggestions List -->
+            {{if .Suggestions}}
+            <div class="suggestions-list">
+                {{range .Suggestions}}
+                <div class="suggestion-card {{.Severity}}" id="suggestion-{{.ID}}">
+                    <div class="suggestion-header">
+                        <div>
+                            <span class="severity-badge {{severityClass .Severity}}">{{.Severity}}</span>
+                            <span class="suggestion-title">{{.Title}}</span>
+                        </div>
+                        <div class="suggestion-actions">
+                            {{if eq .Status "active"}}
+                            <button class="btn btn-sm btn-secondary" onclick="dismissSuggestion({{.ID}})">Dismiss</button>
+                            {{else}}
+                            <span class="status-badge status-dismissed">Dismissed</span>
+                            {{end}}
+                        </div>
+                    </div>
+                    <div class="suggestion-target">{{.TargetObject}}</div>
+                    <div class="suggestion-description">{{.Description}}</div>
+                    <div class="suggestion-meta">
+                        <span>Rule: {{.RuleID}}</span>
+                        <span>First seen: {{formatTimeShort .FirstSeenAt}}</span>
+                        <span>Last seen: {{formatTimeShort .LastSeenAt}}</span>
+                    </div>
+                </div>
+                {{end}}
+            </div>
+            {{else}}
+            <div class="card">
+                <div class="card-body">
+                    <div class="empty-state">
+                        <div class="empty-state-title">No suggestions</div>
+                        <p>
+                            {{if eq .StatusFilter "dismissed"}}
+                            No dismissed suggestions found
+                            {{else}}
+                            Your database is performing well! No issues detected.
+                            {{end}}
+                        </p>
+                    </div>
+                </div>
+            </div>
+            {{end}}
+        </div>
+    </main>
+
+    <footer class="footer">
+        <div class="footer-content">
+            <span>PG Analyzer {{.Version}}</span>
+            {{if not .LastSnapshot.IsZero}}
+            <span class="separator">|</span>
+            <span>Last snapshot: {{formatTime .LastSnapshot}}</span>
+            {{end}}
+        </div>
+    </footer>
+
+    <script>
+    function updateFilter(name, value) {
+        const params = new URLSearchParams(window.location.search);
+        if (value) {
+            params.set(name, value);
+        } else {
+            params.delete(name);
+        }
+        window.location.search = params.toString();
+    }
+
+    function dismissSuggestion(id) {
+        if (!confirm('Are you sure you want to dismiss this suggestion?')) {
+            return;
+        }
+
+        fetch('/api/v1/suggestions/' + id + '/dismiss', {
+            method: 'POST'
+        })
+        .then(response => {
+            if (response.ok) {
+                const card = document.getElementById('suggestion-' + id);
+                card.style.opacity = '0.5';
+                const actions = card.querySelector('.suggestion-actions');
+                actions.innerHTML = '<span class="status-badge status-dismissed">Dismissed</span>';
+            } else {
+                alert('Failed to dismiss suggestion');
+            }
+        })
+        .catch(error => {
+            alert('Failed to dismiss suggestion: ' + error);
+        });
+    }
+    </script>
+</body>
+</html>
+{{end}}
