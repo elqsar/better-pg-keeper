@@ -77,7 +77,7 @@ Update this section as tasks are completed:
 - [x] 06 - Analyzer (completed 2026-01-10)
 - [x] 07 - Suggester (completed 2026-01-10)
 - [x] 08 - Scheduler (completed 2026-01-10)
-- [ ] 09 - API Server
+- [x] 09 - API Server (completed 2026-01-10)
 - [ ] 10 - Web UI
 - [ ] 11 - Production Readiness
 
@@ -441,3 +441,85 @@ task
     - Context cancellation handling
     - Maintenance job runs without errors
     - Scheduler restart after stop
+
+## What Was Completed in Task 09
+
+- Echo server setup in `internal/api/server.go`:
+  - `Server` struct with Echo instance and dependencies
+  - `ServerConfig` struct for server creation
+  - `NewServer()` constructor with validation
+  - Middleware configuration: Recover, RequestID, Logger, CORS
+  - Route registration for all API endpoints
+  - `Start()` and `Shutdown()` methods for graceful lifecycle
+  - Custom HTTP error handler for consistent error responses
+- Basic Auth middleware in `internal/api/middleware/auth.go`:
+  - `BasicAuth()` middleware validates against config credentials
+  - Skips authentication for `/health` endpoint
+  - Returns 401 with WWW-Authenticate header on failure
+  - `RequireAuth()` alternative for selective route protection
+- Error handling in `internal/api/errors.go`:
+  - `ErrorResponse` struct with error, code, and details fields
+  - Error code constants: BAD_REQUEST, UNAUTHORIZED, NOT_FOUND, etc.
+  - Helper functions: `BadRequest()`, `NotFound()`, `InternalError()`, etc.
+  - `CustomHTTPErrorHandler` maps Echo errors to standard format
+- Health endpoint in `internal/api/handlers/health.go`:
+  - `GET /health` - public endpoint (no auth required)
+  - Checks PostgreSQL connectivity via `Ping()`
+  - Returns last snapshot time from storage
+  - Status: "ok" or "degraded" based on PG connection
+- Dashboard API in `internal/api/handlers/dashboard.go`:
+  - `GET /api/v1/dashboard` returns:
+    - Cache hit ratio from latest snapshot
+    - Total unique queries count
+    - Slow queries count (mean_exec_time > 1000ms)
+    - Active suggestions count
+    - Top 5 queries by total execution time
+    - Recent 5 suggestions with severity
+- Queries API in `internal/api/handlers/queries.go`:
+  - `GET /api/v1/queries` - paginated query list
+    - Sort options: calls, mean_time, total_time, rows
+    - Order: asc/desc (default: desc)
+    - Pagination: limit (default 20, max 100), offset
+    - Returns query details with cache hit ratio
+  - `GET /api/v1/queries/top` - top N queries by metric
+    - Metrics: calls, time, rows
+    - Limit parameter (default 10, max 50)
+  - `POST /api/v1/queries/:id/explain`
+    - Runs EXPLAIN on query (not ANALYZE for safety)
+    - Stores result in explain_plans table
+    - Returns plan_text and plan_json
+- Schema API in `internal/api/handlers/schema.go`:
+  - `GET /api/v1/schema/tables` - table stats with sizes
+    - Returns seq_scan_ratio, live/dead tuples, last vacuum/analyze
+  - `GET /api/v1/schema/indexes` - index stats
+    - Returns scans, size, is_unique, is_primary flags
+  - `GET /api/v1/schema/bloat` - tables with bloat
+    - Returns dead/live tuples and bloat percentage
+- Suggestions API in `internal/api/handlers/suggestions.go`:
+  - `GET /api/v1/suggestions` - filtered suggestions list
+    - Filter by status (active, dismissed) and severity
+    - Returns metadata as parsed JSON object
+  - `POST /api/v1/suggestions/:id/dismiss`
+    - Marks suggestion as dismissed with timestamp
+    - Returns 404 if not found, 409 if already dismissed
+- Snapshots API in `internal/api/handlers/snapshots.go`:
+  - `GET /api/v1/snapshots` - list recent snapshots
+    - Limit parameter (default 20, max 100)
+    - Returns capture time, PG version, cache hit ratio
+  - `POST /api/v1/snapshots` - trigger manual snapshot
+    - Runs collection and analysis cycle
+    - Returns snapshot ID, status, duration
+    - Returns 409 if collection already in progress
+- Comprehensive tests in `internal/api/server_test.go`:
+  - Mock storage implementing all handler interfaces
+  - Mock PostgreSQL client for health checks
+  - 13 test functions covering:
+    - Auth middleware with valid/invalid credentials
+    - Health endpoint skips auth
+    - Dashboard endpoint with data aggregation
+    - Queries endpoint with pagination
+    - Suggestions list and dismiss endpoints
+    - Schema endpoints (tables, indexes, bloat)
+    - Error response format validation
+    - Pagination behavior
+    - Snapshots list endpoint

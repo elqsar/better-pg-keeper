@@ -209,10 +209,7 @@ func (s *Scheduler) executeMaintenance(ctx context.Context) {
 // runCollection executes a collection via the coordinator.
 func (s *Scheduler) runCollection(ctx context.Context) (*collector.CollectionResult, error) {
 	// Use a timeout for collection to prevent hanging
-	timeout := s.config.SnapshotInterval.Duration() / 2
-	if timeout < 30*time.Second {
-		timeout = 30 * time.Second
-	}
+	timeout := max(s.config.SnapshotInterval.Duration()/2, 30*time.Second)
 
 	return s.coordinator.CollectWithTimeout(ctx, timeout)
 }
