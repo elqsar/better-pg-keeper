@@ -8,7 +8,7 @@ Implement configuration loading with YAML parsing and environment variable expan
 ### 2.1 Define Config Structs
 Location: `internal/config/config.go`
 
-- [ ] Define `Config` struct matching schema:
+- [x] Define `Config` struct matching schema:
   ```go
   type Config struct {
       Postgres   PostgresConfig
@@ -18,36 +18,36 @@ Location: `internal/config/config.go`
       Thresholds ThresholdsConfig
   }
   ```
-- [ ] Add struct tags for YAML mapping
-- [ ] Add default values
+- [x] Add struct tags for YAML mapping
+- [x] Add default values
 
 ### 2.2 Implement Config Loading
 Location: `internal/config/loader.go`
 
-- [ ] Load YAML file from path (default: `./config.yaml`)
-- [ ] Support `PGANALYZER_CONFIG` env var override
-- [ ] Implement `${ENV_VAR}` expansion in string values
-- [ ] Merge defaults with loaded config
+- [x] Load YAML file from path (default: `./config.yaml`)
+- [x] Support `PGANALYZER_CONFIG` env var override
+- [x] Implement `${ENV_VAR}` expansion in string values
+- [x] Merge defaults with loaded config
 
 ### 2.3 Implement Validation
 Location: `internal/config/validation.go`
 
-- [ ] Validate required fields: `postgres.host`, `postgres.database`, `postgres.user`
-- [ ] Validate port range (1-65535)
-- [ ] Validate positive thresholds
-- [ ] Parse duration strings (`5m`, `1h`, etc.)
-- [ ] Return descriptive error messages
+- [x] Validate required fields: `postgres.host`, `postgres.database`, `postgres.user`
+- [x] Validate port range (1-65535)
+- [x] Validate positive thresholds
+- [x] Parse duration strings (`5m`, `1h`, etc.)
+- [x] Return descriptive error messages
 
 ### 2.4 Write Tests
 Location: `internal/config/config_test.go`
 
-- [ ] Test YAML parsing with valid config
-- [ ] Test env var expansion
-- [ ] Test validation errors
-- [ ] Test default values
+- [x] Test YAML parsing with valid config
+- [x] Test env var expansion
+- [x] Test validation errors
+- [x] Test default values
 
 ## Acceptance Criteria
-- [ ] Config loads from YAML file
-- [ ] Environment variables are expanded
-- [ ] Validation catches invalid configs
-- [ ] Tests pass
+- [x] Config loads from YAML file
+- [x] Environment variables are expanded
+- [x] Validation catches invalid configs
+- [x] Tests pass

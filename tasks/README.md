@@ -70,7 +70,7 @@ This directory contains implementation tasks for PostgreSQL Analyzer (pganalyzer
 Update this section as tasks are completed:
 
 - [x] 01 - Project Setup (completed 2026-01-10)
-- [ ] 02 - Configuration
+- [x] 02 - Configuration (completed 2026-01-10)
 - [ ] 03 - Storage (SQLite)
 - [ ] 04 - PostgreSQL Client
 - [ ] 05 - Collectors
@@ -122,3 +122,24 @@ task
 - Entry point created with signal handling and version flags
 - Example configuration file created
 - Taskfile.yaml created with common commands
+
+## What Was Completed in Task 02
+
+- Config structs defined in `internal/config/config.go`:
+  - `Config`, `PostgresConfig`, `StorageConfig`, `SchedulerConfig`, `ServerConfig`, `ThresholdsConfig`
+  - Custom `Duration` type with YAML marshaling/unmarshaling
+  - `Default()` function providing sensible defaults
+- Config loading in `internal/config/loader.go`:
+  - YAML file loading with path override via `PGANALYZER_CONFIG` env var
+  - Environment variable expansion with `${VAR}` and `${VAR:-default}` syntax
+  - Helper functions: `Load()`, `MustLoad()`, `LoadFromString()`
+  - `PostgresConfig.FormatConnectionString()` helper
+- Validation in `internal/config/validation.go`:
+  - Required field validation (host, database, user)
+  - Port range validation (1-65535)
+  - Threshold validation (positive values, valid ranges)
+  - SSLMode validation (disable, allow, prefer, require)
+  - Descriptive error messages with field paths
+- Comprehensive tests in `internal/config/config_test.go`:
+  - 22 test cases covering all functionality
+  - Tests for YAML parsing, env var expansion, validation errors, defaults
