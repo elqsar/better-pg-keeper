@@ -73,7 +73,7 @@ Update this section as tasks are completed:
 - [x] 02 - Configuration (completed 2026-01-10)
 - [x] 03 - Storage (SQLite) (completed 2026-01-10)
 - [x] 04 - PostgreSQL Client (completed 2026-01-10)
-- [ ] 05 - Collectors
+- [x] 05 - Collectors (completed 2026-01-10)
 - [ ] 06 - Analyzer
 - [ ] 07 - Suggester
 - [ ] 08 - Scheduler
@@ -213,3 +213,55 @@ task
   - Not-connected error handling tests
   - Write query detection tests
   - Model structure tests
+
+## What Was Completed in Task 05
+
+- Collector interface and base collector in `internal/collector/`:
+  - `Collector` interface with `Name()`, `Collect()`, `Interval()` methods
+  - `CollectorConfig` struct for common settings
+  - `BaseCollector` with shared logic (PG client, storage, instance ID, logging)
+- QueryStatsCollector in `internal/collector/query/stats.go`:
+  - 1-minute default interval
+  - Fetches from pg_stat_statements via PG client
+  - Stores in query_stats table
+  - Detects stats reset by comparing stats_reset timestamp
+  - Logs warning on stats reset detection
+- TableStatsCollector in `internal/collector/resource/tables.go`:
+  - 5-minute default interval
+  - Fetches from pg_stat_user_tables
+  - Stores in table_stats table with sizes
+- IndexStatsCollector in `internal/collector/resource/indexes.go`:
+  - 5-minute default interval
+  - Fetches from pg_stat_user_indexes
+  - Stores in index_stats table with unique/primary flags
+- DatabaseStatsCollector in `internal/collector/resource/database.go`:
+  - 1-minute default interval
+  - Fetches cache hit ratio from pg_stat_database
+  - Stores in snapshot metadata (cache_hit_ratio column)
+- BloatCollector in `internal/collector/schema/bloat.go`:
+  - 1-hour default interval
+  - Calculates dead tuple ratio
+  - Filters tables with significant bloat (>1000 dead tuples by default)
+  - Stores bloat metrics in bloat_stats table
+- Snapshot Coordinator in `internal/collector/coordinator.go`:
+  - Manages snapshot lifecycle across collectors
+  - Creates single snapshot per collection cycle
+  - Passes snapshot ID to all collectors
+  - Handles partial failures (tracks errors per collector)
+  - `CollectionResult` with error tracking
+- New migrations:
+  - `008_add_cache_hit_ratio.sql` - adds cache_hit_ratio to snapshots
+  - `009_create_bloat_stats.sql` - creates bloat_stats table
+- Extended storage interface:
+  - `UpdateSnapshotCacheHitRatio()` for database stats collector
+  - `SaveBloatStats()` and `GetBloatStats()` for bloat collector
+- Updated models:
+  - Added `CacheHitRatio` field to `Snapshot` struct
+- Comprehensive tests in `internal/collector/collector_test.go`:
+  - Mock PostgreSQL client for unit tests
+  - Tests for each collector in isolation
+  - Tests for snapshot coordination
+  - Tests for stats reset detection
+  - Tests for partial failure handling
+  - Tests for context cancellation
+  - Tests for default and custom intervals

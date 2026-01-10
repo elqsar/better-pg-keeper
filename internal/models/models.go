@@ -17,12 +17,13 @@ type Instance struct {
 
 // Snapshot represents a point-in-time capture of PostgreSQL statistics.
 type Snapshot struct {
-	ID         int64      `json:"id"`
-	InstanceID int64      `json:"instance_id"`
-	CapturedAt time.Time  `json:"captured_at"`
-	PGVersion  string     `json:"pg_version"`
-	StatsReset *time.Time `json:"stats_reset,omitempty"`
-	CreatedAt  time.Time  `json:"created_at"`
+	ID            int64      `json:"id"`
+	InstanceID    int64      `json:"instance_id"`
+	CapturedAt    time.Time  `json:"captured_at"`
+	PGVersion     string     `json:"pg_version"`
+	StatsReset    *time.Time `json:"stats_reset,omitempty"`
+	CacheHitRatio *float64   `json:"cache_hit_ratio,omitempty"` // 0-100 percentage
+	CreatedAt     time.Time  `json:"created_at"`
 }
 
 // QueryStat represents statistics for a single query from pg_stat_statements.

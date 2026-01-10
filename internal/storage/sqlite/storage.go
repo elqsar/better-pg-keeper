@@ -30,6 +30,7 @@ type Storage interface {
 	GetSnapshotByID(ctx context.Context, id int64) (*models.Snapshot, error)
 	GetLatestSnapshot(ctx context.Context, instanceID int64) (*models.Snapshot, error)
 	ListSnapshots(ctx context.Context, instanceID int64, limit int) ([]models.Snapshot, error)
+	UpdateSnapshotCacheHitRatio(ctx context.Context, snapshotID int64, ratio float64) error
 
 	// Query stats operations
 	SaveQueryStats(ctx context.Context, snapshotID int64, stats []models.QueryStat) error
@@ -43,6 +44,10 @@ type Storage interface {
 	// Index stats operations
 	SaveIndexStats(ctx context.Context, snapshotID int64, stats []models.IndexStat) error
 	GetIndexStats(ctx context.Context, snapshotID int64) ([]models.IndexStat, error)
+
+	// Bloat stats operations
+	SaveBloatStats(ctx context.Context, snapshotID int64, stats []models.BloatInfo) error
+	GetBloatStats(ctx context.Context, snapshotID int64) ([]models.BloatInfo, error)
 
 	// Suggestion operations
 	UpsertSuggestion(ctx context.Context, sug *models.Suggestion) error
@@ -213,9 +218,9 @@ func (s *SQLiteStorage) ListInstances(ctx context.Context) ([]models.Instance, e
 // CreateSnapshot creates a new snapshot and returns its ID.
 func (s *SQLiteStorage) CreateSnapshot(ctx context.Context, snap *models.Snapshot) (int64, error) {
 	result, err := s.db.ExecContext(ctx, `
-		INSERT INTO snapshots (instance_id, captured_at, pg_version, stats_reset)
-		VALUES (?, ?, ?, ?)
-	`, snap.InstanceID, snap.CapturedAt, snap.PGVersion, snap.StatsReset)
+		INSERT INTO snapshots (instance_id, captured_at, pg_version, stats_reset, cache_hit_ratio)
+		VALUES (?, ?, ?, ?, ?)
+	`, snap.InstanceID, snap.CapturedAt, snap.PGVersion, snap.StatsReset, snap.CacheHitRatio)
 
 	if err != nil {
 		return 0, fmt.Errorf("creating snapshot: %w", err)
@@ -228,9 +233,9 @@ func (s *SQLiteStorage) CreateSnapshot(ctx context.Context, snap *models.Snapsho
 func (s *SQLiteStorage) GetSnapshotByID(ctx context.Context, id int64) (*models.Snapshot, error) {
 	var snap models.Snapshot
 	err := s.db.QueryRowContext(ctx, `
-		SELECT id, instance_id, captured_at, pg_version, stats_reset, created_at
+		SELECT id, instance_id, captured_at, pg_version, stats_reset, cache_hit_ratio, created_at
 		FROM snapshots WHERE id = ?
-	`, id).Scan(&snap.ID, &snap.InstanceID, &snap.CapturedAt, &snap.PGVersion, &snap.StatsReset, &snap.CreatedAt)
+	`, id).Scan(&snap.ID, &snap.InstanceID, &snap.CapturedAt, &snap.PGVersion, &snap.StatsReset, &snap.CacheHitRatio, &snap.CreatedAt)
 
 	if err == sql.ErrNoRows {
 		return nil, nil
@@ -246,12 +251,12 @@ func (s *SQLiteStorage) GetSnapshotByID(ctx context.Context, id int64) (*models.
 func (s *SQLiteStorage) GetLatestSnapshot(ctx context.Context, instanceID int64) (*models.Snapshot, error) {
 	var snap models.Snapshot
 	err := s.db.QueryRowContext(ctx, `
-		SELECT id, instance_id, captured_at, pg_version, stats_reset, created_at
+		SELECT id, instance_id, captured_at, pg_version, stats_reset, cache_hit_ratio, created_at
 		FROM snapshots
 		WHERE instance_id = ?
 		ORDER BY captured_at DESC
 		LIMIT 1
-	`, instanceID).Scan(&snap.ID, &snap.InstanceID, &snap.CapturedAt, &snap.PGVersion, &snap.StatsReset, &snap.CreatedAt)
+	`, instanceID).Scan(&snap.ID, &snap.InstanceID, &snap.CapturedAt, &snap.PGVersion, &snap.StatsReset, &snap.CacheHitRatio, &snap.CreatedAt)
 
 	if err == sql.ErrNoRows {
 		return nil, nil
@@ -270,7 +275,7 @@ func (s *SQLiteStorage) ListSnapshots(ctx context.Context, instanceID int64, lim
 	}
 
 	rows, err := s.db.QueryContext(ctx, `
-		SELECT id, instance_id, captured_at, pg_version, stats_reset, created_at
+		SELECT id, instance_id, captured_at, pg_version, stats_reset, cache_hit_ratio, created_at
 		FROM snapshots
 		WHERE instance_id = ?
 		ORDER BY captured_at DESC
@@ -284,13 +289,26 @@ func (s *SQLiteStorage) ListSnapshots(ctx context.Context, instanceID int64, lim
 	var snapshots []models.Snapshot
 	for rows.Next() {
 		var snap models.Snapshot
-		if err := rows.Scan(&snap.ID, &snap.InstanceID, &snap.CapturedAt, &snap.PGVersion, &snap.StatsReset, &snap.CreatedAt); err != nil {
+		if err := rows.Scan(&snap.ID, &snap.InstanceID, &snap.CapturedAt, &snap.PGVersion, &snap.StatsReset, &snap.CacheHitRatio, &snap.CreatedAt); err != nil {
 			return nil, fmt.Errorf("scanning snapshot: %w", err)
 		}
 		snapshots = append(snapshots, snap)
 	}
 
 	return snapshots, rows.Err()
+}
+
+// UpdateSnapshotCacheHitRatio updates the cache hit ratio for a snapshot.
+func (s *SQLiteStorage) UpdateSnapshotCacheHitRatio(ctx context.Context, snapshotID int64, ratio float64) error {
+	_, err := s.db.ExecContext(ctx, `
+		UPDATE snapshots SET cache_hit_ratio = ? WHERE id = ?
+	`, ratio, snapshotID)
+
+	if err != nil {
+		return fmt.Errorf("updating snapshot cache hit ratio: %w", err)
+	}
+
+	return nil
 }
 
 // =============================================================================
@@ -564,6 +582,74 @@ func (s *SQLiteStorage) GetIndexStats(ctx context.Context, snapshotID int64) ([]
 		)
 		if err != nil {
 			return nil, fmt.Errorf("scanning index stat: %w", err)
+		}
+		stats = append(stats, stat)
+	}
+
+	return stats, rows.Err()
+}
+
+// =============================================================================
+// Bloat Stats Operations
+// =============================================================================
+
+// SaveBloatStats saves bloat statistics for a snapshot.
+func (s *SQLiteStorage) SaveBloatStats(ctx context.Context, snapshotID int64, stats []models.BloatInfo) error {
+	if len(stats) == 0 {
+		return nil
+	}
+
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return fmt.Errorf("beginning transaction: %w", err)
+	}
+	defer tx.Rollback()
+
+	stmt, err := tx.PrepareContext(ctx, `
+		INSERT INTO bloat_stats (
+			snapshot_id, schemaname, relname, n_dead_tup, n_live_tup, bloat_percent
+		) VALUES (?, ?, ?, ?, ?, ?)
+	`)
+	if err != nil {
+		return fmt.Errorf("preparing statement: %w", err)
+	}
+	defer stmt.Close()
+
+	for _, stat := range stats {
+		_, err := stmt.ExecContext(ctx,
+			snapshotID, stat.SchemaName, stat.RelName,
+			stat.NDeadTup, stat.NLiveTup, stat.BloatPercent,
+		)
+		if err != nil {
+			return fmt.Errorf("inserting bloat stat: %w", err)
+		}
+	}
+
+	return tx.Commit()
+}
+
+// GetBloatStats retrieves bloat statistics for a snapshot.
+func (s *SQLiteStorage) GetBloatStats(ctx context.Context, snapshotID int64) ([]models.BloatInfo, error) {
+	rows, err := s.db.QueryContext(ctx, `
+		SELECT schemaname, relname, n_dead_tup, n_live_tup, bloat_percent
+		FROM bloat_stats
+		WHERE snapshot_id = ?
+		ORDER BY bloat_percent DESC
+	`, snapshotID)
+	if err != nil {
+		return nil, fmt.Errorf("querying bloat stats: %w", err)
+	}
+	defer rows.Close()
+
+	var stats []models.BloatInfo
+	for rows.Next() {
+		var stat models.BloatInfo
+		err := rows.Scan(
+			&stat.SchemaName, &stat.RelName,
+			&stat.NDeadTup, &stat.NLiveTup, &stat.BloatPercent,
+		)
+		if err != nil {
+			return nil, fmt.Errorf("scanning bloat stat: %w", err)
 		}
 		stats = append(stats, stat)
 	}
