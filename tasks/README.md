@@ -74,9 +74,9 @@ Update this section as tasks are completed:
 - [x] 03 - Storage (SQLite) (completed 2026-01-10)
 - [x] 04 - PostgreSQL Client (completed 2026-01-10)
 - [x] 05 - Collectors (completed 2026-01-10)
-- [ ] 06 - Analyzer
-- [ ] 07 - Suggester
-- [ ] 08 - Scheduler
+- [x] 06 - Analyzer (completed 2026-01-10)
+- [x] 07 - Suggester (completed 2026-01-10)
+- [x] 08 - Scheduler (completed 2026-01-10)
 - [ ] 09 - API Server
 - [ ] 10 - Web UI
 - [ ] 11 - Production Readiness
@@ -265,3 +265,179 @@ task
   - Tests for partial failure handling
   - Tests for context cancellation
   - Tests for default and custom intervals
+
+## What Was Completed in Task 06
+
+- Analyzer interface and types in `internal/analyzer/analyzer.go`:
+  - `Analyzer` interface with `Analyze(ctx, snapshotID)` method
+  - `AnalysisResult` struct aggregating all issue types
+  - `SlowQuery` struct with execution time metrics and delta values
+  - `CacheAnalysis` struct with overall ratio and poor-performing queries
+  - `TableIssue` struct for bloat, stale vacuum/analyze, missing index issues
+  - `IndexIssue` struct for unused and duplicate index detection
+  - `Config` struct with configurable thresholds
+  - `ConfigFromThresholds()` helper to convert from config package
+  - `Storage` interface subset for testability
+- SlowQueryAnalyzer in `internal/analyzer/slow_queries.go`:
+  - Identifies queries exceeding mean execution time threshold
+  - Uses absolute values from snapshot for historical context
+  - Calculates per-query cache hit ratio
+  - `AnalyzeWithDeltas()` for recent performance analysis
+  - Results sorted by total execution time (most impactful first)
+- CacheAnalyzer in `internal/analyzer/cache.go`:
+  - Database-level cache hit ratio from snapshot
+  - Per-query cache hit ratio calculation
+  - Flags queries with poor cache performance (below threshold)
+  - Filters queries with minimal block activity to reduce noise
+  - `AnalyzeWithDeltas()` for accurate recent cache analysis
+- TableAnalyzer in `internal/analyzer/tables.go`:
+  - High bloat detection using bloat_stats (dead tuple ratio)
+  - Stale vacuum detection (days since last vacuum + dead tuples)
+  - Stale analyze detection (days since last analyze)
+  - Missing index detection (high sequential scan ratio on large tables)
+  - Severity escalation (warning → critical) based on thresholds
+  - Skips small tables to reduce noise
+- IndexAnalyzer in `internal/analyzer/indexes.go`:
+  - Unused index detection (idx_scan = 0)
+  - Excludes primary keys and unique indexes (constraint purposes)
+  - Duplicate index detection using name patterns and size similarity
+  - Space savings calculation for each issue
+  - `formatBytes()` helper for human-readable sizes
+- MainAnalyzer orchestrator in `internal/analyzer/main.go`:
+  - Orchestrates all sub-analyzers (slow query, cache, table, index)
+  - Handles partial failures gracefully (errors tracked, others continue)
+  - `Analyze()` for single snapshot analysis
+  - `AnalyzeWithTimeRange()` for delta-based analysis
+  - `GetIssueCount()`, `GetCriticalCount()`, `GetWarningCount()` helpers
+- Comprehensive tests in `internal/analyzer/analyzer_test.go`:
+  - Mock storage implementation for isolated testing
+  - 16 test cases covering all analyzers
+  - Tests for slow query detection and sorting
+  - Tests for cache analysis with thresholds
+  - Tests for table issues (bloat, stale vacuum, missing index)
+  - Tests for index issues (unused, duplicate detection)
+  - Tests for main analyzer orchestration
+  - Tests for partial failure handling
+  - Tests for result count helpers
+
+## What Was Completed in Task 07
+
+- Rule interface and types in `internal/suggester/rule.go`:
+  - `Rule` interface with `ID()`, `Name()`, `Evaluate()` methods
+  - `Suggestion` struct with RuleID, Severity, Title, Description, TargetObject, Metadata
+  - `ToModel()` method for converting to storage model
+  - `Config` struct with configurable thresholds for all rules
+  - `DefaultConfig()` function with sensible defaults
+- SlowQueryRule in `internal/suggester/rules/slow_query.go`:
+  - Rule ID: `slow_query`
+  - Trigger: `mean_exec_time > threshold`
+  - Severity: warning (>1s), critical (>5s)
+  - Includes execution stats and optimization hints
+  - Metadata: queryid, mean_time, call_count, cache_hit_ratio
+- UnusedIndexRule in `internal/suggester/rules/unused_index.go`:
+  - Rule ID: `unused_index`
+  - Trigger: `idx_scan = 0` (excludes primary keys and unique constraints)
+  - Severity: warning
+  - Includes DROP INDEX statement in description
+  - Metadata: index_size, table_name, space_savings
+- MissingIndexRule in `internal/suggester/rules/missing_index.go`:
+  - Rule ID: `missing_index`
+  - Trigger: high seq_scan ratio on large tables
+  - Severity: info (moderate ratio), warning (high ratio)
+  - Skips tables below minimum size threshold
+  - Metadata: seq_scan_ratio, table_size, n_live_tup
+- BloatRule in `internal/suggester/rules/bloat.go`:
+  - Rule ID: `table_bloat`
+  - Trigger: dead_tup_ratio > threshold
+  - Severity: warning (>20%), critical (>50%)
+  - Recommends VACUUM or VACUUM FULL based on severity
+  - Metadata: dead_tuples, live_tuples, bloat_ratio
+- VacuumRule in `internal/suggester/rules/vacuum.go`:
+  - Rule ID: `stale_vacuum`
+  - Trigger: last_vacuum older than threshold with high dead tuples
+  - Severity: warning
+  - Includes VACUUM ANALYZE command
+  - Metadata: last_vacuum, dead_tuples, days_since_vacuum
+- CacheRule in `internal/suggester/rules/cache.go`:
+  - Rule ID: `low_cache_hit`
+  - Trigger: cache_hit_ratio < threshold
+  - Severity: warning (<95%), critical (<90%)
+  - Lists queries with poor cache performance
+  - Metadata: hit_ratio, poor_query_count
+- Suggester orchestrator in `internal/suggester/suggester.go`:
+  - `Suggester` struct with registered rules
+  - `RegisterRule()` and `RegisterRules()` methods
+  - `Suggest()` runs all rules and manages suggestions
+  - Deduplication by (rule_id, target_object)
+  - Upserts new/updated suggestions via storage
+  - Marks resolved suggestions when issues disappear
+  - `SuggestResult` with counts: total, new, updated, resolved
+  - `GetSuggestionStats()` returns counts by severity
+- Comprehensive tests in `internal/suggester/suggester_test.go`:
+  - Mock storage implementation for isolated testing
+  - 14 test functions covering all rules
+  - Tests for each rule with triggering and non-triggering data
+  - Tests for severity calculation
+  - Tests for deduplication logic
+  - Tests for suggestion resolution when issues are fixed
+  - Tests for suggestion stats aggregation
+  - Tests for nil/empty analysis handling
+
+## What Was Completed in Task 08
+
+- Scheduler struct and configuration in `internal/scheduler/scheduler.go`:
+  - `Scheduler` struct managing collection, analysis, and maintenance jobs
+  - `Config` struct with references to coordinator, analyzer, suggester, storage
+  - `NewScheduler()` constructor with required field validation
+  - Default configuration with 5m snapshot interval, 15m analysis interval
+- Ticker-based scheduling in `internal/scheduler/loops.go`:
+  - `runCollectionLoop()` - runs at snapshot_interval (default 5m)
+  - `runAnalysisLoop()` - runs at analysis_interval (default 15m)
+  - `runMaintenanceLoop()` - runs daily for cleanup
+  - Initial execution on start with proper delay handling
+  - Respects context cancellation and stop signals
+- Collection job:
+  - Uses coordinator to run all collectors
+  - Creates snapshot per collection cycle
+  - Tracks collection duration and errors
+  - Logs collection results with snapshot ID
+- Analysis job:
+  - Fetches latest snapshot for analysis
+  - Runs analyzer on snapshot data
+  - Runs suggester with analysis results
+  - Tracks analysis duration and issue counts
+- Maintenance job:
+  - Runs daily (configurable)
+  - Purges old snapshots based on retention config
+  - Logs purge results
+- Manual trigger in `TriggerSnapshot()`:
+  - Runs immediate collection and analysis
+  - Prevents concurrent manual triggers with mutex
+  - Returns `TriggerResult` with all results
+  - Updates health status
+- Graceful shutdown:
+  - `Stop()` and `StopWithTimeout()` methods
+  - Closes stop channel to signal all loops
+  - Waits for goroutines with timeout
+  - Logs shutdown progress
+- Health status tracking with `HealthStatus` struct:
+  - `LastCollectionTime`, `LastCollectionSuccess`, `LastCollectionDuration`
+  - `LastAnalysisTime`, `LastAnalysisSuccess`, `LastAnalysisDuration`
+  - `LastMaintenanceTime`, `LastMaintenanceSuccess`
+  - `TotalCollections`, `TotalAnalyses`, `FailedCollections`, `FailedAnalyses`
+  - `GetHealth()` returns thread-safe snapshot for health checks
+- Comprehensive tests in `internal/scheduler/scheduler_test.go`:
+  - Mock storage implementing all required interfaces
+  - Mock PG client for coordinator
+  - Mock collector for testing
+  - 11 test functions covering:
+    - NewScheduler required field validation
+    - Start/stop lifecycle
+    - Collection loop creates snapshots at intervals
+    - TriggerSnapshot manual execution
+    - Sequential trigger calls work correctly
+    - Health status tracking and updates
+    - Graceful shutdown completes quickly
+    - Context cancellation handling
+    - Maintenance job runs without errors
+    - Scheduler restart after stop
