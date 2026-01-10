@@ -1,0 +1,66 @@
+# pganalyzer Configuration
+# Copy this file to config.yaml and adjust values as needed.
+# Environment variables can be used with ${VAR_NAME} syntax.
+
+# PostgreSQL connection settings
+postgres:
+  # Required: PostgreSQL host
+  host: localhost
+  # Port (default: 5432)
+  port: 5432
+  # Required: Database name to monitor
+  database: mydb
+  # Required: Username with access to pg_stat_statements
+  user: pganalyzer
+  # Password - use environment variable for security
+  password: ${PG_PASSWORD}
+  # SSL mode: disable, allow, prefer, require (default: prefer)
+  sslmode: prefer
+
+# SQLite storage settings
+storage:
+  # Path to SQLite database file
+  path: ./data/pganalyzer.db
+  # Data retention settings
+  retention:
+    # How long to keep snapshots (default: 168h = 7 days)
+    snapshots: 168h
+    # How long to keep query stats (default: 720h = 30 days)
+    query_stats: 720h
+
+# Collection scheduler settings
+scheduler:
+  # Interval for taking full snapshots (default: 5m)
+  snapshot_interval: 5m
+  # Interval for running analysis and generating suggestions (default: 15m)
+  analysis_interval: 15m
+
+# HTTP server settings
+server:
+  # Bind address (default: 0.0.0.0)
+  host: 0.0.0.0
+  # Port to listen on (default: 8080)
+  port: 8080
+  # Authentication settings
+  auth:
+    # Enable/disable basic auth (default: true)
+    enabled: true
+    # Username for basic auth
+    username: admin
+    # Password - use environment variable for security
+    password: ${PGANALYZER_PASSWORD}
+
+# Analysis thresholds for issue detection
+thresholds:
+  # Queries with mean execution time above this (ms) are flagged as slow
+  slow_query_ms: 1000
+  # Cache hit ratio below this triggers a warning (0.0-1.0)
+  cache_hit_ratio_warning: 0.95
+  # Tables with bloat percentage above this trigger a warning
+  bloat_percent_warning: 20
+  # Indexes unused for this many days are flagged (excludes PK/unique)
+  unused_index_days: 30
+  # Sequential scan ratio above this triggers index suggestion
+  seq_scan_ratio_warning: 0.5
+  # Minimum table size (rows) before suggesting indexes
+  min_table_size_for_index: 10000

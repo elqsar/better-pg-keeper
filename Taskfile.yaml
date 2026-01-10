@@ -1,0 +1,109 @@
+version: '3'
+
+vars:
+  BINARY_NAME: pganalyzer
+  BUILD_DIR: ./bin
+  VERSION:
+    sh: git describe --tags --always --dirty 2>/dev/null || echo "dev"
+  COMMIT:
+    sh: git rev-parse --short HEAD 2>/dev/null || echo "unknown"
+  BUILD_DATE:
+    sh: date -u +"%Y-%m-%dT%H:%M:%SZ"
+  LDFLAGS: -s -w -X main.version={{.VERSION}} -X main.commit={{.COMMIT}} -X main.buildDate={{.BUILD_DATE}}
+
+tasks:
+  default:
+    desc: Show available tasks
+    cmds:
+      - task --list-all
+
+  build:
+    desc: Build the application
+    cmds:
+      - mkdir -p {{.BUILD_DIR}}
+      - go build -ldflags "{{.LDFLAGS}}" -o {{.BUILD_DIR}}/{{.BINARY_NAME}} ./cmd/pganalyzer
+    sources:
+      - ./**/*.go
+    generates:
+      - "{{.BUILD_DIR}}/{{.BINARY_NAME}}"
+
+  build:dev:
+    desc: Build with race detector enabled (for development)
+    cmds:
+      - mkdir -p {{.BUILD_DIR}}
+      - go build -race -ldflags "{{.LDFLAGS}}" -o {{.BUILD_DIR}}/{{.BINARY_NAME}} ./cmd/pganalyzer
+
+  run:
+    desc: Build and run the application
+    deps: [build]
+    cmds:
+      - "{{.BUILD_DIR}}/{{.BINARY_NAME}} {{.CLI_ARGS}}"
+
+  test:
+    desc: Run tests
+    cmds:
+      - go test -v ./...
+
+  test:coverage:
+    desc: Run tests with coverage
+    cmds:
+      - go test -v -coverprofile=coverage.out ./...
+      - go tool cover -html=coverage.out -o coverage.html
+
+  test:race:
+    desc: Run tests with race detector
+    cmds:
+      - go test -race -v ./...
+
+  lint:
+    desc: Run linters
+    cmds:
+      - golangci-lint run ./...
+
+  fmt:
+    desc: Format code
+    cmds:
+      - go fmt ./...
+      - goimports -w .
+
+  tidy:
+    desc: Tidy dependencies
+    cmds:
+      - go mod tidy
+
+  clean:
+    desc: Clean build artifacts
+    cmds:
+      - rm -rf {{.BUILD_DIR}}
+      - rm -f coverage.out coverage.html
+
+  version:
+    desc: Show version information
+    cmds:
+      - echo "Version:" {{.VERSION}}
+      - echo "Commit:" {{.COMMIT}}
+      - echo "Build Date:" {{.BUILD_DATE}}
+
+  docker:build:
+    desc: Build Docker image
+    cmds:
+      - docker build -t {{.BINARY_NAME}}:{{.VERSION}} .
+
+  docker:run:
+    desc: Run Docker container
+    cmds:
+      - docker run --rm -p 8080:8080 -v $(pwd)/data:/app/data {{.BINARY_NAME}}:{{.VERSION}}
+
+  install:tools:
+    desc: Install development tools
+    cmds:
+      - go install github.com/golangci/golangci-lint/cmd/golangci-lint@latest
+      - go install golang.org/x/tools/cmd/goimports@latest
+
+  all:
+    desc: Run fmt, lint, test, and build
+    cmds:
+      - task: fmt
+      - task: lint
+      - task: test
+      - task: build
