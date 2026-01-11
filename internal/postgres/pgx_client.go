@@ -807,7 +807,8 @@ func (c *PgxClient) GetExtendedDatabaseStats(ctx context.Context) (*models.Exten
 		return nil, fmt.Errorf("postgres: not connected")
 	}
 
-	query := `
+	// Try query with confl_lock and confl_snapshot columns (PostgreSQL 17+)
+	queryPG17 := `
 		SELECT
 			datname,
 			xact_commit,
@@ -822,7 +823,7 @@ func (c *PgxClient) GetExtendedDatabaseStats(ctx context.Context) (*models.Exten
 	`
 
 	var stats models.ExtendedDatabaseStats
-	err := c.pool.QueryRow(ctx, query).Scan(
+	err := c.pool.QueryRow(ctx, queryPG17).Scan(
 		&stats.DatabaseName,
 		&stats.XactCommit,
 		&stats.XactRollback,
@@ -833,6 +834,33 @@ func (c *PgxClient) GetExtendedDatabaseStats(ctx context.Context) (*models.Exten
 		&stats.ConflSnapshot,
 	)
 	if err != nil {
+		// If columns don't exist (PostgreSQL < 17), use fallback query
+		if strings.Contains(err.Error(), "does not exist") {
+			queryLegacy := `
+				SELECT
+					datname,
+					xact_commit,
+					xact_rollback,
+					COALESCE(temp_files, 0) as temp_files,
+					COALESCE(temp_bytes, 0) as temp_bytes,
+					COALESCE(deadlocks, 0) as deadlocks
+				FROM pg_stat_database
+				WHERE datname = current_database()
+			`
+			err = c.pool.QueryRow(ctx, queryLegacy).Scan(
+				&stats.DatabaseName,
+				&stats.XactCommit,
+				&stats.XactRollback,
+				&stats.TempFiles,
+				&stats.TempBytes,
+				&stats.Deadlocks,
+			)
+			if err != nil {
+				return nil, fmt.Errorf("postgres: failed to query extended database stats: %w", err)
+			}
+			// confl_lock and confl_snapshot remain 0 (default)
+			return &stats, nil
+		}
 		return nil, fmt.Errorf("postgres: failed to query extended database stats: %w", err)
 	}
 

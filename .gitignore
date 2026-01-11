@@ -19,8 +19,11 @@ vendor/
 # Go workspace file
 go.work
 
-# Environment variables
+# Environment variables / secrets
 .env
+.env.*
+!.env.example
+.envrc
 
 # IDE files
 .idea/
@@ -32,9 +35,27 @@ go.work
 .DS_Store
 Thumbs.db
 
-# Generated files
-docs/
+# Local configuration (may contain secrets)
 configs/config.yaml
+configs/config-*.yaml
 
 # Local Go build cache
 .gocache/
+
+# Local SQLite / data
+data/
+*.db
+*.sqlite
+*.sqlite3
+*.sqlite3-journal
+*.sqlite-wal
+*.sqlite-shm
+
+# Task runner cache
+.task/
+
+# Local agent config
+.claude/
+
+# Generated
+docs/
