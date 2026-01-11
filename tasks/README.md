@@ -19,6 +19,7 @@ This directory contains implementation tasks for PostgreSQL Analyzer (pganalyzer
 | 11 | [Production Readiness](11-production-readiness.md) | Docker, docs, testing | All |
 | 12 | [Main Wiring](12-main-wiring.md) | Connect all components in main.go | 01-10 |
 | 13 | [Tailwind Migration](13-tailwind-migration.md) | Migrate CSS to Tailwind, improve aesthetics | 10 |
+| 14 | [Operational Collectors](14-operational-collectors.md) | pg_stat_activity, pg_locks, extended pg_stat_database | 05, 06, 07, 10 |
 
 ## Dependency Graph
 
@@ -86,6 +87,7 @@ Update this section as tasks are completed:
 - [x] 11 - Production Readiness (completed 2026-01-11)
 - [x] 12 - Main Wiring (completed 2026-01-11)
 - [x] 13 - Tailwind Migration (completed 2026-01-11)
+- [x] 14 - Operational Collectors (completed 2026-01-11)
 
 ## Quick Commands
 
@@ -771,3 +773,82 @@ task
   - Responsive grid layouts (mobile-first)
   - Smooth transitions on interactive elements
 - All existing tests pass (template rendering, page handlers)
+
+## What Was Completed in Task 14
+
+- New data models in `internal/models/models.go`:
+  - `ConnectionActivity` - pg_stat_activity aggregates (active, idle, idle-in-tx, waiting counts)
+  - `LongRunningQuery` - queries exceeding duration threshold with PID, user, database, wait events
+  - `IdleInTransaction` - connections idle in transaction with duration
+  - `LockStats` - aggregated lock statistics by lock type
+  - `BlockedQuery` - blocked/blocking query pairs with wait duration and lock details
+  - `ExtendedDatabaseStats` - transaction rates, temp files, deadlocks, conflicts
+- New migration `internal/storage/sqlite/migrations/010_create_operational_stats.sql`:
+  - `connection_activity` table for connection snapshots
+  - `long_running_queries` table for queries exceeding threshold
+  - `idle_in_transaction` table for idle-in-tx connections
+  - `lock_stats` table for lock aggregates
+  - `blocked_queries` table for blocking relationships
+  - `extended_database_stats` table for operational metrics
+  - All tables with foreign key cascade deletes and appropriate indexes
+- Storage methods in `internal/storage/sqlite/storage.go`:
+  - Save/Get methods for all 6 new data types
+  - Bulk insert for long-running queries, idle-in-tx, blocked queries
+- PostgreSQL client methods in `internal/postgres/pgx_client.go`:
+  - `GetConnectionActivity()` - aggregates from pg_stat_activity
+  - `GetLongRunningQueries(threshold)` - active queries exceeding duration
+  - `GetIdleInTransaction(threshold)` - idle-in-tx connections exceeding duration
+  - `GetLockStats()` - lock counts by type from pg_locks
+  - `GetBlockedQueries()` - blocked/blocking relationships with lock details
+  - `GetExtendedDatabaseStats()` - xact_commit/rollback, temp files, deadlocks
+- Activity Collector in `internal/collector/activity/activity.go`:
+  - 30-second default interval
+  - Collects connection activity summary
+  - Collects long-running queries (default threshold: 60s)
+  - Collects idle-in-transaction connections (default threshold: 60s)
+  - Configurable thresholds via `ActivityCollectorConfig`
+- Locks Collector in `internal/collector/locks/locks.go`:
+  - 30-second default interval
+  - Collects lock statistics aggregates
+  - Collects blocked/blocking query relationships
+- Extended Database Collector in `internal/collector/resource/database.go`:
+  - Added collection of extended stats (temp files, deadlocks, conflicts)
+  - Saves to `extended_database_stats` table
+- Analyzer extensions in `internal/analyzer/`:
+  - Extended `Storage` interface with operational stats getters
+  - Extended `AnalysisResult` with `ActivityStats`, `LockStats`, `TransactionStats`
+  - `ActivityAnalysis` struct with connection utilization, long-running, idle-in-tx
+  - `LockAnalysis` struct with blocked queries and waiting lock count
+  - `TransactionAnalysis` struct with temp files and deadlock metrics
+  - `MainAnalyzer.Analyze()` now fetches and includes operational data
+- New suggestion rules in `internal/suggester/rules/`:
+  - `long_running_query.go` - queries > 60s (warning), > 300s (critical)
+  - `idle_in_transaction.go` - idle-in-tx > 60s (warning), > 300s (critical)
+  - `lock_contention.go` - blocked queries > 10s (warning), > 60s (critical)
+  - `high_temp_usage.go` - temp bytes > 1GB (warning), > 10GB (critical)
+  - `high_deadlocks.go` - any deadlocks detected (warning), > 5 (critical)
+- Config extensions in `internal/suggester/rule.go`:
+  - `LongRunningQuerySeconds`, `LongRunningCriticalSeconds`
+  - `IdleInTxSeconds`, `IdleInTxCriticalSeconds`
+  - `BlockedQuerySeconds`, `BlockedQueryCriticalSeconds`
+  - `TempBytesWarning`, `TempBytesCritical`
+  - `DeadlocksWarning`
+  - `ConnectionUtilizationWarning`
+- Dashboard updates in `internal/web/templates/dashboard.html`:
+  - Active Connections stat card (current / max_connections)
+  - Long-Running Queries stat card
+  - Blocked Queries stat card
+  - Connection Activity section (active, idle, idle-in-tx, waiting grid)
+  - Lock Activity section (blocked queries list with wait durations)
+- Page handler updates in `internal/api/handlers/pages.go`:
+  - `PageStorage` interface extended with operational stats getters
+  - `DashboardPageData` extended with activity/lock stats
+  - Dashboard handler fetches and renders operational data
+- Main wiring in `cmd/pganalyzer/main.go`:
+  - Activity collector registered with coordinator
+  - Locks collector registered with coordinator
+  - 5 new suggestion rules registered with suggester
+- Test fixes across all packages:
+  - Updated mock implementations in `scheduler_test.go`, `collector_test.go`, `analyzer_test.go`, `pages_test.go`
+  - Updated migration count assertion in `storage_test.go`
+  - All tests passing

@@ -31,8 +31,8 @@
                 <p class="mt-1 text-gray-500">PostgreSQL performance overview</p>
             </div>
 
-            <!-- Stats Cards -->
-            <div class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-6 mb-8">
+            <!-- Stats Cards - Row 1 -->
+            <div class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-6 mb-6">
                 <div class="stat-card">
                     <div class="stat-label">Cache Hit Ratio</div>
                     {{if .CacheHitRatio}}
@@ -57,6 +57,40 @@
                     <div class="stat-label">Active Suggestions</div>
                     <div class="stat-value {{if gt .ActiveSuggestions 0}}text-severity-warning{{else}}text-gray-900{{end}}">{{.ActiveSuggestions}}</div>
                     <div class="stat-hint"><a href="/suggestions" class="text-primary hover:text-primary-hover">View all</a></div>
+                </div>
+            </div>
+
+            <!-- Stats Cards - Row 2 (Operational) -->
+            <div class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-6 mb-8">
+                <div class="stat-card">
+                    <div class="stat-label">Active Connections</div>
+                    {{if .ActivityStats}}
+                    <div class="stat-value text-gray-900">{{.ActivityStats.TotalConnections}} / {{.ActivityStats.MaxConnections}}</div>
+                    <div class="stat-hint">{{.ActivityStats.ActiveCount}} active, {{.ActivityStats.IdleCount}} idle</div>
+                    {{else}}
+                    <div class="stat-value text-gray-400">N/A</div>
+                    <div class="stat-hint">No data available</div>
+                    {{end}}
+                </div>
+                <div class="stat-card">
+                    <div class="stat-label">Idle in Transaction</div>
+                    {{if .ActivityStats}}
+                    <div class="stat-value {{if gt .ActivityStats.IdleInTxCount 0}}text-severity-warning{{else}}text-gray-900{{end}}">{{.ActivityStats.IdleInTxCount}}</div>
+                    <div class="stat-hint">Connections idle in tx</div>
+                    {{else}}
+                    <div class="stat-value text-gray-400">N/A</div>
+                    <div class="stat-hint">No data available</div>
+                    {{end}}
+                </div>
+                <div class="stat-card">
+                    <div class="stat-label">Long-Running Queries</div>
+                    <div class="stat-value {{if gt .LongRunningCount 0}}text-severity-warning{{else}}text-gray-900{{end}}">{{.LongRunningCount}}</div>
+                    <div class="stat-hint">Running &gt;60s</div>
+                </div>
+                <div class="stat-card">
+                    <div class="stat-label">Blocked Queries</div>
+                    <div class="stat-value {{if gt .BlockedCount 0}}text-severity-critical{{else}}text-gray-900{{end}}">{{.BlockedCount}}</div>
+                    <div class="stat-hint">Waiting for locks</div>
                 </div>
             </div>
 

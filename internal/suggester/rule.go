@@ -72,6 +72,18 @@ type Config struct {
 	SeqScanRatioCritical   float64 // seq_scan / total_scan ratio for critical
 	MinTableSizeForIndex   int64   // skip index suggestions for tiny tables
 	VacuumStaleDays        int     // days since last vacuum to consider stale
+
+	// Operational thresholds
+	LongRunningQuerySeconds      float64 // queries running longer flagged (warning)
+	LongRunningCriticalSeconds   float64 // queries running longer are critical
+	IdleInTxSeconds              float64 // idle-in-tx warning threshold
+	IdleInTxCriticalSeconds      float64 // idle-in-tx critical threshold
+	BlockedQuerySeconds          float64 // blocked query warning threshold
+	BlockedQueryCriticalSeconds  float64 // blocked query critical threshold
+	TempBytesWarning             int64   // temp bytes per snapshot warning
+	TempBytesCritical            int64   // temp bytes per snapshot critical
+	DeadlocksWarning             int64   // deadlocks per snapshot warning
+	ConnectionUtilizationWarning float64 // connection utilization warning (0-1)
 }
 
 // DefaultConfig returns the default suggester configuration.
@@ -88,5 +100,17 @@ func DefaultConfig() *Config {
 		SeqScanRatioCritical:  0.8,   // 80%
 		MinTableSizeForIndex:  10000, // 10KB
 		VacuumStaleDays:       7,     // 7 days
+
+		// Operational defaults
+		LongRunningQuerySeconds:      60,                      // 1 minute
+		LongRunningCriticalSeconds:   300,                     // 5 minutes
+		IdleInTxSeconds:              60,                      // 1 minute
+		IdleInTxCriticalSeconds:      300,                     // 5 minutes
+		BlockedQuerySeconds:          10,                      // 10 seconds
+		BlockedQueryCriticalSeconds:  60,                      // 1 minute
+		TempBytesWarning:             1024 * 1024 * 1024,      // 1GB
+		TempBytesCritical:            10 * 1024 * 1024 * 1024, // 10GB
+		DeadlocksWarning:             1,                       // any deadlocks
+		ConnectionUtilizationWarning: 0.8,                     // 80%
 	}
 }

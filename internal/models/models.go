@@ -166,3 +166,87 @@ type IndexDetail struct {
 	IsValid      bool   `json:"is_valid"`
 	TableSize    int64  `json:"table_size"`
 }
+
+// ConnectionActivity represents a snapshot of pg_stat_activity aggregates.
+type ConnectionActivity struct {
+	ID               int64 `json:"id"`
+	SnapshotID       int64 `json:"snapshot_id"`
+	ActiveCount      int   `json:"active_count"`
+	IdleCount        int   `json:"idle_count"`
+	IdleInTxCount    int   `json:"idle_in_tx_count"`
+	IdleInTxAborted  int   `json:"idle_in_tx_aborted"`
+	WaitingCount     int   `json:"waiting_count"`
+	TotalConnections int   `json:"total_connections"`
+	MaxConnections   int   `json:"max_connections"`
+}
+
+// LongRunningQuery represents a query running longer than threshold.
+type LongRunningQuery struct {
+	ID              int64     `json:"id"`
+	SnapshotID      int64     `json:"snapshot_id"`
+	PID             int       `json:"pid"`
+	Username        string    `json:"usename"`
+	DatabaseName    string    `json:"datname"`
+	Query           string    `json:"query"`
+	State           string    `json:"state"`
+	WaitEventType   *string   `json:"wait_event_type,omitempty"`
+	WaitEvent       *string   `json:"wait_event,omitempty"`
+	QueryStart      time.Time `json:"query_start"`
+	DurationSeconds float64   `json:"duration_seconds"`
+}
+
+// IdleInTransaction represents a connection idle in transaction.
+type IdleInTransaction struct {
+	ID              int64     `json:"id"`
+	SnapshotID      int64     `json:"snapshot_id"`
+	PID             int       `json:"pid"`
+	Username        string    `json:"usename"`
+	DatabaseName    string    `json:"datname"`
+	State           string    `json:"state"`
+	XactStart       time.Time `json:"xact_start"`
+	DurationSeconds float64   `json:"duration_seconds"`
+	Query           string    `json:"query"`
+}
+
+// LockStats represents aggregated lock statistics.
+type LockStats struct {
+	ID                int64 `json:"id"`
+	SnapshotID        int64 `json:"snapshot_id"`
+	TotalLocks        int   `json:"total_locks"`
+	GrantedLocks      int   `json:"granted_locks"`
+	WaitingLocks      int   `json:"waiting_locks"`
+	AccessShareLocks  int   `json:"access_share_locks"`
+	RowExclusiveLocks int   `json:"row_exclusive_locks"`
+	ExclusiveLocks    int   `json:"exclusive_locks"`
+}
+
+// BlockedQuery represents a query blocked by another transaction.
+type BlockedQuery struct {
+	ID           int64     `json:"id"`
+	SnapshotID   int64     `json:"snapshot_id"`
+	BlockedPID   int       `json:"blocked_pid"`
+	BlockedUser  string    `json:"blocked_user"`
+	BlockedQuery string    `json:"blocked_query"`
+	BlockedStart time.Time `json:"blocked_start"`
+	WaitDuration float64   `json:"wait_duration_seconds"`
+	BlockingPID  int       `json:"blocking_pid"`
+	BlockingUser string    `json:"blocking_user"`
+	BlockingQuery string   `json:"blocking_query"`
+	LockType     string    `json:"lock_type"`
+	LockMode     string    `json:"lock_mode"`
+	Relation     *string   `json:"relation,omitempty"`
+}
+
+// ExtendedDatabaseStats represents operational database metrics.
+type ExtendedDatabaseStats struct {
+	ID            int64  `json:"id"`
+	SnapshotID    int64  `json:"snapshot_id"`
+	DatabaseName  string `json:"database_name"`
+	XactCommit    int64  `json:"xact_commit"`
+	XactRollback  int64  `json:"xact_rollback"`
+	TempFiles     int64  `json:"temp_files"`
+	TempBytes     int64  `json:"temp_bytes"`
+	Deadlocks     int64  `json:"deadlocks"`
+	ConflLock     int64  `json:"confl_lock"`
+	ConflSnapshot int64  `json:"confl_snapshot"`
+}

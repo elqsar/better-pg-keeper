@@ -544,5 +544,300 @@ func (c *PgxClient) GetStatsResetTime(ctx context.Context) (*time.Time, error) {
 	return resetTime, nil
 }
 
+// GetConnectionActivity retrieves connection activity from pg_stat_activity.
+func (c *PgxClient) GetConnectionActivity(ctx context.Context) (*models.ConnectionActivity, error) {
+	if c.pool == nil {
+		return nil, fmt.Errorf("postgres: not connected")
+	}
+
+	query := `
+		SELECT
+			COUNT(*) FILTER (WHERE state = 'active') as active_count,
+			COUNT(*) FILTER (WHERE state = 'idle') as idle_count,
+			COUNT(*) FILTER (WHERE state = 'idle in transaction') as idle_in_tx_count,
+			COUNT(*) FILTER (WHERE state = 'idle in transaction (aborted)') as idle_in_tx_aborted,
+			COUNT(*) FILTER (WHERE wait_event_type IS NOT NULL AND wait_event_type NOT IN ('Activity', 'Client')) as waiting_count,
+			COUNT(*) as total_connections,
+			(SELECT setting::int FROM pg_settings WHERE name = 'max_connections') as max_connections
+		FROM pg_stat_activity
+		WHERE backend_type = 'client backend'
+	`
+
+	var activity models.ConnectionActivity
+	err := c.pool.QueryRow(ctx, query).Scan(
+		&activity.ActiveCount,
+		&activity.IdleCount,
+		&activity.IdleInTxCount,
+		&activity.IdleInTxAborted,
+		&activity.WaitingCount,
+		&activity.TotalConnections,
+		&activity.MaxConnections,
+	)
+	if err != nil {
+		return nil, fmt.Errorf("postgres: failed to query connection activity: %w", err)
+	}
+
+	return &activity, nil
+}
+
+// GetLongRunningQueries retrieves queries running longer than threshold.
+func (c *PgxClient) GetLongRunningQueries(ctx context.Context, thresholdSeconds float64) ([]models.LongRunningQuery, error) {
+	if c.pool == nil {
+		return nil, fmt.Errorf("postgres: not connected")
+	}
+
+	query := `
+		SELECT
+			pid,
+			COALESCE(usename, '') as usename,
+			COALESCE(datname, '') as datname,
+			COALESCE(query, '') as query,
+			COALESCE(state, '') as state,
+			wait_event_type,
+			wait_event,
+			query_start,
+			EXTRACT(EPOCH FROM (NOW() - query_start)) as duration_seconds
+		FROM pg_stat_activity
+		WHERE state = 'active'
+		  AND query_start IS NOT NULL
+		  AND backend_type = 'client backend'
+		  AND EXTRACT(EPOCH FROM (NOW() - query_start)) > $1
+		  AND pid != pg_backend_pid()
+		ORDER BY duration_seconds DESC
+	`
+
+	rows, err := c.pool.Query(ctx, query, thresholdSeconds)
+	if err != nil {
+		return nil, fmt.Errorf("postgres: failed to query long running queries: %w", err)
+	}
+	defer rows.Close()
+
+	var queries []models.LongRunningQuery
+	for rows.Next() {
+		var q models.LongRunningQuery
+		err := rows.Scan(
+			&q.PID,
+			&q.Username,
+			&q.DatabaseName,
+			&q.Query,
+			&q.State,
+			&q.WaitEventType,
+			&q.WaitEvent,
+			&q.QueryStart,
+			&q.DurationSeconds,
+		)
+		if err != nil {
+			return nil, fmt.Errorf("postgres: failed to scan long running query: %w", err)
+		}
+		queries = append(queries, q)
+	}
+
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("postgres: error iterating long running queries: %w", err)
+	}
+
+	return queries, nil
+}
+
+// GetIdleInTransaction retrieves connections idle in transaction longer than threshold.
+func (c *PgxClient) GetIdleInTransaction(ctx context.Context, thresholdSeconds float64) ([]models.IdleInTransaction, error) {
+	if c.pool == nil {
+		return nil, fmt.Errorf("postgres: not connected")
+	}
+
+	query := `
+		SELECT
+			pid,
+			COALESCE(usename, '') as usename,
+			COALESCE(datname, '') as datname,
+			state,
+			xact_start,
+			EXTRACT(EPOCH FROM (NOW() - xact_start)) as duration_seconds,
+			COALESCE(query, '') as query
+		FROM pg_stat_activity
+		WHERE state IN ('idle in transaction', 'idle in transaction (aborted)')
+		  AND xact_start IS NOT NULL
+		  AND backend_type = 'client backend'
+		  AND EXTRACT(EPOCH FROM (NOW() - xact_start)) > $1
+		ORDER BY duration_seconds DESC
+	`
+
+	rows, err := c.pool.Query(ctx, query, thresholdSeconds)
+	if err != nil {
+		return nil, fmt.Errorf("postgres: failed to query idle in transaction: %w", err)
+	}
+	defer rows.Close()
+
+	var idle []models.IdleInTransaction
+	for rows.Next() {
+		var i models.IdleInTransaction
+		err := rows.Scan(
+			&i.PID,
+			&i.Username,
+			&i.DatabaseName,
+			&i.State,
+			&i.XactStart,
+			&i.DurationSeconds,
+			&i.Query,
+		)
+		if err != nil {
+			return nil, fmt.Errorf("postgres: failed to scan idle in transaction: %w", err)
+		}
+		idle = append(idle, i)
+	}
+
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("postgres: error iterating idle in transaction: %w", err)
+	}
+
+	return idle, nil
+}
+
+// GetLockStats retrieves lock statistics from pg_locks.
+func (c *PgxClient) GetLockStats(ctx context.Context) (*models.LockStats, error) {
+	if c.pool == nil {
+		return nil, fmt.Errorf("postgres: not connected")
+	}
+
+	query := `
+		SELECT
+			COUNT(*) as total_locks,
+			COUNT(*) FILTER (WHERE granted) as granted_locks,
+			COUNT(*) FILTER (WHERE NOT granted) as waiting_locks,
+			COUNT(*) FILTER (WHERE mode = 'AccessShareLock') as access_share_locks,
+			COUNT(*) FILTER (WHERE mode = 'RowExclusiveLock') as row_exclusive_locks,
+			COUNT(*) FILTER (WHERE mode IN ('ExclusiveLock', 'AccessExclusiveLock')) as exclusive_locks
+		FROM pg_locks
+		WHERE database = (SELECT oid FROM pg_database WHERE datname = current_database())
+	`
+
+	var stats models.LockStats
+	err := c.pool.QueryRow(ctx, query).Scan(
+		&stats.TotalLocks,
+		&stats.GrantedLocks,
+		&stats.WaitingLocks,
+		&stats.AccessShareLocks,
+		&stats.RowExclusiveLocks,
+		&stats.ExclusiveLocks,
+	)
+	if err != nil {
+		return nil, fmt.Errorf("postgres: failed to query lock stats: %w", err)
+	}
+
+	return &stats, nil
+}
+
+// GetBlockedQueries retrieves queries blocked by other transactions.
+func (c *PgxClient) GetBlockedQueries(ctx context.Context) ([]models.BlockedQuery, error) {
+	if c.pool == nil {
+		return nil, fmt.Errorf("postgres: not connected")
+	}
+
+	query := `
+		SELECT
+			blocked.pid as blocked_pid,
+			COALESCE(blocked.usename, '') as blocked_user,
+			COALESCE(blocked.query, '') as blocked_query,
+			blocked.query_start as blocked_start,
+			EXTRACT(EPOCH FROM (NOW() - blocked.query_start)) as wait_duration_seconds,
+			blocking.pid as blocking_pid,
+			COALESCE(blocking.usename, '') as blocking_user,
+			COALESCE(blocking.query, '') as blocking_query,
+			bl.locktype as lock_type,
+			bl.mode as lock_mode,
+			rel.relname as relation
+		FROM pg_locks bl
+		JOIN pg_stat_activity blocked ON bl.pid = blocked.pid
+		JOIN pg_locks kl ON bl.locktype = kl.locktype
+			AND bl.database IS NOT DISTINCT FROM kl.database
+			AND bl.relation IS NOT DISTINCT FROM kl.relation
+			AND bl.page IS NOT DISTINCT FROM kl.page
+			AND bl.tuple IS NOT DISTINCT FROM kl.tuple
+			AND bl.virtualxid IS NOT DISTINCT FROM kl.virtualxid
+			AND bl.transactionid IS NOT DISTINCT FROM kl.transactionid
+			AND bl.classid IS NOT DISTINCT FROM kl.classid
+			AND bl.objid IS NOT DISTINCT FROM kl.objid
+			AND bl.objsubid IS NOT DISTINCT FROM kl.objsubid
+			AND bl.pid != kl.pid
+		JOIN pg_stat_activity blocking ON kl.pid = blocking.pid
+		LEFT JOIN pg_class rel ON bl.relation = rel.oid
+		WHERE NOT bl.granted
+		  AND kl.granted
+		ORDER BY wait_duration_seconds DESC
+	`
+
+	rows, err := c.pool.Query(ctx, query)
+	if err != nil {
+		return nil, fmt.Errorf("postgres: failed to query blocked queries: %w", err)
+	}
+	defer rows.Close()
+
+	var queries []models.BlockedQuery
+	for rows.Next() {
+		var q models.BlockedQuery
+		err := rows.Scan(
+			&q.BlockedPID,
+			&q.BlockedUser,
+			&q.BlockedQuery,
+			&q.BlockedStart,
+			&q.WaitDuration,
+			&q.BlockingPID,
+			&q.BlockingUser,
+			&q.BlockingQuery,
+			&q.LockType,
+			&q.LockMode,
+			&q.Relation,
+		)
+		if err != nil {
+			return nil, fmt.Errorf("postgres: failed to scan blocked query: %w", err)
+		}
+		queries = append(queries, q)
+	}
+
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("postgres: error iterating blocked queries: %w", err)
+	}
+
+	return queries, nil
+}
+
+// GetExtendedDatabaseStats retrieves extended database statistics.
+func (c *PgxClient) GetExtendedDatabaseStats(ctx context.Context) (*models.ExtendedDatabaseStats, error) {
+	if c.pool == nil {
+		return nil, fmt.Errorf("postgres: not connected")
+	}
+
+	query := `
+		SELECT
+			datname,
+			xact_commit,
+			xact_rollback,
+			COALESCE(temp_files, 0) as temp_files,
+			COALESCE(temp_bytes, 0) as temp_bytes,
+			COALESCE(deadlocks, 0) as deadlocks,
+			COALESCE(confl_lock, 0) as confl_lock,
+			COALESCE(confl_snapshot, 0) as confl_snapshot
+		FROM pg_stat_database
+		WHERE datname = current_database()
+	`
+
+	var stats models.ExtendedDatabaseStats
+	err := c.pool.QueryRow(ctx, query).Scan(
+		&stats.DatabaseName,
+		&stats.XactCommit,
+		&stats.XactRollback,
+		&stats.TempFiles,
+		&stats.TempBytes,
+		&stats.Deadlocks,
+		&stats.ConflLock,
+		&stats.ConflSnapshot,
+	)
+	if err != nil {
+		return nil, fmt.Errorf("postgres: failed to query extended database stats: %w", err)
+	}
+
+	return &stats, nil
+}
+
 // Ensure PgxClient implements Client interface
 var _ Client = (*PgxClient)(nil)

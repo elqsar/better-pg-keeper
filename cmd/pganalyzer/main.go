@@ -14,6 +14,8 @@ import (
 	"github.com/user/pganalyzer/internal/analyzer"
 	"github.com/user/pganalyzer/internal/api"
 	"github.com/user/pganalyzer/internal/collector"
+	"github.com/user/pganalyzer/internal/collector/activity"
+	"github.com/user/pganalyzer/internal/collector/locks"
 	"github.com/user/pganalyzer/internal/collector/query"
 	"github.com/user/pganalyzer/internal/collector/resource"
 	"github.com/user/pganalyzer/internal/collector/schema"
@@ -179,6 +181,16 @@ func run(ctx context.Context, configPath string) error {
 			Storage:    storage,
 			InstanceID: instanceID,
 		}),
+		activity.NewActivityCollector(activity.ActivityCollectorConfig{
+			PGClient:   pgClient,
+			Storage:    storage,
+			InstanceID: instanceID,
+		}),
+		locks.NewLocksCollector(locks.LocksCollectorConfig{
+			PGClient:   pgClient,
+			Storage:    storage,
+			InstanceID: instanceID,
+		}),
 	)
 	slog.Info("collectors registered", "count", len(coordinator.Collectors()))
 
@@ -197,6 +209,12 @@ func run(ctx context.Context, configPath string) error {
 		rules.NewBloatRule(suggesterCfg),
 		rules.NewVacuumRule(suggesterCfg),
 		rules.NewCacheRule(suggesterCfg),
+		// Operational state rules
+		rules.NewLongRunningQueryRule(suggesterCfg),
+		rules.NewIdleInTransactionRule(suggesterCfg),
+		rules.NewLockContentionRule(suggesterCfg),
+		rules.NewHighTempUsageRule(suggesterCfg),
+		rules.NewHighDeadlocksRule(suggesterCfg),
 	)
 	slog.Info("suggester initialized", "rules", len(mainSuggester.Rules()))
 

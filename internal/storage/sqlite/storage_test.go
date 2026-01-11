@@ -51,8 +51,8 @@ func TestNewStorage(t *testing.T) {
 			t.Fatalf("GetMigrationStatus failed: %v", err)
 		}
 
-		if len(status) != 9 {
-			t.Errorf("Expected 9 migrations applied, got %d", len(status))
+		if len(status) != 10 {
+			t.Errorf("Expected 10 migrations applied, got %d", len(status))
 		}
 	})
 

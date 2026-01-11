@@ -21,6 +21,10 @@ type PageStorage interface {
 	GetIndexStats(ctx context.Context, snapshotID int64) ([]models.IndexStat, error)
 	GetBloatStats(ctx context.Context, snapshotID int64) ([]models.BloatInfo, error)
 	GetExplainPlan(ctx context.Context, queryID int64) (*models.ExplainPlan, error)
+	// Operational stats
+	GetConnectionActivity(ctx context.Context, snapshotID int64) (*models.ConnectionActivity, error)
+	GetLongRunningQueries(ctx context.Context, snapshotID int64) ([]models.LongRunningQuery, error)
+	GetBlockedQueries(ctx context.Context, snapshotID int64) ([]models.BlockedQuery, error)
 }
 
 // PageHandler handles HTML page rendering.
@@ -56,6 +60,11 @@ type DashboardPageData struct {
 	ActiveSuggestions int
 	TopQueries        []DashboardQuery
 	RecentSuggestions []DashboardSuggestion
+	// Operational stats
+	ActivityStats    *models.ConnectionActivity
+	LongRunningCount int
+	BlockedCount     int
+	BlockedQueries   []models.BlockedQuery
 }
 
 // DashboardQuery represents a query summary for the dashboard.
@@ -158,6 +167,38 @@ func (h *PageHandler) Dashboard(c echo.Context) error {
 				TargetObject: sug.TargetObject,
 				FirstSeenAt:  sug.FirstSeenAt,
 			})
+		}
+	}
+
+	// Get operational stats (if snapshot exists)
+	if snapshot != nil {
+		// Get connection activity
+		activity, err := h.storage.GetConnectionActivity(ctx, snapshot.ID)
+		if err != nil {
+			c.Logger().Errorf("failed to get connection activity: %v", err)
+		} else {
+			data.ActivityStats = activity
+		}
+
+		// Get long-running queries count
+		longRunning, err := h.storage.GetLongRunningQueries(ctx, snapshot.ID)
+		if err != nil {
+			c.Logger().Errorf("failed to get long-running queries: %v", err)
+		} else {
+			data.LongRunningCount = len(longRunning)
+		}
+
+		// Get blocked queries
+		blocked, err := h.storage.GetBlockedQueries(ctx, snapshot.ID)
+		if err != nil {
+			c.Logger().Errorf("failed to get blocked queries: %v", err)
+		} else {
+			data.BlockedCount = len(blocked)
+			// Keep top 5 blocked queries for display
+			if len(blocked) > 5 {
+				blocked = blocked[:5]
+			}
+			data.BlockedQueries = blocked
 		}
 	}
 

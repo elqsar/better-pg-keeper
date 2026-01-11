@@ -26,8 +26,12 @@ type AnalysisResult struct {
 	CacheStats   *CacheAnalysis   `json:"cache_stats"`
 	TableIssues  []TableIssue     `json:"table_issues"`
 	IndexIssues  []IndexIssue     `json:"index_issues"`
-	ErrorCount   int              `json:"error_count"`
-	Errors       []string         `json:"errors,omitempty"`
+	// Operational state analysis
+	ActivityStats    *ActivityAnalysis    `json:"activity_stats,omitempty"`
+	LockStats        *LockAnalysis        `json:"lock_stats,omitempty"`
+	TransactionStats *TransactionAnalysis `json:"transaction_stats,omitempty"`
+	ErrorCount       int                  `json:"error_count"`
+	Errors           []string             `json:"errors,omitempty"`
 }
 
 // SlowQuery represents a query that exceeds the execution time threshold.
@@ -111,6 +115,37 @@ const (
 	IndexIssueDuplicate = "duplicate"
 )
 
+// ActivityAnalysis contains connection activity analysis.
+type ActivityAnalysis struct {
+	ConnectionUtilization float64                    `json:"connection_utilization"` // percentage of max_connections used
+	TotalConnections      int                        `json:"total_connections"`
+	MaxConnections        int                        `json:"max_connections"`
+	ActiveCount           int                        `json:"active_count"`
+	IdleCount             int                        `json:"idle_count"`
+	IdleInTxCount         int                        `json:"idle_in_tx_count"`
+	WaitingCount          int                        `json:"waiting_count"`
+	LongRunningQueries    []models.LongRunningQuery  `json:"long_running_queries"`
+	IdleInTransaction     []models.IdleInTransaction `json:"idle_in_transaction"`
+}
+
+// LockAnalysis contains lock-related analysis.
+type LockAnalysis struct {
+	TotalLocks         int                    `json:"total_locks"`
+	GrantedLocks       int                    `json:"granted_locks"`
+	WaitingLocks       int                    `json:"waiting_locks"`
+	BlockedQueries     []models.BlockedQuery  `json:"blocked_queries"`
+	LockContentionHigh bool                   `json:"lock_contention_high"`
+}
+
+// TransactionAnalysis contains transaction rate analysis.
+type TransactionAnalysis struct {
+	XactCommit       int64 `json:"xact_commit"`
+	XactRollback     int64 `json:"xact_rollback"`
+	TempFiles        int64 `json:"temp_files"`
+	TempBytes        int64 `json:"temp_bytes"`
+	Deadlocks        int64 `json:"deadlocks"`
+}
+
 // Config holds analyzer configuration derived from thresholds.
 type Config struct {
 	SlowQueryMs          float64       // queries slower than this are flagged
@@ -162,6 +197,13 @@ type Storage interface {
 	GetTableStats(ctx context.Context, snapshotID int64) ([]models.TableStat, error)
 	GetIndexStats(ctx context.Context, snapshotID int64) ([]models.IndexStat, error)
 	GetBloatStats(ctx context.Context, snapshotID int64) ([]models.BloatInfo, error)
+	// Operational stats
+	GetConnectionActivity(ctx context.Context, snapshotID int64) (*models.ConnectionActivity, error)
+	GetLongRunningQueries(ctx context.Context, snapshotID int64) ([]models.LongRunningQuery, error)
+	GetIdleInTransaction(ctx context.Context, snapshotID int64) ([]models.IdleInTransaction, error)
+	GetLockStats(ctx context.Context, snapshotID int64) (*models.LockStats, error)
+	GetBlockedQueries(ctx context.Context, snapshotID int64) ([]models.BlockedQuery, error)
+	GetExtendedDatabaseStats(ctx context.Context, snapshotID int64) (*models.ExtendedDatabaseStats, error)
 }
 
 // Ensure sqlite.SQLiteStorage implements Storage interface.

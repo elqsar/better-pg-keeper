@@ -86,6 +86,31 @@ func (a *MainAnalyzer) Analyze(ctx context.Context, snapshotID int64) (*Analysis
 		result.IndexIssues = indexIssues
 	}
 
+	// Run operational state analysis
+	activityStats, err := a.analyzeActivity(ctx, snapshotID)
+	if err != nil {
+		result.Errors = append(result.Errors, fmt.Sprintf("activity analysis: %v", err))
+		result.ErrorCount++
+	} else {
+		result.ActivityStats = activityStats
+	}
+
+	lockStats, err := a.analyzeLocks(ctx, snapshotID)
+	if err != nil {
+		result.Errors = append(result.Errors, fmt.Sprintf("lock analysis: %v", err))
+		result.ErrorCount++
+	} else {
+		result.LockStats = lockStats
+	}
+
+	txStats, err := a.analyzeTransactions(ctx, snapshotID)
+	if err != nil {
+		result.Errors = append(result.Errors, fmt.Sprintf("transaction analysis: %v", err))
+		result.ErrorCount++
+	} else {
+		result.TransactionStats = txStats
+	}
+
 	return result, nil
 }
 
@@ -201,6 +226,95 @@ func (r *AnalysisResult) GetWarningCount() int {
 	}
 
 	return count
+}
+
+// analyzeActivity analyzes connection activity from a snapshot.
+func (a *MainAnalyzer) analyzeActivity(ctx context.Context, snapshotID int64) (*ActivityAnalysis, error) {
+	activity, err := a.storage.GetConnectionActivity(ctx, snapshotID)
+	if err != nil {
+		return nil, fmt.Errorf("getting connection activity: %w", err)
+	}
+	if activity == nil {
+		return nil, nil // No activity data collected
+	}
+
+	analysis := &ActivityAnalysis{
+		TotalConnections: activity.TotalConnections,
+		MaxConnections:   activity.MaxConnections,
+		ActiveCount:      activity.ActiveCount,
+		IdleCount:        activity.IdleCount,
+		IdleInTxCount:    activity.IdleInTxCount,
+		WaitingCount:     activity.WaitingCount,
+	}
+
+	// Calculate connection utilization
+	if activity.MaxConnections > 0 {
+		analysis.ConnectionUtilization = float64(activity.TotalConnections) / float64(activity.MaxConnections) * 100
+	}
+
+	// Get long-running queries
+	longRunning, err := a.storage.GetLongRunningQueries(ctx, snapshotID)
+	if err != nil {
+		return nil, fmt.Errorf("getting long running queries: %w", err)
+	}
+	analysis.LongRunningQueries = longRunning
+
+	// Get idle-in-transaction connections
+	idleInTx, err := a.storage.GetIdleInTransaction(ctx, snapshotID)
+	if err != nil {
+		return nil, fmt.Errorf("getting idle in transaction: %w", err)
+	}
+	analysis.IdleInTransaction = idleInTx
+
+	return analysis, nil
+}
+
+// analyzeLocks analyzes lock statistics from a snapshot.
+func (a *MainAnalyzer) analyzeLocks(ctx context.Context, snapshotID int64) (*LockAnalysis, error) {
+	stats, err := a.storage.GetLockStats(ctx, snapshotID)
+	if err != nil {
+		return nil, fmt.Errorf("getting lock stats: %w", err)
+	}
+	if stats == nil {
+		return nil, nil // No lock data collected
+	}
+
+	analysis := &LockAnalysis{
+		TotalLocks:   stats.TotalLocks,
+		GrantedLocks: stats.GrantedLocks,
+		WaitingLocks: stats.WaitingLocks,
+	}
+
+	// Get blocked queries
+	blocked, err := a.storage.GetBlockedQueries(ctx, snapshotID)
+	if err != nil {
+		return nil, fmt.Errorf("getting blocked queries: %w", err)
+	}
+	analysis.BlockedQueries = blocked
+
+	// Determine if lock contention is high (>5 waiting locks or any blocked queries)
+	analysis.LockContentionHigh = stats.WaitingLocks > 5 || len(blocked) > 0
+
+	return analysis, nil
+}
+
+// analyzeTransactions analyzes transaction statistics from a snapshot.
+func (a *MainAnalyzer) analyzeTransactions(ctx context.Context, snapshotID int64) (*TransactionAnalysis, error) {
+	stats, err := a.storage.GetExtendedDatabaseStats(ctx, snapshotID)
+	if err != nil {
+		return nil, fmt.Errorf("getting extended database stats: %w", err)
+	}
+	if stats == nil {
+		return nil, nil // No transaction data collected
+	}
+
+	return &TransactionAnalysis{
+		XactCommit:   stats.XactCommit,
+		XactRollback: stats.XactRollback,
+		TempFiles:    stats.TempFiles,
+		TempBytes:    stats.TempBytes,
+		Deadlocks:    stats.Deadlocks,
+	}, nil
 }
 
 // Ensure MainAnalyzer implements Analyzer interface.

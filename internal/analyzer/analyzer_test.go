@@ -83,6 +83,31 @@ func (m *mockStorage) GetBloatStats(ctx context.Context, snapshotID int64) ([]mo
 	return m.bloatStats[snapshotID], nil
 }
 
+// Operational stats methods
+func (m *mockStorage) GetConnectionActivity(ctx context.Context, snapshotID int64) (*models.ConnectionActivity, error) {
+	return nil, nil
+}
+
+func (m *mockStorage) GetLongRunningQueries(ctx context.Context, snapshotID int64) ([]models.LongRunningQuery, error) {
+	return nil, nil
+}
+
+func (m *mockStorage) GetIdleInTransaction(ctx context.Context, snapshotID int64) ([]models.IdleInTransaction, error) {
+	return nil, nil
+}
+
+func (m *mockStorage) GetLockStats(ctx context.Context, snapshotID int64) (*models.LockStats, error) {
+	return nil, nil
+}
+
+func (m *mockStorage) GetBlockedQueries(ctx context.Context, snapshotID int64) ([]models.BlockedQuery, error) {
+	return nil, nil
+}
+
+func (m *mockStorage) GetExtendedDatabaseStats(ctx context.Context, snapshotID int64) (*models.ExtendedDatabaseStats, error) {
+	return nil, nil
+}
+
 func TestSlowQueryAnalyzer_Analyze(t *testing.T) {
 	ctx := context.Background()
 	storage := newMockStorage()

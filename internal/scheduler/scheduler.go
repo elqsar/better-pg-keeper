@@ -212,6 +212,7 @@ func (s *Scheduler) IsRunning() bool {
 }
 
 // TriggerSnapshot manually triggers a collection and analysis cycle.
+// Unlike scheduled collection, this runs ALL collectors regardless of their intervals.
 // Returns an error if a manual trigger is already in progress.
 func (s *Scheduler) TriggerSnapshot(ctx context.Context) (*TriggerResult, error) {
 	if !s.manualMu.TryLock() {
@@ -225,9 +226,9 @@ func (s *Scheduler) TriggerSnapshot(ctx context.Context) (*TriggerResult, error)
 		StartedAt: time.Now(),
 	}
 
-	// Run collection
+	// Run collection with all collectors (forced, ignoring intervals)
 	collStart := time.Now()
-	collResult, err := s.runCollection(ctx)
+	collResult, err := s.coordinator.CollectAll(ctx)
 	collDuration := time.Since(collStart)
 	result.CollectionResult = collResult
 

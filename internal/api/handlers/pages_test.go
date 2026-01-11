@@ -62,6 +62,19 @@ func (m *mockPageStorage) GetExplainPlan(ctx context.Context, queryID int64) (*m
 	return m.explainPlan, m.err
 }
 
+// Operational stats methods
+func (m *mockPageStorage) GetConnectionActivity(ctx context.Context, snapshotID int64) (*models.ConnectionActivity, error) {
+	return nil, m.err
+}
+
+func (m *mockPageStorage) GetLongRunningQueries(ctx context.Context, snapshotID int64) ([]models.LongRunningQuery, error) {
+	return nil, m.err
+}
+
+func (m *mockPageStorage) GetBlockedQueries(ctx context.Context, snapshotID int64) ([]models.BlockedQuery, error) {
+	return nil, m.err
+}
+
 // mockRenderer implements echo.Renderer for testing.
 type mockRenderer struct {
 	lastTemplate string

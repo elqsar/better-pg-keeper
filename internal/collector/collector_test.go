@@ -96,6 +96,31 @@ func (m *mockPGClient) GetStatsResetTime(ctx context.Context) (*time.Time, error
 	return m.statsResetTime, nil
 }
 
+// Operational stats methods
+func (m *mockPGClient) GetConnectionActivity(ctx context.Context) (*models.ConnectionActivity, error) {
+	return nil, nil
+}
+
+func (m *mockPGClient) GetLongRunningQueries(ctx context.Context, thresholdSeconds float64) ([]models.LongRunningQuery, error) {
+	return nil, nil
+}
+
+func (m *mockPGClient) GetIdleInTransaction(ctx context.Context, thresholdSeconds float64) ([]models.IdleInTransaction, error) {
+	return nil, nil
+}
+
+func (m *mockPGClient) GetLockStats(ctx context.Context) (*models.LockStats, error) {
+	return nil, nil
+}
+
+func (m *mockPGClient) GetBlockedQueries(ctx context.Context) ([]models.BlockedQuery, error) {
+	return nil, nil
+}
+
+func (m *mockPGClient) GetExtendedDatabaseStats(ctx context.Context) (*models.ExtendedDatabaseStats, error) {
+	return nil, nil
+}
+
 // setupTestStorage creates a temporary SQLite storage for testing.
 func setupTestStorage(t *testing.T) sqlite.Storage {
 	t.Helper()

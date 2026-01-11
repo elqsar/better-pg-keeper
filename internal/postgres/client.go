@@ -22,6 +22,14 @@ type Client interface {
 	GetStatIndexes(ctx context.Context) ([]models.IndexStat, error)
 	GetDatabaseStats(ctx context.Context) (*models.DatabaseStats, error)
 
+	// Operational stats (pg_stat_activity, pg_locks)
+	GetConnectionActivity(ctx context.Context) (*models.ConnectionActivity, error)
+	GetLongRunningQueries(ctx context.Context, thresholdSeconds float64) ([]models.LongRunningQuery, error)
+	GetIdleInTransaction(ctx context.Context, thresholdSeconds float64) ([]models.IdleInTransaction, error)
+	GetLockStats(ctx context.Context) (*models.LockStats, error)
+	GetBlockedQueries(ctx context.Context) ([]models.BlockedQuery, error)
+	GetExtendedDatabaseStats(ctx context.Context) (*models.ExtendedDatabaseStats, error)
+
 	// Schema analysis
 	GetTableBloat(ctx context.Context) ([]models.BloatInfo, error)
 	GetIndexDetails(ctx context.Context) ([]models.IndexDetail, error)

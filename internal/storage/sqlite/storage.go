@@ -49,6 +49,30 @@ type Storage interface {
 	SaveBloatStats(ctx context.Context, snapshotID int64, stats []models.BloatInfo) error
 	GetBloatStats(ctx context.Context, snapshotID int64) ([]models.BloatInfo, error)
 
+	// Connection activity operations
+	SaveConnectionActivity(ctx context.Context, snapshotID int64, activity *models.ConnectionActivity) error
+	GetConnectionActivity(ctx context.Context, snapshotID int64) (*models.ConnectionActivity, error)
+
+	// Long running queries operations
+	SaveLongRunningQueries(ctx context.Context, snapshotID int64, queries []models.LongRunningQuery) error
+	GetLongRunningQueries(ctx context.Context, snapshotID int64) ([]models.LongRunningQuery, error)
+
+	// Idle in transaction operations
+	SaveIdleInTransaction(ctx context.Context, snapshotID int64, idle []models.IdleInTransaction) error
+	GetIdleInTransaction(ctx context.Context, snapshotID int64) ([]models.IdleInTransaction, error)
+
+	// Lock stats operations
+	SaveLockStats(ctx context.Context, snapshotID int64, stats *models.LockStats) error
+	GetLockStats(ctx context.Context, snapshotID int64) (*models.LockStats, error)
+
+	// Blocked queries operations
+	SaveBlockedQueries(ctx context.Context, snapshotID int64, queries []models.BlockedQuery) error
+	GetBlockedQueries(ctx context.Context, snapshotID int64) ([]models.BlockedQuery, error)
+
+	// Extended database stats operations
+	SaveExtendedDatabaseStats(ctx context.Context, snapshotID int64, stats *models.ExtendedDatabaseStats) error
+	GetExtendedDatabaseStats(ctx context.Context, snapshotID int64) (*models.ExtendedDatabaseStats, error)
+
 	// Suggestion operations
 	UpsertSuggestion(ctx context.Context, sug *models.Suggestion) error
 	GetSuggestionsByStatus(ctx context.Context, instanceID int64, status string) ([]models.Suggestion, error)
@@ -65,12 +89,56 @@ type Storage interface {
 }
 
 // SQLiteStorage implements Storage using SQLite.
+// Uses separate connections for reads and writes to allow concurrent access in WAL mode.
 type SQLiteStorage struct {
-	db *sql.DB
+	writeDB *sql.DB // Single connection for writes
+	readDB  *sql.DB // Multiple connections for concurrent reads
 }
 
 // NewStorage creates a new SQLite storage instance.
 func NewStorage(dbPath string) (*SQLiteStorage, error) {
+	// Handle in-memory database specially
+	// Each :memory: connection creates a separate database, so we need shared cache
+	// or use the same connection for both read and write
+	isMemory := dbPath == ":memory:" || dbPath == ""
+
+	if isMemory {
+		return newMemoryStorage()
+	}
+
+	return newFileStorage(dbPath)
+}
+
+// newMemoryStorage creates an in-memory storage instance.
+// Uses a single connection since :memory: databases are not shared between connections.
+func newMemoryStorage() (*SQLiteStorage, error) {
+	db, err := sql.Open("sqlite", ":memory:?_pragma=foreign_keys(ON)")
+	if err != nil {
+		return nil, fmt.Errorf("opening memory database: %w", err)
+	}
+
+	// Single connection for in-memory database
+	db.SetMaxOpenConns(1)
+	db.SetMaxIdleConns(1)
+	db.SetConnMaxLifetime(0)
+
+	if err := db.Ping(); err != nil {
+		db.Close()
+		return nil, fmt.Errorf("pinging memory database: %w", err)
+	}
+
+	ctx := context.Background()
+	if err := Migrate(ctx, db); err != nil {
+		db.Close()
+		return nil, fmt.Errorf("running migrations: %w", err)
+	}
+
+	// Use same connection for both read and write in memory mode
+	return &SQLiteStorage{writeDB: db, readDB: db}, nil
+}
+
+// newFileStorage creates a file-based storage instance with separate read/write connections.
+func newFileStorage(dbPath string) (*SQLiteStorage, error) {
 	// Ensure directory exists
 	dir := filepath.Dir(dbPath)
 	if dir != "" && dir != "." {
@@ -79,41 +147,85 @@ func NewStorage(dbPath string) (*SQLiteStorage, error) {
 		}
 	}
 
-	// Open database with connection pooling settings
-	db, err := sql.Open("sqlite", dbPath+"?_pragma=busy_timeout(5000)&_pragma=journal_mode(WAL)&_pragma=foreign_keys(ON)")
+	// Open write connection (single connection for serialized writes)
+	writeDB, err := sql.Open("sqlite", dbPath+"?_pragma=busy_timeout(5000)&_pragma=journal_mode(WAL)&_pragma=foreign_keys(ON)")
 	if err != nil {
-		return nil, fmt.Errorf("opening database: %w", err)
+		return nil, fmt.Errorf("opening write database: %w", err)
 	}
 
-	// Configure connection pool
-	db.SetMaxOpenConns(1) // SQLite performs best with a single writer
-	db.SetMaxIdleConns(1)
-	db.SetConnMaxLifetime(0) // Connections don't expire
+	// Configure write connection pool - single writer
+	writeDB.SetMaxOpenConns(1)
+	writeDB.SetMaxIdleConns(1)
+	writeDB.SetConnMaxLifetime(0)
 
-	// Test connection
-	if err := db.Ping(); err != nil {
-		db.Close()
-		return nil, fmt.Errorf("pinging database: %w", err)
+	// Test write connection
+	if err := writeDB.Ping(); err != nil {
+		writeDB.Close()
+		return nil, fmt.Errorf("pinging write database: %w", err)
 	}
 
-	// Run migrations
+	// Run migrations on write connection
 	ctx := context.Background()
-	if err := Migrate(ctx, db); err != nil {
-		db.Close()
+	if err := Migrate(ctx, writeDB); err != nil {
+		writeDB.Close()
 		return nil, fmt.Errorf("running migrations: %w", err)
 	}
 
-	return &SQLiteStorage{db: db}, nil
+	// Open read connection pool (multiple connections for concurrent reads)
+	// WAL mode allows concurrent readers with a single writer
+	readDB, err := sql.Open("sqlite", dbPath+"?_pragma=busy_timeout(5000)&_pragma=journal_mode(WAL)&_pragma=foreign_keys(ON)&mode=ro")
+	if err != nil {
+		writeDB.Close()
+		return nil, fmt.Errorf("opening read database: %w", err)
+	}
+
+	// Configure read connection pool - allow concurrent readers
+	readDB.SetMaxOpenConns(10)
+	readDB.SetMaxIdleConns(5)
+	readDB.SetConnMaxLifetime(0)
+
+	// Test read connection
+	if err := readDB.Ping(); err != nil {
+		writeDB.Close()
+		readDB.Close()
+		return nil, fmt.Errorf("pinging read database: %w", err)
+	}
+
+	return &SQLiteStorage{writeDB: writeDB, readDB: readDB}, nil
 }
 
-// Close closes the database connection.
+// Close closes the database connections.
 func (s *SQLiteStorage) Close() error {
-	return s.db.Close()
+	var errs []error
+
+	// If readDB and writeDB are the same (in-memory mode), only close once
+	if s.readDB == s.writeDB {
+		if err := s.writeDB.Close(); err != nil {
+			errs = append(errs, fmt.Errorf("closing db: %w", err))
+		}
+	} else {
+		if err := s.readDB.Close(); err != nil {
+			errs = append(errs, fmt.Errorf("closing read db: %w", err))
+		}
+		if err := s.writeDB.Close(); err != nil {
+			errs = append(errs, fmt.Errorf("closing write db: %w", err))
+		}
+	}
+
+	if len(errs) > 0 {
+		return fmt.Errorf("close errors: %v", errs)
+	}
+	return nil
 }
 
-// DB returns the underlying database connection for advanced use cases.
+// DB returns the write database connection for advanced use cases.
 func (s *SQLiteStorage) DB() *sql.DB {
-	return s.db
+	return s.writeDB
+}
+
+// ReadDB returns the read database connection for advanced use cases.
+func (s *SQLiteStorage) ReadDB() *sql.DB {
+	return s.readDB
 }
 
 // =============================================================================
@@ -123,7 +235,7 @@ func (s *SQLiteStorage) DB() *sql.DB {
 // GetInstance retrieves an instance by ID.
 func (s *SQLiteStorage) GetInstance(ctx context.Context, id int64) (*models.Instance, error) {
 	var inst models.Instance
-	err := s.db.QueryRowContext(ctx, `
+	err := s.readDB.QueryRowContext(ctx, `
 		SELECT id, name, host, port, database, created_at
 		FROM instances WHERE id = ?
 	`, id).Scan(&inst.ID, &inst.Name, &inst.Host, &inst.Port, &inst.Database, &inst.CreatedAt)
@@ -141,7 +253,7 @@ func (s *SQLiteStorage) GetInstance(ctx context.Context, id int64) (*models.Inst
 // GetInstanceByName retrieves an instance by name.
 func (s *SQLiteStorage) GetInstanceByName(ctx context.Context, name string) (*models.Instance, error) {
 	var inst models.Instance
-	err := s.db.QueryRowContext(ctx, `
+	err := s.readDB.QueryRowContext(ctx, `
 		SELECT id, name, host, port, database, created_at
 		FROM instances WHERE name = ?
 	`, name).Scan(&inst.ID, &inst.Name, &inst.Host, &inst.Port, &inst.Database, &inst.CreatedAt)
@@ -158,7 +270,7 @@ func (s *SQLiteStorage) GetInstanceByName(ctx context.Context, name string) (*mo
 
 // CreateInstance creates a new instance and returns its ID.
 func (s *SQLiteStorage) CreateInstance(ctx context.Context, inst *models.Instance) (int64, error) {
-	result, err := s.db.ExecContext(ctx, `
+	result, err := s.writeDB.ExecContext(ctx, `
 		INSERT INTO instances (name, host, port, database)
 		VALUES (?, ?, ?, ?)
 	`, inst.Name, inst.Host, inst.Port, inst.Database)
@@ -173,7 +285,7 @@ func (s *SQLiteStorage) CreateInstance(ctx context.Context, inst *models.Instanc
 // GetOrCreateInstance gets an existing instance by host/port/database or creates a new one.
 func (s *SQLiteStorage) GetOrCreateInstance(ctx context.Context, inst *models.Instance) (int64, error) {
 	var id int64
-	err := s.db.QueryRowContext(ctx, `
+	err := s.readDB.QueryRowContext(ctx, `
 		SELECT id FROM instances
 		WHERE host = ? AND port = ? AND database = ?
 	`, inst.Host, inst.Port, inst.Database).Scan(&id)
@@ -190,7 +302,7 @@ func (s *SQLiteStorage) GetOrCreateInstance(ctx context.Context, inst *models.In
 
 // ListInstances returns all instances.
 func (s *SQLiteStorage) ListInstances(ctx context.Context) ([]models.Instance, error) {
-	rows, err := s.db.QueryContext(ctx, `
+	rows, err := s.readDB.QueryContext(ctx, `
 		SELECT id, name, host, port, database, created_at
 		FROM instances ORDER BY name
 	`)
@@ -217,7 +329,7 @@ func (s *SQLiteStorage) ListInstances(ctx context.Context) ([]models.Instance, e
 
 // CreateSnapshot creates a new snapshot and returns its ID.
 func (s *SQLiteStorage) CreateSnapshot(ctx context.Context, snap *models.Snapshot) (int64, error) {
-	result, err := s.db.ExecContext(ctx, `
+	result, err := s.writeDB.ExecContext(ctx, `
 		INSERT INTO snapshots (instance_id, captured_at, pg_version, stats_reset, cache_hit_ratio)
 		VALUES (?, ?, ?, ?, ?)
 	`, snap.InstanceID, snap.CapturedAt, snap.PGVersion, snap.StatsReset, snap.CacheHitRatio)
@@ -232,7 +344,7 @@ func (s *SQLiteStorage) CreateSnapshot(ctx context.Context, snap *models.Snapsho
 // GetSnapshotByID retrieves a snapshot by ID.
 func (s *SQLiteStorage) GetSnapshotByID(ctx context.Context, id int64) (*models.Snapshot, error) {
 	var snap models.Snapshot
-	err := s.db.QueryRowContext(ctx, `
+	err := s.readDB.QueryRowContext(ctx, `
 		SELECT id, instance_id, captured_at, pg_version, stats_reset, cache_hit_ratio, created_at
 		FROM snapshots WHERE id = ?
 	`, id).Scan(&snap.ID, &snap.InstanceID, &snap.CapturedAt, &snap.PGVersion, &snap.StatsReset, &snap.CacheHitRatio, &snap.CreatedAt)
@@ -250,7 +362,7 @@ func (s *SQLiteStorage) GetSnapshotByID(ctx context.Context, id int64) (*models.
 // GetLatestSnapshot retrieves the most recent snapshot for an instance.
 func (s *SQLiteStorage) GetLatestSnapshot(ctx context.Context, instanceID int64) (*models.Snapshot, error) {
 	var snap models.Snapshot
-	err := s.db.QueryRowContext(ctx, `
+	err := s.readDB.QueryRowContext(ctx, `
 		SELECT id, instance_id, captured_at, pg_version, stats_reset, cache_hit_ratio, created_at
 		FROM snapshots
 		WHERE instance_id = ?
@@ -274,7 +386,7 @@ func (s *SQLiteStorage) ListSnapshots(ctx context.Context, instanceID int64, lim
 		limit = 100
 	}
 
-	rows, err := s.db.QueryContext(ctx, `
+	rows, err := s.readDB.QueryContext(ctx, `
 		SELECT id, instance_id, captured_at, pg_version, stats_reset, cache_hit_ratio, created_at
 		FROM snapshots
 		WHERE instance_id = ?
@@ -300,7 +412,7 @@ func (s *SQLiteStorage) ListSnapshots(ctx context.Context, instanceID int64, lim
 
 // UpdateSnapshotCacheHitRatio updates the cache hit ratio for a snapshot.
 func (s *SQLiteStorage) UpdateSnapshotCacheHitRatio(ctx context.Context, snapshotID int64, ratio float64) error {
-	_, err := s.db.ExecContext(ctx, `
+	_, err := s.writeDB.ExecContext(ctx, `
 		UPDATE snapshots SET cache_hit_ratio = ? WHERE id = ?
 	`, ratio, snapshotID)
 
@@ -321,7 +433,7 @@ func (s *SQLiteStorage) SaveQueryStats(ctx context.Context, snapshotID int64, st
 		return nil
 	}
 
-	tx, err := s.db.BeginTx(ctx, nil)
+	tx, err := s.writeDB.BeginTx(ctx, nil)
 	if err != nil {
 		return fmt.Errorf("beginning transaction: %w", err)
 	}
@@ -355,7 +467,7 @@ func (s *SQLiteStorage) SaveQueryStats(ctx context.Context, snapshotID int64, st
 
 // GetQueryStats retrieves query statistics for a snapshot.
 func (s *SQLiteStorage) GetQueryStats(ctx context.Context, snapshotID int64) ([]models.QueryStat, error) {
-	rows, err := s.db.QueryContext(ctx, `
+	rows, err := s.readDB.QueryContext(ctx, `
 		SELECT id, snapshot_id, queryid, query, calls, total_exec_time, mean_exec_time,
 			min_exec_time, max_exec_time, rows, shared_blks_hit, shared_blks_read,
 			plans, total_plan_time
@@ -388,7 +500,7 @@ func (s *SQLiteStorage) GetQueryStats(ctx context.Context, snapshotID int64) ([]
 // GetQueryStatsDelta calculates the difference in query statistics between two snapshots.
 // If stats were reset (indicated by negative deltas), uses current values as-is.
 func (s *SQLiteStorage) GetQueryStatsDelta(ctx context.Context, fromSnapshotID, toSnapshotID int64) ([]models.QueryStatDelta, error) {
-	rows, err := s.db.QueryContext(ctx, `
+	rows, err := s.readDB.QueryContext(ctx, `
 		SELECT
 			t.queryid,
 			t.query,
@@ -451,7 +563,7 @@ func (s *SQLiteStorage) SaveTableStats(ctx context.Context, snapshotID int64, st
 		return nil
 	}
 
-	tx, err := s.db.BeginTx(ctx, nil)
+	tx, err := s.writeDB.BeginTx(ctx, nil)
 	if err != nil {
 		return fmt.Errorf("beginning transaction: %w", err)
 	}
@@ -486,7 +598,7 @@ func (s *SQLiteStorage) SaveTableStats(ctx context.Context, snapshotID int64, st
 
 // GetTableStats retrieves table statistics for a snapshot.
 func (s *SQLiteStorage) GetTableStats(ctx context.Context, snapshotID int64) ([]models.TableStat, error) {
-	rows, err := s.db.QueryContext(ctx, `
+	rows, err := s.readDB.QueryContext(ctx, `
 		SELECT id, snapshot_id, schemaname, relname, seq_scan, seq_tup_read, idx_scan,
 			idx_tup_fetch, n_live_tup, n_dead_tup, last_vacuum, last_autovacuum,
 			last_analyze, table_size, index_size
@@ -527,7 +639,7 @@ func (s *SQLiteStorage) SaveIndexStats(ctx context.Context, snapshotID int64, st
 		return nil
 	}
 
-	tx, err := s.db.BeginTx(ctx, nil)
+	tx, err := s.writeDB.BeginTx(ctx, nil)
 	if err != nil {
 		return fmt.Errorf("beginning transaction: %w", err)
 	}
@@ -560,7 +672,7 @@ func (s *SQLiteStorage) SaveIndexStats(ctx context.Context, snapshotID int64, st
 
 // GetIndexStats retrieves index statistics for a snapshot.
 func (s *SQLiteStorage) GetIndexStats(ctx context.Context, snapshotID int64) ([]models.IndexStat, error) {
-	rows, err := s.db.QueryContext(ctx, `
+	rows, err := s.readDB.QueryContext(ctx, `
 		SELECT id, snapshot_id, schemaname, relname, indexrelname, idx_scan,
 			idx_tup_read, idx_tup_fetch, index_size, is_unique, is_primary
 		FROM index_stats
@@ -599,7 +711,7 @@ func (s *SQLiteStorage) SaveBloatStats(ctx context.Context, snapshotID int64, st
 		return nil
 	}
 
-	tx, err := s.db.BeginTx(ctx, nil)
+	tx, err := s.writeDB.BeginTx(ctx, nil)
 	if err != nil {
 		return fmt.Errorf("beginning transaction: %w", err)
 	}
@@ -630,7 +742,7 @@ func (s *SQLiteStorage) SaveBloatStats(ctx context.Context, snapshotID int64, st
 
 // GetBloatStats retrieves bloat statistics for a snapshot.
 func (s *SQLiteStorage) GetBloatStats(ctx context.Context, snapshotID int64) ([]models.BloatInfo, error) {
-	rows, err := s.db.QueryContext(ctx, `
+	rows, err := s.readDB.QueryContext(ctx, `
 		SELECT schemaname, relname, n_dead_tup, n_live_tup, bloat_percent
 		FROM bloat_stats
 		WHERE snapshot_id = ?
@@ -658,6 +770,368 @@ func (s *SQLiteStorage) GetBloatStats(ctx context.Context, snapshotID int64) ([]
 }
 
 // =============================================================================
+// Connection Activity Operations
+// =============================================================================
+
+// SaveConnectionActivity saves connection activity for a snapshot.
+func (s *SQLiteStorage) SaveConnectionActivity(ctx context.Context, snapshotID int64, activity *models.ConnectionActivity) error {
+	if activity == nil {
+		return nil
+	}
+
+	_, err := s.writeDB.ExecContext(ctx, `
+		INSERT INTO connection_activity (
+			snapshot_id, active_count, idle_count, idle_in_tx_count, idle_in_tx_aborted,
+			waiting_count, total_connections, max_connections
+		) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+	`, snapshotID, activity.ActiveCount, activity.IdleCount, activity.IdleInTxCount,
+		activity.IdleInTxAborted, activity.WaitingCount, activity.TotalConnections, activity.MaxConnections)
+
+	if err != nil {
+		return fmt.Errorf("saving connection activity: %w", err)
+	}
+
+	return nil
+}
+
+// GetConnectionActivity retrieves connection activity for a snapshot.
+func (s *SQLiteStorage) GetConnectionActivity(ctx context.Context, snapshotID int64) (*models.ConnectionActivity, error) {
+	var activity models.ConnectionActivity
+	err := s.readDB.QueryRowContext(ctx, `
+		SELECT id, snapshot_id, active_count, idle_count, idle_in_tx_count, idle_in_tx_aborted,
+			waiting_count, total_connections, max_connections
+		FROM connection_activity
+		WHERE snapshot_id = ?
+	`, snapshotID).Scan(
+		&activity.ID, &activity.SnapshotID, &activity.ActiveCount, &activity.IdleCount,
+		&activity.IdleInTxCount, &activity.IdleInTxAborted, &activity.WaitingCount,
+		&activity.TotalConnections, &activity.MaxConnections,
+	)
+
+	if err == sql.ErrNoRows {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, fmt.Errorf("getting connection activity: %w", err)
+	}
+
+	return &activity, nil
+}
+
+// =============================================================================
+// Long Running Queries Operations
+// =============================================================================
+
+// SaveLongRunningQueries saves long running queries for a snapshot.
+func (s *SQLiteStorage) SaveLongRunningQueries(ctx context.Context, snapshotID int64, queries []models.LongRunningQuery) error {
+	if len(queries) == 0 {
+		return nil
+	}
+
+	tx, err := s.writeDB.BeginTx(ctx, nil)
+	if err != nil {
+		return fmt.Errorf("beginning transaction: %w", err)
+	}
+	defer tx.Rollback()
+
+	stmt, err := tx.PrepareContext(ctx, `
+		INSERT INTO long_running_queries (
+			snapshot_id, pid, usename, datname, query, state,
+			wait_event_type, wait_event, query_start, duration_seconds
+		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+	`)
+	if err != nil {
+		return fmt.Errorf("preparing statement: %w", err)
+	}
+	defer stmt.Close()
+
+	for _, q := range queries {
+		_, err := stmt.ExecContext(ctx,
+			snapshotID, q.PID, q.Username, q.DatabaseName, q.Query, q.State,
+			q.WaitEventType, q.WaitEvent, q.QueryStart, q.DurationSeconds,
+		)
+		if err != nil {
+			return fmt.Errorf("inserting long running query: %w", err)
+		}
+	}
+
+	return tx.Commit()
+}
+
+// GetLongRunningQueries retrieves long running queries for a snapshot.
+func (s *SQLiteStorage) GetLongRunningQueries(ctx context.Context, snapshotID int64) ([]models.LongRunningQuery, error) {
+	rows, err := s.readDB.QueryContext(ctx, `
+		SELECT id, snapshot_id, pid, usename, datname, query, state,
+			wait_event_type, wait_event, query_start, duration_seconds
+		FROM long_running_queries
+		WHERE snapshot_id = ?
+		ORDER BY duration_seconds DESC
+	`, snapshotID)
+	if err != nil {
+		return nil, fmt.Errorf("querying long running queries: %w", err)
+	}
+	defer rows.Close()
+
+	var queries []models.LongRunningQuery
+	for rows.Next() {
+		var q models.LongRunningQuery
+		err := rows.Scan(
+			&q.ID, &q.SnapshotID, &q.PID, &q.Username, &q.DatabaseName,
+			&q.Query, &q.State, &q.WaitEventType, &q.WaitEvent,
+			&q.QueryStart, &q.DurationSeconds,
+		)
+		if err != nil {
+			return nil, fmt.Errorf("scanning long running query: %w", err)
+		}
+		queries = append(queries, q)
+	}
+
+	return queries, rows.Err()
+}
+
+// =============================================================================
+// Idle In Transaction Operations
+// =============================================================================
+
+// SaveIdleInTransaction saves idle in transaction connections for a snapshot.
+func (s *SQLiteStorage) SaveIdleInTransaction(ctx context.Context, snapshotID int64, idle []models.IdleInTransaction) error {
+	if len(idle) == 0 {
+		return nil
+	}
+
+	tx, err := s.writeDB.BeginTx(ctx, nil)
+	if err != nil {
+		return fmt.Errorf("beginning transaction: %w", err)
+	}
+	defer tx.Rollback()
+
+	stmt, err := tx.PrepareContext(ctx, `
+		INSERT INTO idle_in_transaction (
+			snapshot_id, pid, usename, datname, state,
+			xact_start, duration_seconds, query
+		) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+	`)
+	if err != nil {
+		return fmt.Errorf("preparing statement: %w", err)
+	}
+	defer stmt.Close()
+
+	for _, i := range idle {
+		_, err := stmt.ExecContext(ctx,
+			snapshotID, i.PID, i.Username, i.DatabaseName, i.State,
+			i.XactStart, i.DurationSeconds, i.Query,
+		)
+		if err != nil {
+			return fmt.Errorf("inserting idle in transaction: %w", err)
+		}
+	}
+
+	return tx.Commit()
+}
+
+// GetIdleInTransaction retrieves idle in transaction connections for a snapshot.
+func (s *SQLiteStorage) GetIdleInTransaction(ctx context.Context, snapshotID int64) ([]models.IdleInTransaction, error) {
+	rows, err := s.readDB.QueryContext(ctx, `
+		SELECT id, snapshot_id, pid, usename, datname, state,
+			xact_start, duration_seconds, query
+		FROM idle_in_transaction
+		WHERE snapshot_id = ?
+		ORDER BY duration_seconds DESC
+	`, snapshotID)
+	if err != nil {
+		return nil, fmt.Errorf("querying idle in transaction: %w", err)
+	}
+	defer rows.Close()
+
+	var idle []models.IdleInTransaction
+	for rows.Next() {
+		var i models.IdleInTransaction
+		err := rows.Scan(
+			&i.ID, &i.SnapshotID, &i.PID, &i.Username, &i.DatabaseName,
+			&i.State, &i.XactStart, &i.DurationSeconds, &i.Query,
+		)
+		if err != nil {
+			return nil, fmt.Errorf("scanning idle in transaction: %w", err)
+		}
+		idle = append(idle, i)
+	}
+
+	return idle, rows.Err()
+}
+
+// =============================================================================
+// Lock Stats Operations
+// =============================================================================
+
+// SaveLockStats saves lock statistics for a snapshot.
+func (s *SQLiteStorage) SaveLockStats(ctx context.Context, snapshotID int64, stats *models.LockStats) error {
+	if stats == nil {
+		return nil
+	}
+
+	_, err := s.writeDB.ExecContext(ctx, `
+		INSERT INTO lock_stats (
+			snapshot_id, total_locks, granted_locks, waiting_locks,
+			access_share_locks, row_exclusive_locks, exclusive_locks
+		) VALUES (?, ?, ?, ?, ?, ?, ?)
+	`, snapshotID, stats.TotalLocks, stats.GrantedLocks, stats.WaitingLocks,
+		stats.AccessShareLocks, stats.RowExclusiveLocks, stats.ExclusiveLocks)
+
+	if err != nil {
+		return fmt.Errorf("saving lock stats: %w", err)
+	}
+
+	return nil
+}
+
+// GetLockStats retrieves lock statistics for a snapshot.
+func (s *SQLiteStorage) GetLockStats(ctx context.Context, snapshotID int64) (*models.LockStats, error) {
+	var stats models.LockStats
+	err := s.readDB.QueryRowContext(ctx, `
+		SELECT id, snapshot_id, total_locks, granted_locks, waiting_locks,
+			access_share_locks, row_exclusive_locks, exclusive_locks
+		FROM lock_stats
+		WHERE snapshot_id = ?
+	`, snapshotID).Scan(
+		&stats.ID, &stats.SnapshotID, &stats.TotalLocks, &stats.GrantedLocks,
+		&stats.WaitingLocks, &stats.AccessShareLocks, &stats.RowExclusiveLocks,
+		&stats.ExclusiveLocks,
+	)
+
+	if err == sql.ErrNoRows {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, fmt.Errorf("getting lock stats: %w", err)
+	}
+
+	return &stats, nil
+}
+
+// =============================================================================
+// Blocked Queries Operations
+// =============================================================================
+
+// SaveBlockedQueries saves blocked queries for a snapshot.
+func (s *SQLiteStorage) SaveBlockedQueries(ctx context.Context, snapshotID int64, queries []models.BlockedQuery) error {
+	if len(queries) == 0 {
+		return nil
+	}
+
+	tx, err := s.writeDB.BeginTx(ctx, nil)
+	if err != nil {
+		return fmt.Errorf("beginning transaction: %w", err)
+	}
+	defer tx.Rollback()
+
+	stmt, err := tx.PrepareContext(ctx, `
+		INSERT INTO blocked_queries (
+			snapshot_id, blocked_pid, blocked_user, blocked_query, blocked_start,
+			wait_duration_seconds, blocking_pid, blocking_user, blocking_query,
+			lock_type, lock_mode, relation
+		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+	`)
+	if err != nil {
+		return fmt.Errorf("preparing statement: %w", err)
+	}
+	defer stmt.Close()
+
+	for _, q := range queries {
+		_, err := stmt.ExecContext(ctx,
+			snapshotID, q.BlockedPID, q.BlockedUser, q.BlockedQuery, q.BlockedStart,
+			q.WaitDuration, q.BlockingPID, q.BlockingUser, q.BlockingQuery,
+			q.LockType, q.LockMode, q.Relation,
+		)
+		if err != nil {
+			return fmt.Errorf("inserting blocked query: %w", err)
+		}
+	}
+
+	return tx.Commit()
+}
+
+// GetBlockedQueries retrieves blocked queries for a snapshot.
+func (s *SQLiteStorage) GetBlockedQueries(ctx context.Context, snapshotID int64) ([]models.BlockedQuery, error) {
+	rows, err := s.readDB.QueryContext(ctx, `
+		SELECT id, snapshot_id, blocked_pid, blocked_user, blocked_query, blocked_start,
+			wait_duration_seconds, blocking_pid, blocking_user, blocking_query,
+			lock_type, lock_mode, relation
+		FROM blocked_queries
+		WHERE snapshot_id = ?
+		ORDER BY wait_duration_seconds DESC
+	`, snapshotID)
+	if err != nil {
+		return nil, fmt.Errorf("querying blocked queries: %w", err)
+	}
+	defer rows.Close()
+
+	var queries []models.BlockedQuery
+	for rows.Next() {
+		var q models.BlockedQuery
+		err := rows.Scan(
+			&q.ID, &q.SnapshotID, &q.BlockedPID, &q.BlockedUser, &q.BlockedQuery,
+			&q.BlockedStart, &q.WaitDuration, &q.BlockingPID, &q.BlockingUser,
+			&q.BlockingQuery, &q.LockType, &q.LockMode, &q.Relation,
+		)
+		if err != nil {
+			return nil, fmt.Errorf("scanning blocked query: %w", err)
+		}
+		queries = append(queries, q)
+	}
+
+	return queries, rows.Err()
+}
+
+// =============================================================================
+// Extended Database Stats Operations
+// =============================================================================
+
+// SaveExtendedDatabaseStats saves extended database statistics for a snapshot.
+func (s *SQLiteStorage) SaveExtendedDatabaseStats(ctx context.Context, snapshotID int64, stats *models.ExtendedDatabaseStats) error {
+	if stats == nil {
+		return nil
+	}
+
+	_, err := s.writeDB.ExecContext(ctx, `
+		INSERT INTO extended_database_stats (
+			snapshot_id, database_name, xact_commit, xact_rollback,
+			temp_files, temp_bytes, deadlocks, confl_lock, confl_snapshot
+		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+	`, snapshotID, stats.DatabaseName, stats.XactCommit, stats.XactRollback,
+		stats.TempFiles, stats.TempBytes, stats.Deadlocks, stats.ConflLock, stats.ConflSnapshot)
+
+	if err != nil {
+		return fmt.Errorf("saving extended database stats: %w", err)
+	}
+
+	return nil
+}
+
+// GetExtendedDatabaseStats retrieves extended database statistics for a snapshot.
+func (s *SQLiteStorage) GetExtendedDatabaseStats(ctx context.Context, snapshotID int64) (*models.ExtendedDatabaseStats, error) {
+	var stats models.ExtendedDatabaseStats
+	err := s.readDB.QueryRowContext(ctx, `
+		SELECT id, snapshot_id, database_name, xact_commit, xact_rollback,
+			temp_files, temp_bytes, deadlocks, confl_lock, confl_snapshot
+		FROM extended_database_stats
+		WHERE snapshot_id = ?
+	`, snapshotID).Scan(
+		&stats.ID, &stats.SnapshotID, &stats.DatabaseName, &stats.XactCommit,
+		&stats.XactRollback, &stats.TempFiles, &stats.TempBytes, &stats.Deadlocks,
+		&stats.ConflLock, &stats.ConflSnapshot,
+	)
+
+	if err == sql.ErrNoRows {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, fmt.Errorf("getting extended database stats: %w", err)
+	}
+
+	return &stats, nil
+}
+
+// =============================================================================
 // Suggestion Operations
 // =============================================================================
 
@@ -667,7 +1141,7 @@ func (s *SQLiteStorage) UpsertSuggestion(ctx context.Context, sug *models.Sugges
 	now := time.Now()
 
 	// Try to update existing suggestion
-	result, err := s.db.ExecContext(ctx, `
+	result, err := s.writeDB.ExecContext(ctx, `
 		UPDATE suggestions
 		SET severity = ?, title = ?, description = ?, metadata = ?,
 			status = CASE WHEN status = 'resolved' THEN 'active' ELSE status END,
@@ -690,7 +1164,7 @@ func (s *SQLiteStorage) UpsertSuggestion(ctx context.Context, sug *models.Sugges
 	}
 
 	// Insert new suggestion
-	_, err = s.db.ExecContext(ctx, `
+	_, err = s.writeDB.ExecContext(ctx, `
 		INSERT INTO suggestions (
 			instance_id, rule_id, severity, title, description, target_object,
 			metadata, status, first_seen_at, last_seen_at
@@ -707,7 +1181,7 @@ func (s *SQLiteStorage) UpsertSuggestion(ctx context.Context, sug *models.Sugges
 
 // GetSuggestionsByStatus retrieves suggestions for an instance filtered by status.
 func (s *SQLiteStorage) GetSuggestionsByStatus(ctx context.Context, instanceID int64, status string) ([]models.Suggestion, error) {
-	rows, err := s.db.QueryContext(ctx, `
+	rows, err := s.readDB.QueryContext(ctx, `
 		SELECT id, instance_id, rule_id, severity, title, description,
 			target_object, metadata, status, first_seen_at, last_seen_at, dismissed_at
 		FROM suggestions
@@ -746,7 +1220,7 @@ func (s *SQLiteStorage) GetSuggestionsByStatus(ctx context.Context, instanceID i
 // GetSuggestionByID retrieves a suggestion by ID.
 func (s *SQLiteStorage) GetSuggestionByID(ctx context.Context, id int64) (*models.Suggestion, error) {
 	var sug models.Suggestion
-	err := s.db.QueryRowContext(ctx, `
+	err := s.readDB.QueryRowContext(ctx, `
 		SELECT id, instance_id, rule_id, severity, title, description,
 			target_object, metadata, status, first_seen_at, last_seen_at, dismissed_at
 		FROM suggestions
@@ -770,7 +1244,7 @@ func (s *SQLiteStorage) GetSuggestionByID(ctx context.Context, id int64) (*model
 // DismissSuggestion marks a suggestion as dismissed.
 func (s *SQLiteStorage) DismissSuggestion(ctx context.Context, id int64) error {
 	now := time.Now()
-	_, err := s.db.ExecContext(ctx, `
+	_, err := s.writeDB.ExecContext(ctx, `
 		UPDATE suggestions
 		SET status = 'dismissed', dismissed_at = ?
 		WHERE id = ?
@@ -785,7 +1259,7 @@ func (s *SQLiteStorage) DismissSuggestion(ctx context.Context, id int64) error {
 
 // ResolveSuggestion marks a suggestion as resolved.
 func (s *SQLiteStorage) ResolveSuggestion(ctx context.Context, id int64) error {
-	_, err := s.db.ExecContext(ctx, `
+	_, err := s.writeDB.ExecContext(ctx, `
 		UPDATE suggestions
 		SET status = 'resolved'
 		WHERE id = ?
@@ -804,7 +1278,7 @@ func (s *SQLiteStorage) ResolveSuggestion(ctx context.Context, id int64) error {
 
 // SaveExplainPlan saves an explain plan.
 func (s *SQLiteStorage) SaveExplainPlan(ctx context.Context, plan *models.ExplainPlan) (int64, error) {
-	result, err := s.db.ExecContext(ctx, `
+	result, err := s.writeDB.ExecContext(ctx, `
 		INSERT INTO explain_plans (queryid, plan_text, plan_json, captured_at, execution_time)
 		VALUES (?, ?, ?, ?, ?)
 	`, plan.QueryID, plan.PlanText, plan.PlanJSON, plan.CapturedAt, plan.ExecutionTime)
@@ -819,7 +1293,7 @@ func (s *SQLiteStorage) SaveExplainPlan(ctx context.Context, plan *models.Explai
 // GetExplainPlan retrieves the most recent explain plan for a query.
 func (s *SQLiteStorage) GetExplainPlan(ctx context.Context, queryID int64) (*models.ExplainPlan, error) {
 	var plan models.ExplainPlan
-	err := s.db.QueryRowContext(ctx, `
+	err := s.readDB.QueryRowContext(ctx, `
 		SELECT id, queryid, plan_text, plan_json, captured_at, execution_time
 		FROM explain_plans
 		WHERE queryid = ?
@@ -849,7 +1323,7 @@ func (s *SQLiteStorage) GetExplainPlan(ctx context.Context, queryID int64) (*mod
 func (s *SQLiteStorage) PurgeOldSnapshots(ctx context.Context, retention time.Duration) (int64, error) {
 	cutoff := time.Now().Add(-retention)
 
-	result, err := s.db.ExecContext(ctx, `
+	result, err := s.writeDB.ExecContext(ctx, `
 		DELETE FROM snapshots WHERE captured_at < ?
 	`, cutoff)
 

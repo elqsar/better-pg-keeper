@@ -9,15 +9,21 @@ import (
 	"github.com/user/pganalyzer/internal/suggester"
 )
 
-// runCollectionLoop runs the collection job at the configured interval.
+// runCollectionLoop runs the collection job at the minimum collector interval.
+// This ensures collectors with shorter intervals are triggered appropriately.
 func (s *Scheduler) runCollectionLoop(ctx context.Context) {
 	defer s.wg.Done()
 
-	interval := s.config.SnapshotInterval.Duration()
+	// Use minimum collector interval, falling back to configured snapshot interval
+	interval := s.coordinator.MinInterval()
+	if interval <= 0 {
+		interval = s.config.SnapshotInterval.Duration()
+	}
+
 	ticker := time.NewTicker(interval)
 	defer ticker.Stop()
 
-	s.logger.Printf("[scheduler] collection loop started with interval %v", interval)
+	s.logger.Printf("[scheduler] collection loop started with interval %v (based on minimum collector interval)", interval)
 
 	// Run initial collection
 	s.executeCollection(ctx)
@@ -209,7 +215,12 @@ func (s *Scheduler) executeMaintenance(ctx context.Context) {
 // runCollection executes a collection via the coordinator.
 func (s *Scheduler) runCollection(ctx context.Context) (*collector.CollectionResult, error) {
 	// Use a timeout for collection to prevent hanging
-	timeout := max(s.config.SnapshotInterval.Duration()/2, 30*time.Second)
+	// Use minimum collector interval or snapshot interval, whichever is smaller
+	interval := s.coordinator.MinInterval()
+	if interval <= 0 {
+		interval = s.config.SnapshotInterval.Duration()
+	}
+	timeout := max(interval/2, 30*time.Second)
 
 	return s.coordinator.CollectWithTimeout(ctx, timeout)
 }
