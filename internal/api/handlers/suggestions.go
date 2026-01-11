@@ -13,7 +13,7 @@ import (
 
 // SuggestionsStorage defines the storage interface needed by the suggestions handler.
 type SuggestionsStorage interface {
-	GetActiveSuggestions(ctx context.Context, instanceID int64) ([]models.Suggestion, error)
+	GetSuggestionsByStatus(ctx context.Context, instanceID int64, status string) ([]models.Suggestion, error)
 	GetSuggestionByID(ctx context.Context, id int64) (*models.Suggestion, error)
 	DismissSuggestion(ctx context.Context, id int64) error
 }
@@ -65,23 +65,19 @@ func (h *SuggestionsHandler) ListSuggestions(c echo.Context) error {
 
 	// Parse query parameters
 	statusFilter := c.QueryParam("status")
+	if statusFilter == "" {
+		statusFilter = models.StatusActive
+	}
 	severityFilter := c.QueryParam("severity")
 
-	// Get active suggestions (storage only returns active by default)
-	suggestions, err := h.storage.GetActiveSuggestions(ctx, h.instanceID)
+	// Get suggestions by status
+	suggestions, err := h.storage.GetSuggestionsByStatus(ctx, h.instanceID, statusFilter)
 	if err != nil {
 		c.Logger().Errorf("failed to get suggestions: %v", err)
 		return c.JSON(http.StatusInternalServerError, map[string]string{
 			"error": "failed to get suggestions",
 			"code":  "DATABASE_ERROR",
 		})
-	}
-
-	// Filter by status
-	if statusFilter != "" && statusFilter != "active" {
-		// Current implementation only supports active suggestions
-		// For dismissed suggestions, we'd need to extend the storage interface
-		suggestions = []models.Suggestion{}
 	}
 
 	// Filter by severity

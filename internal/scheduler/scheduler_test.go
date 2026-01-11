@@ -139,14 +139,14 @@ func (m *mockStorage) UpsertSuggestion(ctx context.Context, sug *models.Suggesti
 	return nil
 }
 
-func (m *mockStorage) GetActiveSuggestions(ctx context.Context, instanceID int64) ([]models.Suggestion, error) {
-	var active []models.Suggestion
+func (m *mockStorage) GetSuggestionsByStatus(ctx context.Context, instanceID int64, status string) ([]models.Suggestion, error) {
+	var filtered []models.Suggestion
 	for _, sug := range m.suggestions {
-		if sug.Status == models.StatusActive {
-			active = append(active, sug)
+		if sug.Status == status {
+			filtered = append(filtered, sug)
 		}
 	}
-	return active, nil
+	return filtered, nil
 }
 
 func (m *mockStorage) GetSuggestionByID(ctx context.Context, id int64) (*models.Suggestion, error) {

@@ -13,7 +13,7 @@ import (
 // Storage defines the storage interface needed by the suggester.
 type Storage interface {
 	UpsertSuggestion(ctx context.Context, sug *models.Suggestion) error
-	GetActiveSuggestions(ctx context.Context, instanceID int64) ([]models.Suggestion, error)
+	GetSuggestionsByStatus(ctx context.Context, instanceID int64, status string) ([]models.Suggestion, error)
 	ResolveSuggestion(ctx context.Context, id int64) error
 }
 
@@ -96,7 +96,7 @@ func (s *Suggester) Suggest(ctx context.Context, analysis *analyzer.AnalysisResu
 	result.TotalSuggestions = len(allSuggestions)
 
 	// Get existing active suggestions to track resolved ones
-	existingSuggestions, err := s.storage.GetActiveSuggestions(ctx, instanceID)
+	existingSuggestions, err := s.storage.GetSuggestionsByStatus(ctx, instanceID, models.StatusActive)
 	if err != nil {
 		return nil, fmt.Errorf("getting active suggestions: %w", err)
 	}
@@ -159,7 +159,7 @@ func suggestionKey(ruleID, targetObject string) string {
 
 // GetActiveSuggestions retrieves all active suggestions for an instance.
 func (s *Suggester) GetActiveSuggestions(ctx context.Context, instanceID int64) ([]models.Suggestion, error) {
-	return s.storage.GetActiveSuggestions(ctx, instanceID)
+	return s.storage.GetSuggestionsByStatus(ctx, instanceID, models.StatusActive)
 }
 
 // SuggestionStats contains statistics about suggestions.
@@ -172,7 +172,7 @@ type SuggestionStats struct {
 
 // GetSuggestionStats returns statistics for active suggestions.
 func (s *Suggester) GetSuggestionStats(ctx context.Context, instanceID int64) (*SuggestionStats, error) {
-	suggestions, err := s.storage.GetActiveSuggestions(ctx, instanceID)
+	suggestions, err := s.storage.GetSuggestionsByStatus(ctx, instanceID, models.StatusActive)
 	if err != nil {
 		return nil, err
 	}

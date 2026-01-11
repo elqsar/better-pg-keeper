@@ -14,7 +14,7 @@ import (
 type DashboardStorage interface {
 	GetLatestSnapshot(ctx context.Context, instanceID int64) (*models.Snapshot, error)
 	GetQueryStats(ctx context.Context, snapshotID int64) ([]models.QueryStat, error)
-	GetActiveSuggestions(ctx context.Context, instanceID int64) ([]models.Suggestion, error)
+	GetSuggestionsByStatus(ctx context.Context, instanceID int64, status string) ([]models.Suggestion, error)
 }
 
 // DashboardHandler handles dashboard API requests.
@@ -115,7 +115,7 @@ func (h *DashboardHandler) GetDashboard(c echo.Context) error {
 	}
 
 	// Get active suggestions
-	suggestions, err := h.storage.GetActiveSuggestions(ctx, h.instanceID)
+	suggestions, err := h.storage.GetSuggestionsByStatus(ctx, h.instanceID, models.StatusActive)
 	if err != nil {
 		c.Logger().Errorf("failed to get suggestions: %v", err)
 	} else {

@@ -173,10 +173,10 @@ func (m *mockStorage) UpsertSuggestion(ctx context.Context, sug *models.Suggesti
 	return nil
 }
 
-func (m *mockStorage) GetActiveSuggestions(ctx context.Context, instanceID int64) ([]models.Suggestion, error) {
+func (m *mockStorage) GetSuggestionsByStatus(ctx context.Context, instanceID int64, status string) ([]models.Suggestion, error) {
 	var result []models.Suggestion
 	for _, sug := range m.suggestions {
-		if sug.InstanceID == instanceID && sug.Status == models.StatusActive {
+		if sug.InstanceID == instanceID && sug.Status == status {
 			result = append(result, sug)
 		}
 	}
@@ -525,7 +525,7 @@ func TestDashboardEndpoint(t *testing.T) {
 			response["slow_queries_count"] = slowCount
 		}
 
-		suggestions, _ := storage.GetActiveSuggestions(ctx, 1)
+		suggestions, _ := storage.GetSuggestionsByStatus(ctx, 1, models.StatusActive)
 		response["active_suggestions"] = len(suggestions)
 
 		return c.JSON(http.StatusOK, response)
@@ -623,7 +623,7 @@ func TestSuggestionsEndpoint(t *testing.T) {
 	e.GET("/api/v1/suggestions", func(c echo.Context) error {
 		ctx := c.Request().Context()
 
-		suggestions, _ := storage.GetActiveSuggestions(ctx, 1)
+		suggestions, _ := storage.GetSuggestionsByStatus(ctx, 1, models.StatusActive)
 		return c.JSON(http.StatusOK, map[string]interface{}{
 			"suggestions": suggestions,
 			"total":       len(suggestions),

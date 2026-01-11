@@ -51,7 +51,7 @@ type Storage interface {
 
 	// Suggestion operations
 	UpsertSuggestion(ctx context.Context, sug *models.Suggestion) error
-	GetActiveSuggestions(ctx context.Context, instanceID int64) ([]models.Suggestion, error)
+	GetSuggestionsByStatus(ctx context.Context, instanceID int64, status string) ([]models.Suggestion, error)
 	GetSuggestionByID(ctx context.Context, id int64) (*models.Suggestion, error)
 	DismissSuggestion(ctx context.Context, id int64) error
 	ResolveSuggestion(ctx context.Context, id int64) error
@@ -705,13 +705,13 @@ func (s *SQLiteStorage) UpsertSuggestion(ctx context.Context, sug *models.Sugges
 	return nil
 }
 
-// GetActiveSuggestions retrieves active suggestions for an instance.
-func (s *SQLiteStorage) GetActiveSuggestions(ctx context.Context, instanceID int64) ([]models.Suggestion, error) {
+// GetSuggestionsByStatus retrieves suggestions for an instance filtered by status.
+func (s *SQLiteStorage) GetSuggestionsByStatus(ctx context.Context, instanceID int64, status string) ([]models.Suggestion, error) {
 	rows, err := s.db.QueryContext(ctx, `
 		SELECT id, instance_id, rule_id, severity, title, description,
 			target_object, metadata, status, first_seen_at, last_seen_at, dismissed_at
 		FROM suggestions
-		WHERE instance_id = ? AND status = 'active'
+		WHERE instance_id = ? AND status = ?
 		ORDER BY
 			CASE severity
 				WHEN 'critical' THEN 1
@@ -720,7 +720,7 @@ func (s *SQLiteStorage) GetActiveSuggestions(ctx context.Context, instanceID int
 				ELSE 4
 			END,
 			last_seen_at DESC
-	`, instanceID)
+	`, instanceID, status)
 	if err != nil {
 		return nil, fmt.Errorf("querying suggestions: %w", err)
 	}

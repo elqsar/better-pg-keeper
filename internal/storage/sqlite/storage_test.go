@@ -543,7 +543,7 @@ func TestSuggestionOperations(t *testing.T) {
 			t.Fatalf("UpsertSuggestion failed: %v", err)
 		}
 
-		active, _ := storage.GetActiveSuggestions(ctx, instID)
+		active, _ := storage.GetSuggestionsByStatus(ctx, instID, models.StatusActive)
 		if len(active) != 1 {
 			t.Errorf("Expected 1 active suggestion, got %d", len(active))
 		}
@@ -565,7 +565,7 @@ func TestSuggestionOperations(t *testing.T) {
 			t.Fatalf("UpsertSuggestion update failed: %v", err)
 		}
 
-		active, _ := storage.GetActiveSuggestions(ctx, instID)
+		active, _ := storage.GetSuggestionsByStatus(ctx, instID, models.StatusActive)
 		if len(active) != 1 {
 			t.Errorf("Expected still 1 active suggestion, got %d", len(active))
 		}
@@ -575,7 +575,7 @@ func TestSuggestionOperations(t *testing.T) {
 	})
 
 	t.Run("DismissSuggestion", func(t *testing.T) {
-		active, _ := storage.GetActiveSuggestions(ctx, instID)
+		active, _ := storage.GetSuggestionsByStatus(ctx, instID, models.StatusActive)
 		if len(active) == 0 {
 			t.Skip("No active suggestions to dismiss")
 		}
@@ -586,7 +586,7 @@ func TestSuggestionOperations(t *testing.T) {
 		}
 
 		// Should no longer be in active list
-		activeAfter, _ := storage.GetActiveSuggestions(ctx, instID)
+		activeAfter, _ := storage.GetSuggestionsByStatus(ctx, instID, models.StatusActive)
 		if len(activeAfter) != 0 {
 			t.Error("Dismissed suggestion still in active list")
 		}
@@ -610,7 +610,7 @@ func TestSuggestionOperations(t *testing.T) {
 		}
 		storage.UpsertSuggestion(ctx, sug)
 
-		active, _ := storage.GetActiveSuggestions(ctx, instID)
+		active, _ := storage.GetSuggestionsByStatus(ctx, instID, models.StatusActive)
 		var slowQueryID int64
 		for _, a := range active {
 			if a.RuleID == "slow_query" {
@@ -630,7 +630,7 @@ func TestSuggestionOperations(t *testing.T) {
 		}
 	})
 
-	t.Run("GetActiveSuggestions orders by severity", func(t *testing.T) {
+	t.Run("GetSuggestionsByStatus orders by severity", func(t *testing.T) {
 		// Create suggestions with different severities
 		storage.UpsertSuggestion(ctx, &models.Suggestion{
 			InstanceID: instID, RuleID: "info_rule", Severity: models.SeverityInfo,
@@ -645,7 +645,7 @@ func TestSuggestionOperations(t *testing.T) {
 			Title: "Warning", Description: "Warning desc", TargetObject: "target3",
 		})
 
-		active, _ := storage.GetActiveSuggestions(ctx, instID)
+		active, _ := storage.GetSuggestionsByStatus(ctx, instID, models.StatusActive)
 		if len(active) < 3 {
 			t.Skip("Not enough suggestions for ordering test")
 		}

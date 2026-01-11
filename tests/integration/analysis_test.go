@@ -268,7 +268,7 @@ func TestFullPipeline(t *testing.T) {
 	}
 
 	// Verify suggestions can be retrieved
-	suggestions, err := env.Storage.GetActiveSuggestions(ctx, instanceID)
+	suggestions, err := env.Storage.GetSuggestionsByStatus(ctx, instanceID, models.StatusActive)
 	if err != nil {
 		t.Fatalf("Failed to get suggestions: %v", err)
 	}

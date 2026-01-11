@@ -55,14 +55,14 @@ func (m *mockStorage) UpsertSuggestion(ctx context.Context, sug *models.Suggesti
 	return nil
 }
 
-func (m *mockStorage) GetActiveSuggestions(ctx context.Context, instanceID int64) ([]models.Suggestion, error) {
-	var active []models.Suggestion
+func (m *mockStorage) GetSuggestionsByStatus(ctx context.Context, instanceID int64, status string) ([]models.Suggestion, error) {
+	var filtered []models.Suggestion
 	for _, sug := range m.suggestions[instanceID] {
-		if sug.Status == models.StatusActive {
-			active = append(active, sug)
+		if sug.Status == status {
+			filtered = append(filtered, sug)
 		}
 	}
-	return active, nil
+	return filtered, nil
 }
 
 func (m *mockStorage) ResolveSuggestion(ctx context.Context, id int64) error {
@@ -678,7 +678,7 @@ func TestSuggester_Deduplication(t *testing.T) {
 	}
 
 	// Verify only one suggestion exists
-	suggestions, _ := storage.GetActiveSuggestions(context.Background(), 1)
+	suggestions, _ := storage.GetSuggestionsByStatus(context.Background(), 1, models.StatusActive)
 	if len(suggestions) != 1 {
 		t.Errorf("Active suggestions = %d, want 1", len(suggestions))
 	}
@@ -718,7 +718,7 @@ func TestSuggester_ResolveGone(t *testing.T) {
 	}
 
 	// Verify no active suggestions
-	suggestions, _ := storage.GetActiveSuggestions(context.Background(), 1)
+	suggestions, _ := storage.GetSuggestionsByStatus(context.Background(), 1, models.StatusActive)
 	if len(suggestions) != 0 {
 		t.Errorf("Active suggestions = %d, want 0", len(suggestions))
 	}

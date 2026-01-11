@@ -16,7 +16,7 @@ import (
 type PageStorage interface {
 	GetLatestSnapshot(ctx context.Context, instanceID int64) (*models.Snapshot, error)
 	GetQueryStats(ctx context.Context, snapshotID int64) ([]models.QueryStat, error)
-	GetActiveSuggestions(ctx context.Context, instanceID int64) ([]models.Suggestion, error)
+	GetSuggestionsByStatus(ctx context.Context, instanceID int64, status string) ([]models.Suggestion, error)
 	GetTableStats(ctx context.Context, snapshotID int64) ([]models.TableStat, error)
 	GetIndexStats(ctx context.Context, snapshotID int64) ([]models.IndexStat, error)
 	GetBloatStats(ctx context.Context, snapshotID int64) ([]models.BloatInfo, error)
@@ -138,7 +138,7 @@ func (h *PageHandler) Dashboard(c echo.Context) error {
 	}
 
 	// Get active suggestions
-	suggestions, err := h.storage.GetActiveSuggestions(ctx, h.instanceID)
+	suggestions, err := h.storage.GetSuggestionsByStatus(ctx, h.instanceID, models.StatusActive)
 	if err != nil {
 		c.Logger().Errorf("failed to get suggestions: %v", err)
 	} else {
@@ -564,8 +564,8 @@ func (h *PageHandler) Suggestions(c echo.Context) error {
 		data.LastSnapshot = snapshot.CapturedAt
 	}
 
-	// Get suggestions
-	suggestions, err := h.storage.GetActiveSuggestions(ctx, h.instanceID)
+	// Get suggestions by status filter
+	suggestions, err := h.storage.GetSuggestionsByStatus(ctx, h.instanceID, statusFilter)
 	if err != nil {
 		c.Logger().Errorf("failed to get suggestions: %v", err)
 		return c.Render(http.StatusOK, "suggestions", data)

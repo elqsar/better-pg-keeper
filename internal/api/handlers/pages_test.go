@@ -35,8 +35,15 @@ func (m *mockPageStorage) GetQueryStats(ctx context.Context, snapshotID int64) (
 	return m.queryStats, m.err
 }
 
-func (m *mockPageStorage) GetActiveSuggestions(ctx context.Context, instanceID int64) ([]models.Suggestion, error) {
-	return m.suggestions, m.err
+func (m *mockPageStorage) GetSuggestionsByStatus(ctx context.Context, instanceID int64, status string) ([]models.Suggestion, error) {
+	// Filter suggestions by status for testing
+	var filtered []models.Suggestion
+	for _, s := range m.suggestions {
+		if s.Status == status {
+			filtered = append(filtered, s)
+		}
+	}
+	return filtered, m.err
 }
 
 func (m *mockPageStorage) GetTableStats(ctx context.Context, snapshotID int64) ([]models.TableStat, error) {
