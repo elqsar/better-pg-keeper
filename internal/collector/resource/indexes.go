@@ -63,9 +63,13 @@ func (c *IndexStatsCollector) Collect(ctx context.Context, snapshotID int64) err
 
 	c.Logf("collected %d index stats", len(stats))
 
-	// Store in SQLite
+	// Store in SQLite (historical)
 	if err := c.Storage().SaveIndexStats(ctx, snapshotID, stats); err != nil {
 		return err
+	}
+	// Store in SQLite (current - for dashboard)
+	if err := c.Storage().SaveCurrentIndexStats(ctx, c.InstanceID(), stats); err != nil {
+		c.Logf("warning: failed to save current index stats: %v", err)
 	}
 
 	return nil

@@ -64,9 +64,13 @@ func (c *TableStatsCollector) Collect(ctx context.Context, snapshotID int64) err
 
 	c.Logf("collected %d table stats", len(stats))
 
-	// Store in SQLite
+	// Store in SQLite (historical)
 	if err := c.Storage().SaveTableStats(ctx, snapshotID, stats); err != nil {
 		return err
+	}
+	// Store in SQLite (current - for dashboard)
+	if err := c.Storage().SaveCurrentTableStats(ctx, c.InstanceID(), stats); err != nil {
+		c.Logf("warning: failed to save current table stats: %v", err)
 	}
 
 	return nil

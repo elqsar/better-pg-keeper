@@ -88,9 +88,13 @@ func (c *ActivityCollector) Collect(ctx context.Context, snapshotID int64) error
 		activity.ActiveCount, activity.IdleCount, activity.IdleInTxCount,
 		activity.WaitingCount, activity.TotalConnections, activity.MaxConnections)
 
-	// Store connection activity
+	// Store connection activity (historical)
 	if err := c.Storage().SaveConnectionActivity(ctx, snapshotID, activity); err != nil {
 		return err
+	}
+	// Store connection activity (current - for dashboard)
+	if err := c.Storage().SaveCurrentConnectionActivity(ctx, c.InstanceID(), activity); err != nil {
+		c.Logf("warning: failed to save current connection activity: %v", err)
 	}
 
 	// Fetch and store long-running queries
@@ -101,8 +105,13 @@ func (c *ActivityCollector) Collect(ctx context.Context, snapshotID int64) error
 		if len(longRunning) > 0 {
 			c.Logf("found %d long-running queries (>%.0fs)", len(longRunning), c.longRunningThreshold)
 		}
+		// Historical
 		if err := c.Storage().SaveLongRunningQueries(ctx, snapshotID, longRunning); err != nil {
 			return err
+		}
+		// Current (for dashboard)
+		if err := c.Storage().SaveCurrentLongRunningQueries(ctx, c.InstanceID(), longRunning); err != nil {
+			c.Logf("warning: failed to save current long-running queries: %v", err)
 		}
 	}
 
@@ -114,8 +123,13 @@ func (c *ActivityCollector) Collect(ctx context.Context, snapshotID int64) error
 		if len(idleInTx) > 0 {
 			c.Logf("found %d idle-in-transaction connections (>%.0fs)", len(idleInTx), c.idleInTxThreshold)
 		}
+		// Historical
 		if err := c.Storage().SaveIdleInTransaction(ctx, snapshotID, idleInTx); err != nil {
 			return err
+		}
+		// Current (for dashboard)
+		if err := c.Storage().SaveCurrentIdleInTransaction(ctx, c.InstanceID(), idleInTx); err != nil {
+			c.Logf("warning: failed to save current idle-in-transaction: %v", err)
 		}
 	}
 

@@ -51,8 +51,8 @@ func TestNewStorage(t *testing.T) {
 			t.Fatalf("GetMigrationStatus failed: %v", err)
 		}
 
-		if len(status) != 10 {
-			t.Errorf("Expected 10 migrations applied, got %d", len(status))
+		if len(status) != 11 {
+			t.Errorf("Expected 11 migrations applied, got %d", len(status))
 		}
 	})
 
@@ -842,5 +842,52 @@ func TestCascadeDeletes(t *testing.T) {
 	indexStats, _ := storage.GetIndexStats(ctx, snapID)
 	if len(indexStats) != 0 {
 		t.Error("Index stats should be cascade deleted")
+	}
+}
+
+func TestCurrentQueryStatsOperations(t *testing.T) {
+	storage := setupTestStorage(t)
+	ctx := context.Background()
+
+	instanceID, err := storage.CreateInstance(ctx, &models.Instance{
+		Name:     "current-query-stats",
+		Host:     "localhost",
+		Port:     5432,
+		Database: "testdb",
+	})
+	if err != nil {
+		t.Fatalf("CreateInstance failed: %v", err)
+	}
+
+	initial := []models.QueryStat{
+		{QueryID: 1, Query: "SELECT 1", Calls: 10, TotalExecTime: 100, MeanExecTime: 10},
+		{QueryID: 2, Query: "SELECT 2", Calls: 20, TotalExecTime: 200, MeanExecTime: 10},
+	}
+
+	if err := storage.SaveCurrentQueryStats(ctx, instanceID, initial); err != nil {
+		t.Fatalf("SaveCurrentQueryStats failed: %v", err)
+	}
+
+	got, err := storage.GetCurrentQueryStats(ctx, instanceID)
+	if err != nil {
+		t.Fatalf("GetCurrentQueryStats failed: %v", err)
+	}
+	if len(got) != 2 {
+		t.Fatalf("Expected 2 current query stats, got %d", len(got))
+	}
+
+	// Save a reduced set and ensure stale entries are removed.
+	if err := storage.SaveCurrentQueryStats(ctx, instanceID, initial[:1]); err != nil {
+		t.Fatalf("SaveCurrentQueryStats (second call) failed: %v", err)
+	}
+	got, err = storage.GetCurrentQueryStats(ctx, instanceID)
+	if err != nil {
+		t.Fatalf("GetCurrentQueryStats (second call) failed: %v", err)
+	}
+	if len(got) != 1 {
+		t.Fatalf("Expected 1 current query stat after stale cleanup, got %d", len(got))
+	}
+	if got[0].QueryID != 1 {
+		t.Fatalf("Expected remaining query ID 1, got %d", got[0].QueryID)
 	}
 }

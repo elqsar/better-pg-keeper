@@ -88,9 +88,13 @@ func (c *BloatCollector) Collect(ctx context.Context, snapshotID int64) error {
 
 	c.Logf("collected %d total tables, %d with significant bloat", len(bloatInfo), len(significantBloat))
 
-	// Store significant bloat in SQLite
+	// Store significant bloat in SQLite (historical)
 	if err := c.Storage().SaveBloatStats(ctx, snapshotID, significantBloat); err != nil {
 		return err
+	}
+	// Store bloat in SQLite (current - for dashboard)
+	if err := c.Storage().SaveCurrentBloatStats(ctx, c.InstanceID(), significantBloat); err != nil {
+		c.Logf("warning: failed to save current bloat stats: %v", err)
 	}
 
 	return nil

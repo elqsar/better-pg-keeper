@@ -86,6 +86,37 @@ type Storage interface {
 
 	// Maintenance operations
 	PurgeOldSnapshots(ctx context.Context, retention time.Duration) (int64, error)
+
+	// Current state operations (for dashboard - always up-to-date)
+	SaveCurrentConnectionActivity(ctx context.Context, instanceID int64, activity *models.ConnectionActivity) error
+	GetCurrentConnectionActivity(ctx context.Context, instanceID int64) (*models.ConnectionActivity, error)
+
+	SaveCurrentLockStats(ctx context.Context, instanceID int64, stats *models.LockStats) error
+	GetCurrentLockStats(ctx context.Context, instanceID int64) (*models.LockStats, error)
+
+	SaveCurrentDatabaseStats(ctx context.Context, instanceID int64, stats *models.ExtendedDatabaseStats, cacheHitRatio *float64) error
+	GetCurrentDatabaseStats(ctx context.Context, instanceID int64) (*models.ExtendedDatabaseStats, *float64, error)
+
+	SaveCurrentLongRunningQueries(ctx context.Context, instanceID int64, queries []models.LongRunningQuery) error
+	GetCurrentLongRunningQueries(ctx context.Context, instanceID int64) ([]models.LongRunningQuery, error)
+
+	SaveCurrentIdleInTransaction(ctx context.Context, instanceID int64, idle []models.IdleInTransaction) error
+	GetCurrentIdleInTransaction(ctx context.Context, instanceID int64) ([]models.IdleInTransaction, error)
+
+	SaveCurrentBlockedQueries(ctx context.Context, instanceID int64, queries []models.BlockedQuery) error
+	GetCurrentBlockedQueries(ctx context.Context, instanceID int64) ([]models.BlockedQuery, error)
+
+	SaveCurrentQueryStats(ctx context.Context, instanceID int64, stats []models.QueryStat) error
+	GetCurrentQueryStats(ctx context.Context, instanceID int64) ([]models.QueryStat, error)
+
+	SaveCurrentTableStats(ctx context.Context, instanceID int64, stats []models.TableStat) error
+	GetCurrentTableStats(ctx context.Context, instanceID int64) ([]models.TableStat, error)
+
+	SaveCurrentIndexStats(ctx context.Context, instanceID int64, stats []models.IndexStat) error
+	GetCurrentIndexStats(ctx context.Context, instanceID int64) ([]models.IndexStat, error)
+
+	SaveCurrentBloatStats(ctx context.Context, instanceID int64, stats []models.BloatInfo) error
+	GetCurrentBloatStats(ctx context.Context, instanceID int64) ([]models.BloatInfo, error)
 }
 
 // SQLiteStorage implements Storage using SQLite.
@@ -1332,6 +1363,769 @@ func (s *SQLiteStorage) PurgeOldSnapshots(ctx context.Context, retention time.Du
 	}
 
 	return result.RowsAffected()
+}
+
+// =============================================================================
+// Current State Operations (for dashboard - always up-to-date)
+// =============================================================================
+
+// SaveCurrentConnectionActivity saves or updates current connection activity for an instance.
+func (s *SQLiteStorage) SaveCurrentConnectionActivity(ctx context.Context, instanceID int64, activity *models.ConnectionActivity) error {
+	if activity == nil {
+		return nil
+	}
+
+	_, err := s.writeDB.ExecContext(ctx, `
+		INSERT INTO current_connection_activity (
+			instance_id, active_count, idle_count, idle_in_tx_count, idle_in_tx_aborted,
+			waiting_count, total_connections, max_connections, updated_at
+		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
+		ON CONFLICT(instance_id) DO UPDATE SET
+			active_count = excluded.active_count,
+			idle_count = excluded.idle_count,
+			idle_in_tx_count = excluded.idle_in_tx_count,
+			idle_in_tx_aborted = excluded.idle_in_tx_aborted,
+			waiting_count = excluded.waiting_count,
+			total_connections = excluded.total_connections,
+			max_connections = excluded.max_connections,
+			updated_at = CURRENT_TIMESTAMP
+	`, instanceID, activity.ActiveCount, activity.IdleCount, activity.IdleInTxCount,
+		activity.IdleInTxAborted, activity.WaitingCount, activity.TotalConnections, activity.MaxConnections)
+
+	if err != nil {
+		return fmt.Errorf("saving current connection activity: %w", err)
+	}
+
+	return nil
+}
+
+// GetCurrentConnectionActivity retrieves current connection activity for an instance.
+func (s *SQLiteStorage) GetCurrentConnectionActivity(ctx context.Context, instanceID int64) (*models.ConnectionActivity, error) {
+	var activity models.ConnectionActivity
+	err := s.readDB.QueryRowContext(ctx, `
+		SELECT instance_id, active_count, idle_count, idle_in_tx_count, idle_in_tx_aborted,
+			waiting_count, total_connections, max_connections
+		FROM current_connection_activity
+		WHERE instance_id = ?
+	`, instanceID).Scan(
+		&activity.SnapshotID, &activity.ActiveCount, &activity.IdleCount,
+		&activity.IdleInTxCount, &activity.IdleInTxAborted, &activity.WaitingCount,
+		&activity.TotalConnections, &activity.MaxConnections,
+	)
+
+	if err == sql.ErrNoRows {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, fmt.Errorf("getting current connection activity: %w", err)
+	}
+
+	return &activity, nil
+}
+
+// SaveCurrentLockStats saves or updates current lock statistics for an instance.
+func (s *SQLiteStorage) SaveCurrentLockStats(ctx context.Context, instanceID int64, stats *models.LockStats) error {
+	if stats == nil {
+		return nil
+	}
+
+	_, err := s.writeDB.ExecContext(ctx, `
+		INSERT INTO current_lock_stats (
+			instance_id, total_locks, granted_locks, waiting_locks,
+			access_share_locks, row_exclusive_locks, exclusive_locks, updated_at
+		) VALUES (?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
+		ON CONFLICT(instance_id) DO UPDATE SET
+			total_locks = excluded.total_locks,
+			granted_locks = excluded.granted_locks,
+			waiting_locks = excluded.waiting_locks,
+			access_share_locks = excluded.access_share_locks,
+			row_exclusive_locks = excluded.row_exclusive_locks,
+			exclusive_locks = excluded.exclusive_locks,
+			updated_at = CURRENT_TIMESTAMP
+	`, instanceID, stats.TotalLocks, stats.GrantedLocks, stats.WaitingLocks,
+		stats.AccessShareLocks, stats.RowExclusiveLocks, stats.ExclusiveLocks)
+
+	if err != nil {
+		return fmt.Errorf("saving current lock stats: %w", err)
+	}
+
+	return nil
+}
+
+// GetCurrentLockStats retrieves current lock statistics for an instance.
+func (s *SQLiteStorage) GetCurrentLockStats(ctx context.Context, instanceID int64) (*models.LockStats, error) {
+	var stats models.LockStats
+	err := s.readDB.QueryRowContext(ctx, `
+		SELECT instance_id, total_locks, granted_locks, waiting_locks,
+			access_share_locks, row_exclusive_locks, exclusive_locks
+		FROM current_lock_stats
+		WHERE instance_id = ?
+	`, instanceID).Scan(
+		&stats.SnapshotID, &stats.TotalLocks, &stats.GrantedLocks,
+		&stats.WaitingLocks, &stats.AccessShareLocks, &stats.RowExclusiveLocks,
+		&stats.ExclusiveLocks,
+	)
+
+	if err == sql.ErrNoRows {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, fmt.Errorf("getting current lock stats: %w", err)
+	}
+
+	return &stats, nil
+}
+
+// SaveCurrentDatabaseStats saves or updates current database statistics for an instance.
+func (s *SQLiteStorage) SaveCurrentDatabaseStats(ctx context.Context, instanceID int64, stats *models.ExtendedDatabaseStats, cacheHitRatio *float64) error {
+	if stats == nil {
+		return nil
+	}
+
+	_, err := s.writeDB.ExecContext(ctx, `
+		INSERT INTO current_database_stats (
+			instance_id, database_name, xact_commit, xact_rollback, temp_files,
+			temp_bytes, deadlocks, confl_lock, confl_snapshot, cache_hit_ratio, updated_at
+		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
+		ON CONFLICT(instance_id) DO UPDATE SET
+			database_name = excluded.database_name,
+			xact_commit = excluded.xact_commit,
+			xact_rollback = excluded.xact_rollback,
+			temp_files = excluded.temp_files,
+			temp_bytes = excluded.temp_bytes,
+			deadlocks = excluded.deadlocks,
+			confl_lock = excluded.confl_lock,
+			confl_snapshot = excluded.confl_snapshot,
+			cache_hit_ratio = excluded.cache_hit_ratio,
+			updated_at = CURRENT_TIMESTAMP
+	`, instanceID, stats.DatabaseName, stats.XactCommit, stats.XactRollback,
+		stats.TempFiles, stats.TempBytes, stats.Deadlocks, stats.ConflLock,
+		stats.ConflSnapshot, cacheHitRatio)
+
+	if err != nil {
+		return fmt.Errorf("saving current database stats: %w", err)
+	}
+
+	return nil
+}
+
+// GetCurrentDatabaseStats retrieves current database statistics for an instance.
+func (s *SQLiteStorage) GetCurrentDatabaseStats(ctx context.Context, instanceID int64) (*models.ExtendedDatabaseStats, *float64, error) {
+	var stats models.ExtendedDatabaseStats
+	var cacheHitRatio sql.NullFloat64
+	err := s.readDB.QueryRowContext(ctx, `
+		SELECT instance_id, database_name, xact_commit, xact_rollback, temp_files,
+			temp_bytes, deadlocks, confl_lock, confl_snapshot, cache_hit_ratio
+		FROM current_database_stats
+		WHERE instance_id = ?
+	`, instanceID).Scan(
+		&stats.SnapshotID, &stats.DatabaseName, &stats.XactCommit, &stats.XactRollback,
+		&stats.TempFiles, &stats.TempBytes, &stats.Deadlocks, &stats.ConflLock,
+		&stats.ConflSnapshot, &cacheHitRatio,
+	)
+
+	if err == sql.ErrNoRows {
+		return nil, nil, nil
+	}
+	if err != nil {
+		return nil, nil, fmt.Errorf("getting current database stats: %w", err)
+	}
+
+	var ratio *float64
+	if cacheHitRatio.Valid {
+		ratio = &cacheHitRatio.Float64
+	}
+
+	return &stats, ratio, nil
+}
+
+// SaveCurrentLongRunningQueries saves or updates current long running queries for an instance.
+func (s *SQLiteStorage) SaveCurrentLongRunningQueries(ctx context.Context, instanceID int64, queries []models.LongRunningQuery) error {
+	batchTime := time.Now().UTC().Format(time.RFC3339Nano)
+
+	tx, err := s.writeDB.BeginTx(ctx, nil)
+	if err != nil {
+		return fmt.Errorf("beginning transaction: %w", err)
+	}
+	defer tx.Rollback()
+
+	// Upsert all current rows
+	stmt, err := tx.PrepareContext(ctx, `
+		INSERT INTO current_long_running_queries (
+			instance_id, pid, usename, datname, query, state,
+			wait_event_type, wait_event, query_start, duration_seconds, updated_at
+		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+		ON CONFLICT(instance_id, pid) DO UPDATE SET
+			usename = excluded.usename,
+			datname = excluded.datname,
+			query = excluded.query,
+			state = excluded.state,
+			wait_event_type = excluded.wait_event_type,
+			wait_event = excluded.wait_event,
+			query_start = excluded.query_start,
+			duration_seconds = excluded.duration_seconds,
+			updated_at = excluded.updated_at
+	`)
+	if err != nil {
+		return fmt.Errorf("preparing statement: %w", err)
+	}
+	defer stmt.Close()
+
+	for _, q := range queries {
+		_, err := stmt.ExecContext(ctx,
+			instanceID, q.PID, q.Username, q.DatabaseName, q.Query, q.State,
+			q.WaitEventType, q.WaitEvent, q.QueryStart, q.DurationSeconds, batchTime,
+		)
+		if err != nil {
+			return fmt.Errorf("upserting long running query: %w", err)
+		}
+	}
+
+	// Delete stale rows not in current batch
+	_, err = tx.ExecContext(ctx, `
+		DELETE FROM current_long_running_queries WHERE instance_id = ? AND updated_at != ?
+	`, instanceID, batchTime)
+	if err != nil {
+		return fmt.Errorf("deleting stale long running queries: %w", err)
+	}
+
+	return tx.Commit()
+}
+
+// GetCurrentLongRunningQueries retrieves current long running queries for an instance.
+func (s *SQLiteStorage) GetCurrentLongRunningQueries(ctx context.Context, instanceID int64) ([]models.LongRunningQuery, error) {
+	rows, err := s.readDB.QueryContext(ctx, `
+		SELECT instance_id, pid, usename, datname, query, state,
+			wait_event_type, wait_event, query_start, duration_seconds
+		FROM current_long_running_queries
+		WHERE instance_id = ?
+		ORDER BY duration_seconds DESC
+	`, instanceID)
+	if err != nil {
+		return nil, fmt.Errorf("querying current long running queries: %w", err)
+	}
+	defer rows.Close()
+
+	var queries []models.LongRunningQuery
+	for rows.Next() {
+		var q models.LongRunningQuery
+		err := rows.Scan(
+			&q.SnapshotID, &q.PID, &q.Username, &q.DatabaseName,
+			&q.Query, &q.State, &q.WaitEventType, &q.WaitEvent,
+			&q.QueryStart, &q.DurationSeconds,
+		)
+		if err != nil {
+			return nil, fmt.Errorf("scanning long running query: %w", err)
+		}
+		queries = append(queries, q)
+	}
+
+	return queries, rows.Err()
+}
+
+// SaveCurrentIdleInTransaction saves or updates current idle in transaction connections for an instance.
+func (s *SQLiteStorage) SaveCurrentIdleInTransaction(ctx context.Context, instanceID int64, idle []models.IdleInTransaction) error {
+	batchTime := time.Now().UTC().Format(time.RFC3339Nano)
+
+	tx, err := s.writeDB.BeginTx(ctx, nil)
+	if err != nil {
+		return fmt.Errorf("beginning transaction: %w", err)
+	}
+	defer tx.Rollback()
+
+	stmt, err := tx.PrepareContext(ctx, `
+		INSERT INTO current_idle_in_transaction (
+			instance_id, pid, usename, datname, state,
+			xact_start, duration_seconds, query, updated_at
+		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+		ON CONFLICT(instance_id, pid) DO UPDATE SET
+			usename = excluded.usename,
+			datname = excluded.datname,
+			state = excluded.state,
+			xact_start = excluded.xact_start,
+			duration_seconds = excluded.duration_seconds,
+			query = excluded.query,
+			updated_at = excluded.updated_at
+	`)
+	if err != nil {
+		return fmt.Errorf("preparing statement: %w", err)
+	}
+	defer stmt.Close()
+
+	for _, i := range idle {
+		_, err := stmt.ExecContext(ctx,
+			instanceID, i.PID, i.Username, i.DatabaseName, i.State,
+			i.XactStart, i.DurationSeconds, i.Query, batchTime,
+		)
+		if err != nil {
+			return fmt.Errorf("upserting idle in transaction: %w", err)
+		}
+	}
+
+	// Delete stale rows
+	_, err = tx.ExecContext(ctx, `
+		DELETE FROM current_idle_in_transaction WHERE instance_id = ? AND updated_at != ?
+	`, instanceID, batchTime)
+	if err != nil {
+		return fmt.Errorf("deleting stale idle in transaction: %w", err)
+	}
+
+	return tx.Commit()
+}
+
+// GetCurrentIdleInTransaction retrieves current idle in transaction connections for an instance.
+func (s *SQLiteStorage) GetCurrentIdleInTransaction(ctx context.Context, instanceID int64) ([]models.IdleInTransaction, error) {
+	rows, err := s.readDB.QueryContext(ctx, `
+		SELECT instance_id, pid, usename, datname, state,
+			xact_start, duration_seconds, query
+		FROM current_idle_in_transaction
+		WHERE instance_id = ?
+		ORDER BY duration_seconds DESC
+	`, instanceID)
+	if err != nil {
+		return nil, fmt.Errorf("querying current idle in transaction: %w", err)
+	}
+	defer rows.Close()
+
+	var idle []models.IdleInTransaction
+	for rows.Next() {
+		var i models.IdleInTransaction
+		err := rows.Scan(
+			&i.SnapshotID, &i.PID, &i.Username, &i.DatabaseName,
+			&i.State, &i.XactStart, &i.DurationSeconds, &i.Query,
+		)
+		if err != nil {
+			return nil, fmt.Errorf("scanning idle in transaction: %w", err)
+		}
+		idle = append(idle, i)
+	}
+
+	return idle, rows.Err()
+}
+
+// SaveCurrentBlockedQueries saves or updates current blocked queries for an instance.
+func (s *SQLiteStorage) SaveCurrentBlockedQueries(ctx context.Context, instanceID int64, queries []models.BlockedQuery) error {
+	batchTime := time.Now().UTC().Format(time.RFC3339Nano)
+
+	tx, err := s.writeDB.BeginTx(ctx, nil)
+	if err != nil {
+		return fmt.Errorf("beginning transaction: %w", err)
+	}
+	defer tx.Rollback()
+
+	stmt, err := tx.PrepareContext(ctx, `
+		INSERT INTO current_blocked_queries (
+			instance_id, blocked_pid, blocked_user, blocked_query, blocked_start,
+			wait_duration_seconds, blocking_pid, blocking_user, blocking_query,
+			lock_type, lock_mode, relation, updated_at
+		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+		ON CONFLICT(instance_id, blocked_pid) DO UPDATE SET
+			blocked_user = excluded.blocked_user,
+			blocked_query = excluded.blocked_query,
+			blocked_start = excluded.blocked_start,
+			wait_duration_seconds = excluded.wait_duration_seconds,
+			blocking_pid = excluded.blocking_pid,
+			blocking_user = excluded.blocking_user,
+			blocking_query = excluded.blocking_query,
+			lock_type = excluded.lock_type,
+			lock_mode = excluded.lock_mode,
+			relation = excluded.relation,
+			updated_at = excluded.updated_at
+	`)
+	if err != nil {
+		return fmt.Errorf("preparing statement: %w", err)
+	}
+	defer stmt.Close()
+
+	for _, q := range queries {
+		_, err := stmt.ExecContext(ctx,
+			instanceID, q.BlockedPID, q.BlockedUser, q.BlockedQuery, q.BlockedStart,
+			q.WaitDuration, q.BlockingPID, q.BlockingUser, q.BlockingQuery,
+			q.LockType, q.LockMode, q.Relation, batchTime,
+		)
+		if err != nil {
+			return fmt.Errorf("upserting blocked query: %w", err)
+		}
+	}
+
+	// Delete stale rows
+	_, err = tx.ExecContext(ctx, `
+		DELETE FROM current_blocked_queries WHERE instance_id = ? AND updated_at != ?
+	`, instanceID, batchTime)
+	if err != nil {
+		return fmt.Errorf("deleting stale blocked queries: %w", err)
+	}
+
+	return tx.Commit()
+}
+
+// GetCurrentBlockedQueries retrieves current blocked queries for an instance.
+func (s *SQLiteStorage) GetCurrentBlockedQueries(ctx context.Context, instanceID int64) ([]models.BlockedQuery, error) {
+	rows, err := s.readDB.QueryContext(ctx, `
+		SELECT instance_id, blocked_pid, blocked_user, blocked_query, blocked_start,
+			wait_duration_seconds, blocking_pid, blocking_user, blocking_query,
+			lock_type, lock_mode, relation
+		FROM current_blocked_queries
+		WHERE instance_id = ?
+		ORDER BY wait_duration_seconds DESC
+	`, instanceID)
+	if err != nil {
+		return nil, fmt.Errorf("querying current blocked queries: %w", err)
+	}
+	defer rows.Close()
+
+	var queries []models.BlockedQuery
+	for rows.Next() {
+		var q models.BlockedQuery
+		err := rows.Scan(
+			&q.SnapshotID, &q.BlockedPID, &q.BlockedUser, &q.BlockedQuery,
+			&q.BlockedStart, &q.WaitDuration, &q.BlockingPID, &q.BlockingUser,
+			&q.BlockingQuery, &q.LockType, &q.LockMode, &q.Relation,
+		)
+		if err != nil {
+			return nil, fmt.Errorf("scanning blocked query: %w", err)
+		}
+		queries = append(queries, q)
+	}
+
+	return queries, rows.Err()
+}
+
+// SaveCurrentQueryStats saves or updates current query statistics for an instance.
+func (s *SQLiteStorage) SaveCurrentQueryStats(ctx context.Context, instanceID int64, stats []models.QueryStat) error {
+	batchTime := time.Now().UTC().Format(time.RFC3339Nano)
+
+	tx, err := s.writeDB.BeginTx(ctx, nil)
+	if err != nil {
+		return fmt.Errorf("beginning transaction: %w", err)
+	}
+	defer tx.Rollback()
+
+	stmt, err := tx.PrepareContext(ctx, `
+		INSERT INTO current_query_stats (
+			instance_id, queryid, query, calls, total_exec_time, mean_exec_time,
+			min_exec_time, max_exec_time, rows, shared_blks_hit, shared_blks_read,
+			plans, total_plan_time, updated_at
+		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+		ON CONFLICT(instance_id, queryid) DO UPDATE SET
+			query = excluded.query,
+			calls = excluded.calls,
+			total_exec_time = excluded.total_exec_time,
+			mean_exec_time = excluded.mean_exec_time,
+			min_exec_time = excluded.min_exec_time,
+			max_exec_time = excluded.max_exec_time,
+			rows = excluded.rows,
+			shared_blks_hit = excluded.shared_blks_hit,
+			shared_blks_read = excluded.shared_blks_read,
+			plans = excluded.plans,
+			total_plan_time = excluded.total_plan_time,
+			updated_at = excluded.updated_at
+	`)
+	if err != nil {
+		return fmt.Errorf("preparing statement: %w", err)
+	}
+	defer stmt.Close()
+
+	for _, stat := range stats {
+		_, err := stmt.ExecContext(ctx,
+			instanceID, stat.QueryID, stat.Query, stat.Calls, stat.TotalExecTime, stat.MeanExecTime,
+			stat.MinExecTime, stat.MaxExecTime, stat.Rows, stat.SharedBlksHit, stat.SharedBlksRead,
+			stat.Plans, stat.TotalPlanTime, batchTime,
+		)
+		if err != nil {
+			return fmt.Errorf("upserting query stat: %w", err)
+		}
+	}
+
+	// Delete stale rows
+	_, err = tx.ExecContext(ctx, `
+		DELETE FROM current_query_stats WHERE instance_id = ? AND updated_at != ?
+	`, instanceID, batchTime)
+	if err != nil {
+		return fmt.Errorf("deleting stale query stats: %w", err)
+	}
+
+	return tx.Commit()
+}
+
+// GetCurrentQueryStats retrieves current query statistics for an instance.
+func (s *SQLiteStorage) GetCurrentQueryStats(ctx context.Context, instanceID int64) ([]models.QueryStat, error) {
+	rows, err := s.readDB.QueryContext(ctx, `
+		SELECT instance_id, queryid, query, calls, total_exec_time, mean_exec_time,
+			min_exec_time, max_exec_time, rows, shared_blks_hit, shared_blks_read,
+			plans, total_plan_time
+		FROM current_query_stats
+		WHERE instance_id = ?
+		ORDER BY total_exec_time DESC
+	`, instanceID)
+	if err != nil {
+		return nil, fmt.Errorf("querying current query stats: %w", err)
+	}
+	defer rows.Close()
+
+	var stats []models.QueryStat
+	for rows.Next() {
+		var stat models.QueryStat
+		err := rows.Scan(
+			&stat.SnapshotID, &stat.QueryID, &stat.Query, &stat.Calls,
+			&stat.TotalExecTime, &stat.MeanExecTime, &stat.MinExecTime, &stat.MaxExecTime,
+			&stat.Rows, &stat.SharedBlksHit, &stat.SharedBlksRead, &stat.Plans, &stat.TotalPlanTime,
+		)
+		if err != nil {
+			return nil, fmt.Errorf("scanning query stat: %w", err)
+		}
+		stats = append(stats, stat)
+	}
+
+	return stats, rows.Err()
+}
+
+// SaveCurrentTableStats saves or updates current table statistics for an instance.
+func (s *SQLiteStorage) SaveCurrentTableStats(ctx context.Context, instanceID int64, stats []models.TableStat) error {
+	batchTime := time.Now().UTC().Format(time.RFC3339Nano)
+
+	tx, err := s.writeDB.BeginTx(ctx, nil)
+	if err != nil {
+		return fmt.Errorf("beginning transaction: %w", err)
+	}
+	defer tx.Rollback()
+
+	stmt, err := tx.PrepareContext(ctx, `
+		INSERT INTO current_table_stats (
+			instance_id, schemaname, relname, seq_scan, seq_tup_read, idx_scan,
+			idx_tup_fetch, n_live_tup, n_dead_tup, last_vacuum, last_autovacuum,
+			last_analyze, table_size, index_size, updated_at
+		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+		ON CONFLICT(instance_id, schemaname, relname) DO UPDATE SET
+			seq_scan = excluded.seq_scan,
+			seq_tup_read = excluded.seq_tup_read,
+			idx_scan = excluded.idx_scan,
+			idx_tup_fetch = excluded.idx_tup_fetch,
+			n_live_tup = excluded.n_live_tup,
+			n_dead_tup = excluded.n_dead_tup,
+			last_vacuum = excluded.last_vacuum,
+			last_autovacuum = excluded.last_autovacuum,
+			last_analyze = excluded.last_analyze,
+			table_size = excluded.table_size,
+			index_size = excluded.index_size,
+			updated_at = excluded.updated_at
+	`)
+	if err != nil {
+		return fmt.Errorf("preparing statement: %w", err)
+	}
+	defer stmt.Close()
+
+	for _, stat := range stats {
+		_, err := stmt.ExecContext(ctx,
+			instanceID, stat.SchemaName, stat.RelName, stat.SeqScan, stat.SeqTupRead,
+			stat.IdxScan, stat.IdxTupFetch, stat.NLiveTup, stat.NDeadTup,
+			stat.LastVacuum, stat.LastAutovacuum, stat.LastAnalyze,
+			stat.TableSize, stat.IndexSize, batchTime,
+		)
+		if err != nil {
+			return fmt.Errorf("upserting table stat: %w", err)
+		}
+	}
+
+	// Delete stale rows
+	_, err = tx.ExecContext(ctx, `
+		DELETE FROM current_table_stats WHERE instance_id = ? AND updated_at != ?
+	`, instanceID, batchTime)
+	if err != nil {
+		return fmt.Errorf("deleting stale table stats: %w", err)
+	}
+
+	return tx.Commit()
+}
+
+// GetCurrentTableStats retrieves current table statistics for an instance.
+func (s *SQLiteStorage) GetCurrentTableStats(ctx context.Context, instanceID int64) ([]models.TableStat, error) {
+	rows, err := s.readDB.QueryContext(ctx, `
+		SELECT instance_id, schemaname, relname, seq_scan, seq_tup_read, idx_scan,
+			idx_tup_fetch, n_live_tup, n_dead_tup, last_vacuum, last_autovacuum,
+			last_analyze, table_size, index_size
+		FROM current_table_stats
+		WHERE instance_id = ?
+		ORDER BY table_size DESC
+	`, instanceID)
+	if err != nil {
+		return nil, fmt.Errorf("querying current table stats: %w", err)
+	}
+	defer rows.Close()
+
+	var stats []models.TableStat
+	for rows.Next() {
+		var stat models.TableStat
+		err := rows.Scan(
+			&stat.SnapshotID, &stat.SchemaName, &stat.RelName,
+			&stat.SeqScan, &stat.SeqTupRead, &stat.IdxScan, &stat.IdxTupFetch,
+			&stat.NLiveTup, &stat.NDeadTup, &stat.LastVacuum, &stat.LastAutovacuum,
+			&stat.LastAnalyze, &stat.TableSize, &stat.IndexSize,
+		)
+		if err != nil {
+			return nil, fmt.Errorf("scanning table stat: %w", err)
+		}
+		stats = append(stats, stat)
+	}
+
+	return stats, rows.Err()
+}
+
+// SaveCurrentIndexStats saves or updates current index statistics for an instance.
+func (s *SQLiteStorage) SaveCurrentIndexStats(ctx context.Context, instanceID int64, stats []models.IndexStat) error {
+	batchTime := time.Now().UTC().Format(time.RFC3339Nano)
+
+	tx, err := s.writeDB.BeginTx(ctx, nil)
+	if err != nil {
+		return fmt.Errorf("beginning transaction: %w", err)
+	}
+	defer tx.Rollback()
+
+	stmt, err := tx.PrepareContext(ctx, `
+		INSERT INTO current_index_stats (
+			instance_id, schemaname, relname, indexrelname, idx_scan,
+			idx_tup_read, idx_tup_fetch, index_size, is_unique, is_primary, updated_at
+		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+		ON CONFLICT(instance_id, schemaname, relname, indexrelname) DO UPDATE SET
+			idx_scan = excluded.idx_scan,
+			idx_tup_read = excluded.idx_tup_read,
+			idx_tup_fetch = excluded.idx_tup_fetch,
+			index_size = excluded.index_size,
+			is_unique = excluded.is_unique,
+			is_primary = excluded.is_primary,
+			updated_at = excluded.updated_at
+	`)
+	if err != nil {
+		return fmt.Errorf("preparing statement: %w", err)
+	}
+	defer stmt.Close()
+
+	for _, stat := range stats {
+		_, err := stmt.ExecContext(ctx,
+			instanceID, stat.SchemaName, stat.RelName, stat.IndexRelName,
+			stat.IdxScan, stat.IdxTupRead, stat.IdxTupFetch, stat.IndexSize,
+			stat.IsUnique, stat.IsPrimary, batchTime,
+		)
+		if err != nil {
+			return fmt.Errorf("upserting index stat: %w", err)
+		}
+	}
+
+	// Delete stale rows
+	_, err = tx.ExecContext(ctx, `
+		DELETE FROM current_index_stats WHERE instance_id = ? AND updated_at != ?
+	`, instanceID, batchTime)
+	if err != nil {
+		return fmt.Errorf("deleting stale index stats: %w", err)
+	}
+
+	return tx.Commit()
+}
+
+// GetCurrentIndexStats retrieves current index statistics for an instance.
+func (s *SQLiteStorage) GetCurrentIndexStats(ctx context.Context, instanceID int64) ([]models.IndexStat, error) {
+	rows, err := s.readDB.QueryContext(ctx, `
+		SELECT instance_id, schemaname, relname, indexrelname, idx_scan,
+			idx_tup_read, idx_tup_fetch, index_size, is_unique, is_primary
+		FROM current_index_stats
+		WHERE instance_id = ?
+		ORDER BY index_size DESC
+	`, instanceID)
+	if err != nil {
+		return nil, fmt.Errorf("querying current index stats: %w", err)
+	}
+	defer rows.Close()
+
+	var stats []models.IndexStat
+	for rows.Next() {
+		var stat models.IndexStat
+		err := rows.Scan(
+			&stat.SnapshotID, &stat.SchemaName, &stat.RelName, &stat.IndexRelName,
+			&stat.IdxScan, &stat.IdxTupRead, &stat.IdxTupFetch,
+			&stat.IndexSize, &stat.IsUnique, &stat.IsPrimary,
+		)
+		if err != nil {
+			return nil, fmt.Errorf("scanning index stat: %w", err)
+		}
+		stats = append(stats, stat)
+	}
+
+	return stats, rows.Err()
+}
+
+// SaveCurrentBloatStats saves or updates current bloat statistics for an instance.
+func (s *SQLiteStorage) SaveCurrentBloatStats(ctx context.Context, instanceID int64, stats []models.BloatInfo) error {
+	batchTime := time.Now().UTC().Format(time.RFC3339Nano)
+
+	tx, err := s.writeDB.BeginTx(ctx, nil)
+	if err != nil {
+		return fmt.Errorf("beginning transaction: %w", err)
+	}
+	defer tx.Rollback()
+
+	stmt, err := tx.PrepareContext(ctx, `
+		INSERT INTO current_bloat_stats (
+			instance_id, schemaname, relname, n_dead_tup, n_live_tup, bloat_percent, updated_at
+		) VALUES (?, ?, ?, ?, ?, ?, ?)
+		ON CONFLICT(instance_id, schemaname, relname) DO UPDATE SET
+			n_dead_tup = excluded.n_dead_tup,
+			n_live_tup = excluded.n_live_tup,
+			bloat_percent = excluded.bloat_percent,
+			updated_at = excluded.updated_at
+	`)
+	if err != nil {
+		return fmt.Errorf("preparing statement: %w", err)
+	}
+	defer stmt.Close()
+
+	for _, stat := range stats {
+		_, err := stmt.ExecContext(ctx,
+			instanceID, stat.SchemaName, stat.RelName,
+			stat.NDeadTup, stat.NLiveTup, stat.BloatPercent, batchTime,
+		)
+		if err != nil {
+			return fmt.Errorf("upserting bloat stat: %w", err)
+		}
+	}
+
+	// Delete stale rows
+	_, err = tx.ExecContext(ctx, `
+		DELETE FROM current_bloat_stats WHERE instance_id = ? AND updated_at != ?
+	`, instanceID, batchTime)
+	if err != nil {
+		return fmt.Errorf("deleting stale bloat stats: %w", err)
+	}
+
+	return tx.Commit()
+}
+
+// GetCurrentBloatStats retrieves current bloat statistics for an instance.
+func (s *SQLiteStorage) GetCurrentBloatStats(ctx context.Context, instanceID int64) ([]models.BloatInfo, error) {
+	rows, err := s.readDB.QueryContext(ctx, `
+		SELECT schemaname, relname, n_dead_tup, n_live_tup, bloat_percent
+		FROM current_bloat_stats
+		WHERE instance_id = ?
+		ORDER BY bloat_percent DESC
+	`, instanceID)
+	if err != nil {
+		return nil, fmt.Errorf("querying current bloat stats: %w", err)
+	}
+	defer rows.Close()
+
+	var stats []models.BloatInfo
+	for rows.Next() {
+		var stat models.BloatInfo
+		err := rows.Scan(
+			&stat.SchemaName, &stat.RelName,
+			&stat.NDeadTup, &stat.NLiveTup, &stat.BloatPercent,
+		)
+		if err != nil {
+			return nil, fmt.Errorf("scanning bloat stat: %w", err)
+		}
+		stats = append(stats, stat)
+	}
+
+	return stats, rows.Err()
 }
 
 // Ensure SQLiteStorage implements Storage interface.

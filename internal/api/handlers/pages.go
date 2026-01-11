@@ -15,16 +15,18 @@ import (
 // PageStorage defines the storage interface needed by page handlers.
 type PageStorage interface {
 	GetLatestSnapshot(ctx context.Context, instanceID int64) (*models.Snapshot, error)
-	GetQueryStats(ctx context.Context, snapshotID int64) ([]models.QueryStat, error)
 	GetSuggestionsByStatus(ctx context.Context, instanceID int64, status string) ([]models.Suggestion, error)
-	GetTableStats(ctx context.Context, snapshotID int64) ([]models.TableStat, error)
-	GetIndexStats(ctx context.Context, snapshotID int64) ([]models.IndexStat, error)
-	GetBloatStats(ctx context.Context, snapshotID int64) ([]models.BloatInfo, error)
 	GetExplainPlan(ctx context.Context, queryID int64) (*models.ExplainPlan, error)
-	// Operational stats
-	GetConnectionActivity(ctx context.Context, snapshotID int64) (*models.ConnectionActivity, error)
-	GetLongRunningQueries(ctx context.Context, snapshotID int64) ([]models.LongRunningQuery, error)
-	GetBlockedQueries(ctx context.Context, snapshotID int64) ([]models.BlockedQuery, error)
+
+	// Current state operations (for dashboard - always up-to-date)
+	GetCurrentQueryStats(ctx context.Context, instanceID int64) ([]models.QueryStat, error)
+	GetCurrentTableStats(ctx context.Context, instanceID int64) ([]models.TableStat, error)
+	GetCurrentIndexStats(ctx context.Context, instanceID int64) ([]models.IndexStat, error)
+	GetCurrentBloatStats(ctx context.Context, instanceID int64) ([]models.BloatInfo, error)
+	GetCurrentConnectionActivity(ctx context.Context, instanceID int64) (*models.ConnectionActivity, error)
+	GetCurrentLongRunningQueries(ctx context.Context, instanceID int64) ([]models.LongRunningQuery, error)
+	GetCurrentBlockedQueries(ctx context.Context, instanceID int64) ([]models.BlockedQuery, error)
+	GetCurrentDatabaseStats(ctx context.Context, instanceID int64) (*models.ExtendedDatabaseStats, *float64, error)
 }
 
 // PageHandler handles HTML page rendering.
@@ -99,50 +101,55 @@ func (h *PageHandler) Dashboard(c echo.Context) error {
 		RecentSuggestions: []DashboardSuggestion{},
 	}
 
-	// Get latest snapshot
+	// Get latest snapshot (for metadata only)
 	snapshot, err := h.storage.GetLatestSnapshot(ctx, h.instanceID)
 	if err != nil {
 		c.Logger().Errorf("failed to get latest snapshot: %v", err)
 	}
-
 	if snapshot != nil {
 		data.LastSnapshot = snapshot.CapturedAt
-		if snapshot.CacheHitRatio != nil {
-			data.CacheHitRatio = *snapshot.CacheHitRatio
+	}
+
+	// Get current database stats (always from current table)
+	_, cacheHitRatio, err := h.storage.GetCurrentDatabaseStats(ctx, h.instanceID)
+	if err != nil {
+		c.Logger().Errorf("failed to get current database stats: %v", err)
+	}
+	if cacheHitRatio != nil {
+		data.CacheHitRatio = *cacheHitRatio
+	}
+
+	// Get current query stats (always from current table)
+	stats, err := h.storage.GetCurrentQueryStats(ctx, h.instanceID)
+	if err != nil {
+		c.Logger().Errorf("failed to get current query stats: %v", err)
+	} else {
+		data.TotalQueries = int64(len(stats))
+
+		// Count slow queries (mean_exec_time > 1000ms)
+		for _, stat := range stats {
+			if stat.MeanExecTime > 1000 {
+				data.SlowQueriesCount++
+			}
 		}
 
-		// Get query stats
-		stats, err := h.storage.GetQueryStats(ctx, snapshot.ID)
-		if err != nil {
-			c.Logger().Errorf("failed to get query stats: %v", err)
-		} else {
-			data.TotalQueries = int64(len(stats))
-
-			// Count slow queries (mean_exec_time > 1000ms)
-			for _, stat := range stats {
-				if stat.MeanExecTime > 1000 {
-					data.SlowQueriesCount++
-				}
-			}
-
-			// Sort by total time and get top 5
-			sort.Slice(stats, func(i, j int) bool {
-				return stats[i].TotalExecTime > stats[j].TotalExecTime
+		// Sort by total time and get top 5
+		sort.Slice(stats, func(i, j int) bool {
+			return stats[i].TotalExecTime > stats[j].TotalExecTime
+		})
+		limit := 5
+		if len(stats) < limit {
+			limit = len(stats)
+		}
+		for i := 0; i < limit; i++ {
+			stat := stats[i]
+			data.TopQueries = append(data.TopQueries, DashboardQuery{
+				QueryID:         stat.QueryID,
+				QueryPreview:    truncateString(stat.Query, 80),
+				Calls:           stat.Calls,
+				MeanExecTimeMs:  stat.MeanExecTime,
+				TotalExecTimeMs: stat.TotalExecTime,
 			})
-			limit := 5
-			if len(stats) < limit {
-				limit = len(stats)
-			}
-			for i := 0; i < limit; i++ {
-				stat := stats[i]
-				data.TopQueries = append(data.TopQueries, DashboardQuery{
-					QueryID:         stat.QueryID,
-					QueryPreview:    truncateString(stat.Query, 80),
-					Calls:           stat.Calls,
-					MeanExecTimeMs:  stat.MeanExecTime,
-					TotalExecTimeMs: stat.TotalExecTime,
-				})
-			}
 		}
 	}
 
@@ -170,36 +177,34 @@ func (h *PageHandler) Dashboard(c echo.Context) error {
 		}
 	}
 
-	// Get operational stats (if snapshot exists)
-	if snapshot != nil {
-		// Get connection activity
-		activity, err := h.storage.GetConnectionActivity(ctx, snapshot.ID)
-		if err != nil {
-			c.Logger().Errorf("failed to get connection activity: %v", err)
-		} else {
-			data.ActivityStats = activity
-		}
+	// Get current operational stats (always from current tables)
+	// Get connection activity
+	activity, err := h.storage.GetCurrentConnectionActivity(ctx, h.instanceID)
+	if err != nil {
+		c.Logger().Errorf("failed to get current connection activity: %v", err)
+	} else {
+		data.ActivityStats = activity
+	}
 
-		// Get long-running queries count
-		longRunning, err := h.storage.GetLongRunningQueries(ctx, snapshot.ID)
-		if err != nil {
-			c.Logger().Errorf("failed to get long-running queries: %v", err)
-		} else {
-			data.LongRunningCount = len(longRunning)
-		}
+	// Get long-running queries count
+	longRunning, err := h.storage.GetCurrentLongRunningQueries(ctx, h.instanceID)
+	if err != nil {
+		c.Logger().Errorf("failed to get current long-running queries: %v", err)
+	} else {
+		data.LongRunningCount = len(longRunning)
+	}
 
-		// Get blocked queries
-		blocked, err := h.storage.GetBlockedQueries(ctx, snapshot.ID)
-		if err != nil {
-			c.Logger().Errorf("failed to get blocked queries: %v", err)
-		} else {
-			data.BlockedCount = len(blocked)
-			// Keep top 5 blocked queries for display
-			if len(blocked) > 5 {
-				blocked = blocked[:5]
-			}
-			data.BlockedQueries = blocked
+	// Get blocked queries
+	blocked, err := h.storage.GetCurrentBlockedQueries(ctx, h.instanceID)
+	if err != nil {
+		c.Logger().Errorf("failed to get current blocked queries: %v", err)
+	} else {
+		data.BlockedCount = len(blocked)
+		// Keep top 5 blocked queries for display
+		if len(blocked) > 5 {
+			blocked = blocked[:5]
 		}
+		data.BlockedQueries = blocked
 	}
 
 	return c.Render(http.StatusOK, "dashboard", data)
@@ -259,56 +264,54 @@ func (h *PageHandler) Queries(c echo.Context) error {
 		CurrentPage: page,
 	}
 
-	// Get latest snapshot
+	// Get latest snapshot (for timestamp only)
 	snapshot, err := h.storage.GetLatestSnapshot(ctx, h.instanceID)
 	if err != nil {
 		c.Logger().Errorf("failed to get latest snapshot: %v", err)
+	}
+	if snapshot != nil {
+		data.LastSnapshot = snapshot.CapturedAt
+	}
+
+	// Get current query stats (always from current table)
+	stats, err := h.storage.GetCurrentQueryStats(ctx, h.instanceID)
+	if err != nil {
+		c.Logger().Errorf("failed to get current query stats: %v", err)
 		return c.Render(http.StatusOK, "queries", data)
 	}
 
-	if snapshot != nil {
-		data.LastSnapshot = snapshot.CapturedAt
+	// Sort stats
+	sortQueryStats(stats, sortField, order == "desc")
 
-		// Get query stats
-		stats, err := h.storage.GetQueryStats(ctx, snapshot.ID)
-		if err != nil {
-			c.Logger().Errorf("failed to get query stats: %v", err)
-			return c.Render(http.StatusOK, "queries", data)
-		}
+	// Calculate pagination
+	data.Total = len(stats)
+	data.TotalPages = (data.Total + perPage - 1) / perPage
+	if data.TotalPages < 1 {
+		data.TotalPages = 1
+	}
 
-		// Sort stats
-		sortQueryStats(stats, sortField, order == "desc")
+	// Apply pagination
+	offset := (page - 1) * perPage
+	if offset >= len(stats) {
+		offset = 0
+		data.CurrentPage = 1
+	}
+	end := offset + perPage
+	if end > len(stats) {
+		end = len(stats)
+	}
 
-		// Calculate pagination
-		data.Total = len(stats)
-		data.TotalPages = (data.Total + perPage - 1) / perPage
-		if data.TotalPages < 1 {
-			data.TotalPages = 1
-		}
-
-		// Apply pagination
-		offset := (page - 1) * perPage
-		if offset >= len(stats) {
-			offset = 0
-			data.CurrentPage = 1
-		}
-		end := offset + perPage
-		if end > len(stats) {
-			end = len(stats)
-		}
-
-		// Convert to page format
-		for _, stat := range stats[offset:end] {
-			data.Queries = append(data.Queries, PageQuery{
-				QueryID:       stat.QueryID,
-				Query:         stat.Query,
-				Calls:         stat.Calls,
-				MeanExecTime:  stat.MeanExecTime,
-				TotalExecTime: stat.TotalExecTime,
-				RowsPerCall:   calculateRowsPerCall(stat.Rows, stat.Calls),
-				CacheHitRatio: calculateCacheHitRatio(stat.SharedBlksHit, stat.SharedBlksRead),
-			})
-		}
+	// Convert to page format
+	for _, stat := range stats[offset:end] {
+		data.Queries = append(data.Queries, PageQuery{
+			QueryID:       stat.QueryID,
+			Query:         stat.Query,
+			Calls:         stat.Calls,
+			MeanExecTime:  stat.MeanExecTime,
+			TotalExecTime: stat.TotalExecTime,
+			RowsPerCall:   calculateRowsPerCall(stat.Rows, stat.Calls),
+			CacheHitRatio: calculateCacheHitRatio(stat.SharedBlksHit, stat.SharedBlksRead),
+		})
 	}
 
 	return c.Render(http.StatusOK, "queries", data)
@@ -356,23 +359,19 @@ func (h *PageHandler) QueryDetail(c echo.Context) error {
 		},
 	}
 
-	// Get latest snapshot
+	// Get latest snapshot (for timestamp only)
 	snapshot, err := h.storage.GetLatestSnapshot(ctx, h.instanceID)
 	if err != nil {
 		c.Logger().Errorf("failed to get latest snapshot: %v", err)
-		return c.Redirect(http.StatusFound, "/queries")
+	}
+	if snapshot != nil {
+		data.LastSnapshot = snapshot.CapturedAt
 	}
 
-	if snapshot == nil {
-		return c.Redirect(http.StatusFound, "/queries")
-	}
-
-	data.LastSnapshot = snapshot.CapturedAt
-
-	// Get query stats
-	stats, err := h.storage.GetQueryStats(ctx, snapshot.ID)
+	// Get current query stats (always from current table)
+	stats, err := h.storage.GetCurrentQueryStats(ctx, h.instanceID)
 	if err != nil {
-		c.Logger().Errorf("failed to get query stats: %v", err)
+		c.Logger().Errorf("failed to get current query stats: %v", err)
 		return c.Redirect(http.StatusFound, "/queries")
 	}
 
@@ -477,24 +476,20 @@ func (h *PageHandler) Schema(c echo.Context) error {
 		Bloat:     []PageBloat{},
 	}
 
-	// Get latest snapshot
+	// Get latest snapshot (for timestamp only)
 	snapshot, err := h.storage.GetLatestSnapshot(ctx, h.instanceID)
 	if err != nil {
 		c.Logger().Errorf("failed to get latest snapshot: %v", err)
-		return c.Render(http.StatusOK, "schema", data)
 	}
-
-	if snapshot == nil {
-		return c.Render(http.StatusOK, "schema", data)
+	if snapshot != nil {
+		data.LastSnapshot = snapshot.CapturedAt
 	}
-
-	data.LastSnapshot = snapshot.CapturedAt
 
 	switch tab {
 	case "tables":
-		tables, err := h.storage.GetTableStats(ctx, snapshot.ID)
+		tables, err := h.storage.GetCurrentTableStats(ctx, h.instanceID)
 		if err != nil {
-			c.Logger().Errorf("failed to get table stats: %v", err)
+			c.Logger().Errorf("failed to get current table stats: %v", err)
 		} else {
 			for _, t := range tables {
 				data.Tables = append(data.Tables, PageTable{
@@ -513,9 +508,9 @@ func (h *PageHandler) Schema(c echo.Context) error {
 		}
 
 	case "indexes":
-		indexes, err := h.storage.GetIndexStats(ctx, snapshot.ID)
+		indexes, err := h.storage.GetCurrentIndexStats(ctx, h.instanceID)
 		if err != nil {
-			c.Logger().Errorf("failed to get index stats: %v", err)
+			c.Logger().Errorf("failed to get current index stats: %v", err)
 		} else {
 			for _, idx := range indexes {
 				data.Indexes = append(data.Indexes, PageIndex{
@@ -531,9 +526,9 @@ func (h *PageHandler) Schema(c echo.Context) error {
 		}
 
 	case "bloat":
-		bloat, err := h.storage.GetBloatStats(ctx, snapshot.ID)
+		bloat, err := h.storage.GetCurrentBloatStats(ctx, h.instanceID)
 		if err != nil {
-			c.Logger().Errorf("failed to get bloat stats: %v", err)
+			c.Logger().Errorf("failed to get current bloat stats: %v", err)
 		} else {
 			for _, b := range bloat {
 				data.Bloat = append(data.Bloat, PageBloat{

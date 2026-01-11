@@ -35,3 +35,6 @@ Thumbs.db
 # Generated files
 docs/
 configs/config.yaml
+
+# Local Go build cache
+.gocache/

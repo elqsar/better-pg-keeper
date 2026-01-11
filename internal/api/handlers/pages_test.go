@@ -17,22 +17,19 @@ import (
 
 // mockPageStorage implements PageStorage for testing.
 type mockPageStorage struct {
-	snapshot    *models.Snapshot
-	queryStats  []models.QueryStat
-	suggestions []models.Suggestion
-	tableStats  []models.TableStat
-	indexStats  []models.IndexStat
-	bloatStats  []models.BloatInfo
-	explainPlan *models.ExplainPlan
-	err         error
+	snapshot      *models.Snapshot
+	queryStats    []models.QueryStat
+	suggestions   []models.Suggestion
+	tableStats    []models.TableStat
+	indexStats    []models.IndexStat
+	bloatStats    []models.BloatInfo
+	explainPlan   *models.ExplainPlan
+	cacheHitRatio *float64
+	err           error
 }
 
 func (m *mockPageStorage) GetLatestSnapshot(ctx context.Context, instanceID int64) (*models.Snapshot, error) {
 	return m.snapshot, m.err
-}
-
-func (m *mockPageStorage) GetQueryStats(ctx context.Context, snapshotID int64) ([]models.QueryStat, error) {
-	return m.queryStats, m.err
 }
 
 func (m *mockPageStorage) GetSuggestionsByStatus(ctx context.Context, instanceID int64, status string) ([]models.Suggestion, error) {
@@ -46,33 +43,41 @@ func (m *mockPageStorage) GetSuggestionsByStatus(ctx context.Context, instanceID
 	return filtered, m.err
 }
 
-func (m *mockPageStorage) GetTableStats(ctx context.Context, snapshotID int64) ([]models.TableStat, error) {
-	return m.tableStats, m.err
-}
-
-func (m *mockPageStorage) GetIndexStats(ctx context.Context, snapshotID int64) ([]models.IndexStat, error) {
-	return m.indexStats, m.err
-}
-
-func (m *mockPageStorage) GetBloatStats(ctx context.Context, snapshotID int64) ([]models.BloatInfo, error) {
-	return m.bloatStats, m.err
-}
-
 func (m *mockPageStorage) GetExplainPlan(ctx context.Context, queryID int64) (*models.ExplainPlan, error) {
 	return m.explainPlan, m.err
 }
 
-// Operational stats methods
-func (m *mockPageStorage) GetConnectionActivity(ctx context.Context, snapshotID int64) (*models.ConnectionActivity, error) {
+// Current state methods (for dashboard)
+func (m *mockPageStorage) GetCurrentQueryStats(ctx context.Context, instanceID int64) ([]models.QueryStat, error) {
+	return m.queryStats, m.err
+}
+
+func (m *mockPageStorage) GetCurrentTableStats(ctx context.Context, instanceID int64) ([]models.TableStat, error) {
+	return m.tableStats, m.err
+}
+
+func (m *mockPageStorage) GetCurrentIndexStats(ctx context.Context, instanceID int64) ([]models.IndexStat, error) {
+	return m.indexStats, m.err
+}
+
+func (m *mockPageStorage) GetCurrentBloatStats(ctx context.Context, instanceID int64) ([]models.BloatInfo, error) {
+	return m.bloatStats, m.err
+}
+
+func (m *mockPageStorage) GetCurrentConnectionActivity(ctx context.Context, instanceID int64) (*models.ConnectionActivity, error) {
 	return nil, m.err
 }
 
-func (m *mockPageStorage) GetLongRunningQueries(ctx context.Context, snapshotID int64) ([]models.LongRunningQuery, error) {
+func (m *mockPageStorage) GetCurrentLongRunningQueries(ctx context.Context, instanceID int64) ([]models.LongRunningQuery, error) {
 	return nil, m.err
 }
 
-func (m *mockPageStorage) GetBlockedQueries(ctx context.Context, snapshotID int64) ([]models.BlockedQuery, error) {
+func (m *mockPageStorage) GetCurrentBlockedQueries(ctx context.Context, instanceID int64) ([]models.BlockedQuery, error) {
 	return nil, m.err
+}
+
+func (m *mockPageStorage) GetCurrentDatabaseStats(ctx context.Context, instanceID int64) (*models.ExtendedDatabaseStats, *float64, error) {
+	return nil, m.cacheHitRatio, m.err
 }
 
 // mockRenderer implements echo.Renderer for testing.
@@ -100,10 +105,10 @@ func TestDashboardPage(t *testing.T) {
 	cacheRatio := 99.5
 	storage := &mockPageStorage{
 		snapshot: &models.Snapshot{
-			ID:            1,
-			CapturedAt:    time.Now(),
-			CacheHitRatio: &cacheRatio,
+			ID:         1,
+			CapturedAt: time.Now(),
 		},
+		cacheHitRatio: &cacheRatio,
 		queryStats: []models.QueryStat{
 			{QueryID: 1, Query: "SELECT 1", Calls: 100, TotalExecTime: 1000, MeanExecTime: 10},
 			{QueryID: 2, Query: "SELECT 2", Calls: 50, TotalExecTime: 5000, MeanExecTime: 100},

@@ -20,6 +20,7 @@ This directory contains implementation tasks for PostgreSQL Analyzer (pganalyzer
 | 12 | [Main Wiring](12-main-wiring.md) | Connect all components in main.go | 01-10 |
 | 13 | [Tailwind Migration](13-tailwind-migration.md) | Migrate CSS to Tailwind, improve aesthetics | 10 |
 | 14 | [Operational Collectors](14-operational-collectors.md) | pg_stat_activity, pg_locks, extended pg_stat_database | 05, 06, 07, 10 |
+| 15 | [Current State Tables](15-current-state-tables.md) | Current state tables for dashboard real-time display | 03, 05, 10 |
 
 ## Dependency Graph
 
@@ -88,6 +89,7 @@ Update this section as tasks are completed:
 - [x] 12 - Main Wiring (completed 2026-01-11)
 - [x] 13 - Tailwind Migration (completed 2026-01-11)
 - [x] 14 - Operational Collectors (completed 2026-01-11)
+- [x] 15 - Current State Tables (completed 2026-01-11)
 
 ## Quick Commands
 
@@ -851,4 +853,35 @@ task
 - Test fixes across all packages:
   - Updated mock implementations in `scheduler_test.go`, `collector_test.go`, `analyzer_test.go`, `pages_test.go`
   - Updated migration count assertion in `storage_test.go`
+  - All tests passing
+
+## What Was Completed in Task 15
+
+- New migration `internal/storage/sqlite/migrations/011_create_current_state_tables.sql`:
+  - 10 current state tables for real-time dashboard display
+  - Single-row tables: `current_connection_activity`, `current_lock_stats`, `current_database_stats`
+  - Multi-row tables: `current_long_running_queries`, `current_idle_in_transaction`, `current_blocked_queries`, `current_query_stats`, `current_table_stats`, `current_index_stats`, `current_bloat_stats`
+  - All tables use instance_id as primary key/foreign key (not snapshot_id)
+  - UPSERT pattern for single-row tables, UPSERT + stale cleanup for multi-row tables
+- Storage interface extended in `internal/storage/sqlite/storage.go`:
+  - 20 new methods (10 Save + 10 Get) for current state operations
+  - Save methods use UPSERT (INSERT ON CONFLICT DO UPDATE)
+  - Multi-row Save methods delete stale entries after UPSERT batch
+- Dual-write pattern implemented in all collectors:
+  - `internal/collector/activity/activity.go` - connection activity, long-running, idle-in-tx
+  - `internal/collector/locks/locks.go` - lock stats, blocked queries
+  - `internal/collector/query/stats.go` - query statistics
+  - `internal/collector/resource/database.go` - extended database stats with cache hit ratio
+  - `internal/collector/resource/tables.go` - table statistics
+  - `internal/collector/resource/indexes.go` - index statistics
+  - `internal/collector/schema/bloat.go` - bloat statistics
+  - Each collector writes to both historical (snapshot) and current (instance) tables
+- Dashboard handler updated in `internal/api/handlers/pages.go`:
+  - `PageStorage` interface uses current state methods instead of snapshot-based
+  - Dashboard, Queries, QueryDetail, Schema pages all read from current tables
+  - Snapshot only used for metadata (timestamp) display
+  - Dashboard always shows latest data regardless of collector timing
+- Test updates:
+  - Updated mock implementations in `scheduler_test.go`, `pages_test.go`
+  - Updated migration count to 11 in `storage_test.go`
   - All tests passing

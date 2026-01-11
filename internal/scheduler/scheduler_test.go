@@ -245,6 +245,68 @@ func (m *mockStorage) PurgeOldSnapshots(ctx context.Context, retention time.Dura
 	return m.purgedCount, nil
 }
 
+// Current state operations (for dashboard)
+func (m *mockStorage) SaveCurrentConnectionActivity(ctx context.Context, instanceID int64, activity *models.ConnectionActivity) error {
+	return nil
+}
+func (m *mockStorage) GetCurrentConnectionActivity(ctx context.Context, instanceID int64) (*models.ConnectionActivity, error) {
+	return nil, nil
+}
+func (m *mockStorage) SaveCurrentLockStats(ctx context.Context, instanceID int64, stats *models.LockStats) error {
+	return nil
+}
+func (m *mockStorage) GetCurrentLockStats(ctx context.Context, instanceID int64) (*models.LockStats, error) {
+	return nil, nil
+}
+func (m *mockStorage) SaveCurrentDatabaseStats(ctx context.Context, instanceID int64, stats *models.ExtendedDatabaseStats, cacheHitRatio *float64) error {
+	return nil
+}
+func (m *mockStorage) GetCurrentDatabaseStats(ctx context.Context, instanceID int64) (*models.ExtendedDatabaseStats, *float64, error) {
+	return nil, nil, nil
+}
+func (m *mockStorage) SaveCurrentLongRunningQueries(ctx context.Context, instanceID int64, queries []models.LongRunningQuery) error {
+	return nil
+}
+func (m *mockStorage) GetCurrentLongRunningQueries(ctx context.Context, instanceID int64) ([]models.LongRunningQuery, error) {
+	return nil, nil
+}
+func (m *mockStorage) SaveCurrentIdleInTransaction(ctx context.Context, instanceID int64, idle []models.IdleInTransaction) error {
+	return nil
+}
+func (m *mockStorage) GetCurrentIdleInTransaction(ctx context.Context, instanceID int64) ([]models.IdleInTransaction, error) {
+	return nil, nil
+}
+func (m *mockStorage) SaveCurrentBlockedQueries(ctx context.Context, instanceID int64, queries []models.BlockedQuery) error {
+	return nil
+}
+func (m *mockStorage) GetCurrentBlockedQueries(ctx context.Context, instanceID int64) ([]models.BlockedQuery, error) {
+	return nil, nil
+}
+func (m *mockStorage) SaveCurrentQueryStats(ctx context.Context, instanceID int64, stats []models.QueryStat) error {
+	return nil
+}
+func (m *mockStorage) GetCurrentQueryStats(ctx context.Context, instanceID int64) ([]models.QueryStat, error) {
+	return nil, nil
+}
+func (m *mockStorage) SaveCurrentTableStats(ctx context.Context, instanceID int64, stats []models.TableStat) error {
+	return nil
+}
+func (m *mockStorage) GetCurrentTableStats(ctx context.Context, instanceID int64) ([]models.TableStat, error) {
+	return nil, nil
+}
+func (m *mockStorage) SaveCurrentIndexStats(ctx context.Context, instanceID int64, stats []models.IndexStat) error {
+	return nil
+}
+func (m *mockStorage) GetCurrentIndexStats(ctx context.Context, instanceID int64) ([]models.IndexStat, error) {
+	return nil, nil
+}
+func (m *mockStorage) SaveCurrentBloatStats(ctx context.Context, instanceID int64, stats []models.BloatInfo) error {
+	return nil
+}
+func (m *mockStorage) GetCurrentBloatStats(ctx context.Context, instanceID int64) ([]models.BloatInfo, error) {
+	return nil, nil
+}
+
 // mockPGClient implements the postgres.Client interface for testing.
 type mockPGClient struct {
 	connected    bool

@@ -65,9 +65,13 @@ func (c *LocksCollector) Collect(ctx context.Context, snapshotID int64) error {
 	c.Logf("lock stats: %d total, %d granted, %d waiting",
 		stats.TotalLocks, stats.GrantedLocks, stats.WaitingLocks)
 
-	// Store lock statistics
+	// Store lock statistics (historical)
 	if err := c.Storage().SaveLockStats(ctx, snapshotID, stats); err != nil {
 		return err
+	}
+	// Store lock statistics (current - for dashboard)
+	if err := c.Storage().SaveCurrentLockStats(ctx, c.InstanceID(), stats); err != nil {
+		c.Logf("warning: failed to save current lock stats: %v", err)
 	}
 
 	// Fetch and store blocked queries
@@ -82,8 +86,13 @@ func (c *LocksCollector) Collect(ctx context.Context, snapshotID int64) error {
 					b.BlockedPID, b.WaitDuration, b.LockMode, b.Relation, b.BlockingPID)
 			}
 		}
+		// Historical
 		if err := c.Storage().SaveBlockedQueries(ctx, snapshotID, blocked); err != nil {
 			return err
+		}
+		// Current (for dashboard)
+		if err := c.Storage().SaveCurrentBlockedQueries(ctx, c.InstanceID(), blocked); err != nil {
+			c.Logf("warning: failed to save current blocked queries: %v", err)
 		}
 	}
 
