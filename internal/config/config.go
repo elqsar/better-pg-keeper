@@ -10,6 +10,21 @@ type Config struct {
 	Scheduler  SchedulerConfig  `yaml:"scheduler"`
 	Server     ServerConfig     `yaml:"server"`
 	Thresholds ThresholdsConfig `yaml:"thresholds"`
+	Logging    LoggingConfig    `yaml:"logging"`
+	Metrics    MetricsConfig    `yaml:"metrics"`
+}
+
+// LoggingConfig contains logging settings.
+type LoggingConfig struct {
+	Level    string `yaml:"level"`    // debug, info, warn, error
+	Format   string `yaml:"format"`   // text, json
+	Requests bool   `yaml:"requests"` // Log HTTP requests
+}
+
+// MetricsConfig contains Prometheus metrics settings.
+type MetricsConfig struct {
+	Enabled bool   `yaml:"enabled"` // Enable metrics endpoint
+	Path    string `yaml:"path"`    // Metrics endpoint path (default: /metrics)
 }
 
 // PostgresConfig contains PostgreSQL connection settings.
@@ -128,6 +143,15 @@ func Default() Config {
 			UnusedIndexDays:      30,
 			SeqScanRatioWarning:  0.5,
 			MinTableSizeForIndex: 10000,
+		},
+		Logging: LoggingConfig{
+			Level:    "info",
+			Format:   "text",
+			Requests: true,
+		},
+		Metrics: MetricsConfig{
+			Enabled: false,
+			Path:    "/metrics",
 		},
 	}
 }

@@ -1,0 +1,129 @@
+version: '3.8'
+
+services:
+  pganalyzer:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      args:
+        VERSION: ${VERSION:-dev}
+        COMMIT: ${COMMIT:-unknown}
+        BUILD_DATE: ${BUILD_DATE:-unknown}
+    image: pganalyzer:${VERSION:-latest}
+    container_name: pganalyzer
+    restart: unless-stopped
+    ports:
+      - "${PGANALYZER_PORT:-8080}:8080"
+    volumes:
+      # Persistent data directory for SQLite database
+      - pganalyzer-data:/app/data
+      # Mount config file (create from config.example.yaml)
+      - ./configs/config.yaml:/app/configs/config.yaml:ro
+    environment:
+      # Config file path (default)
+      - PGANALYZER_CONFIG=/app/configs/config.yaml
+      # PostgreSQL connection (can override config file settings)
+      - POSTGRES_HOST=${POSTGRES_HOST:-}
+      - POSTGRES_PORT=${POSTGRES_PORT:-}
+      - POSTGRES_DATABASE=${POSTGRES_DATABASE:-}
+      - POSTGRES_USER=${POSTGRES_USER:-}
+      - POSTGRES_PASSWORD=${POSTGRES_PASSWORD:-}
+      - POSTGRES_SSLMODE=${POSTGRES_SSLMODE:-}
+      # Server settings
+      - SERVER_HOST=${SERVER_HOST:-}
+      - SERVER_PORT=${SERVER_PORT:-}
+      - SERVER_USERNAME=${SERVER_USERNAME:-}
+      - SERVER_PASSWORD=${SERVER_PASSWORD:-}
+    healthcheck:
+      test: ["CMD", "wget", "--no-verbose", "--tries=1", "--spider", "http://localhost:8080/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 10s
+    networks:
+      - pganalyzer-network
+    depends_on:
+      postgres:
+        condition: service_healthy
+    profiles:
+      - full
+
+  # Standalone pganalyzer (without test postgres)
+  pganalyzer-standalone:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      args:
+        VERSION: ${VERSION:-dev}
+        COMMIT: ${COMMIT:-unknown}
+        BUILD_DATE: ${BUILD_DATE:-unknown}
+    image: pganalyzer:${VERSION:-latest}
+    container_name: pganalyzer
+    restart: unless-stopped
+    ports:
+      - "${PGANALYZER_PORT:-8080}:8080"
+    volumes:
+      - pganalyzer-data:/app/data
+      - ./configs/config.yaml:/app/configs/config.yaml:ro
+    environment:
+      - PGANALYZER_CONFIG=/app/configs/config.yaml
+      - POSTGRES_HOST=${POSTGRES_HOST:-}
+      - POSTGRES_PORT=${POSTGRES_PORT:-}
+      - POSTGRES_DATABASE=${POSTGRES_DATABASE:-}
+      - POSTGRES_USER=${POSTGRES_USER:-}
+      - POSTGRES_PASSWORD=${POSTGRES_PASSWORD:-}
+      - POSTGRES_SSLMODE=${POSTGRES_SSLMODE:-}
+    healthcheck:
+      test: ["CMD", "wget", "--no-verbose", "--tries=1", "--spider", "http://localhost:8080/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 10s
+    networks:
+      - pganalyzer-network
+    profiles:
+      - standalone
+
+  # PostgreSQL with pg_stat_statements for testing/development
+  postgres:
+    image: postgres:16-alpine
+    container_name: pganalyzer-postgres
+    restart: unless-stopped
+    ports:
+      - "${POSTGRES_EXTERNAL_PORT:-5432}:5432"
+    volumes:
+      # Init script to enable pg_stat_statements (runs on each container start)
+      - ./scripts/init-postgres.sql:/docker-entrypoint-initdb.d/init.sql:ro
+    tmpfs:
+      - /var/lib/postgresql/data
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-postgres}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-postgres}
+      POSTGRES_DB: ${POSTGRES_DATABASE:-testdb}
+    command:
+      - "postgres"
+      - "-c"
+      - "shared_preload_libraries=pg_stat_statements"
+      - "-c"
+      - "pg_stat_statements.track=all"
+      - "-c"
+      - "pg_stat_statements.max=10000"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-postgres} -d ${POSTGRES_DATABASE:-testdb}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+    networks:
+      - pganalyzer-network
+    profiles:
+      - full
+      - postgres-only
+
+volumes:
+  pganalyzer-data:
+    driver: local
+
+networks:
+  pganalyzer-network:
+    driver: bridge

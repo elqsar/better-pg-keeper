@@ -87,18 +87,76 @@ tasks:
   docker:build:
     desc: Build Docker image
     cmds:
-      - docker build -t {{.BINARY_NAME}}:{{.VERSION}} .
+      - docker build
+          --build-arg VERSION={{.VERSION}}
+          --build-arg COMMIT={{.COMMIT}}
+          --build-arg BUILD_DATE={{.BUILD_DATE}}
+          -t {{.BINARY_NAME}}:{{.VERSION}}
+          -t {{.BINARY_NAME}}:latest .
 
   docker:run:
-    desc: Run Docker container
+    desc: Run Docker container (standalone)
     cmds:
-      - docker run --rm -p 8080:8080 -v $(pwd)/data:/app/data {{.BINARY_NAME}}:{{.VERSION}}
+      - docker run --rm -p 8080:8080
+          -v $(pwd)/data:/app/data
+          -v $(pwd)/configs/config.yaml:/app/configs/config.yaml:ro
+          {{.BINARY_NAME}}:{{.VERSION}}
+
+  docker:up:
+    desc: Start all services with docker-compose (pganalyzer + postgres)
+    cmds:
+      - docker compose --profile full up -d
+
+  docker:up:standalone:
+    desc: Start pganalyzer only (connects to external postgres)
+    cmds:
+      - docker compose --profile standalone up -d
+
+  docker:up:postgres:
+    desc: Start only PostgreSQL for development
+    cmds:
+      - docker compose --profile postgres-only up -d
+
+  docker:down:
+    desc: Stop all docker-compose services
+    cmds:
+      - docker compose --profile full --profile standalone --profile postgres-only down
+
+  docker:logs:
+    desc: View docker-compose logs
+    cmds:
+      - docker compose logs -f {{.CLI_ARGS}}
+
+  docker:clean:
+    desc: Remove docker volumes and images
+    cmds:
+      - docker compose --profile full --profile standalone --profile postgres-only down -v
+      - docker rmi {{.BINARY_NAME}}:{{.VERSION}} {{.BINARY_NAME}}:latest 2>/dev/null || true
 
   install:tools:
     desc: Install development tools
     cmds:
       - go install github.com/golangci/golangci-lint/cmd/golangci-lint@latest
       - go install golang.org/x/tools/cmd/goimports@latest
+
+  test:integration:
+    desc: Run integration tests (requires PostgreSQL)
+    cmds:
+      - go test -v -tags=integration ./tests/integration/...
+
+  test:integration:docker:
+    desc: Run integration tests with docker postgres
+    cmds:
+      - task: docker:up:postgres
+      - defer: { task: docker:down }
+      - sleep 5  # Wait for postgres to be ready
+      - POSTGRES_HOST=localhost POSTGRES_PORT=5432 POSTGRES_USER=postgres POSTGRES_PASSWORD=postgres POSTGRES_DATABASE=testdb go test -v -tags=integration ./tests/integration/...
+
+  migrate:
+    desc: Run database migrations manually
+    deps: [build]
+    cmds:
+      - "{{.BUILD_DIR}}/{{.BINARY_NAME}} --migrate-only {{.CLI_ARGS}}"
 
   all:
     desc: Run fmt, lint, test, and build

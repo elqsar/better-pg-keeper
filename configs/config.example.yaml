@@ -1,66 +1,250 @@
-# pganalyzer Configuration
+# =============================================================================
+# PGAnalyzer Configuration
+# =============================================================================
 # Copy this file to config.yaml and adjust values as needed.
-# Environment variables can be used with ${VAR_NAME} syntax.
+#
+# Environment variables can be used with ${VAR_NAME} or ${VAR_NAME:-default} syntax.
+# Example: password: ${PG_PASSWORD:-mydefault}
+# =============================================================================
 
-# PostgreSQL connection settings
+# -----------------------------------------------------------------------------
+# PostgreSQL Connection Settings
+# -----------------------------------------------------------------------------
+# Connection to the PostgreSQL database you want to monitor.
+# The user must have access to pg_stat_statements and pg_stat_* views.
 postgres:
-  # Required: PostgreSQL host
-  host: localhost
-  # Port (default: 5432)
-  port: 5432
-  # Required: Database name to monitor
-  database: mydb
-  # Required: Username with access to pg_stat_statements
-  user: pganalyzer
-  # Password - use environment variable for security
-  password: ${PG_PASSWORD}
-  # SSL mode: disable, allow, prefer, require (default: prefer)
-  sslmode: prefer
+  # Required: PostgreSQL host address
+  # Examples: localhost, 192.168.1.100, my-postgres.example.com
+  host: ${POSTGRES_HOST:-localhost}
 
-# SQLite storage settings
+  # PostgreSQL port (default: 5432)
+  port: ${POSTGRES_PORT:-5432}
+
+  # Required: Database name to monitor
+  # This is the primary database that will be analyzed
+  database: ${POSTGRES_DATABASE:-mydb}
+
+  # Required: Username with access to pg_stat_statements
+  # Recommended: Create a dedicated monitoring user (see docs/postgresql-setup.md)
+  user: ${POSTGRES_USER:-pganalyzer}
+
+  # Password for PostgreSQL user
+  # IMPORTANT: Use environment variable in production!
+  password: ${POSTGRES_PASSWORD}
+
+  # SSL mode for connection security
+  # Options: disable, allow, prefer, require, verify-ca, verify-full
+  # Default: prefer (use SSL if available)
+  sslmode: ${POSTGRES_SSLMODE:-prefer}
+
+  # Connection pool settings (optional, advanced)
+  # pool:
+  #   max_conns: 5           # Maximum connections in pool
+  #   min_conns: 1           # Minimum connections to maintain
+  #   max_conn_lifetime: 1h  # Max lifetime of a connection
+  #   max_conn_idle_time: 30m # Max idle time before closing
+
+# -----------------------------------------------------------------------------
+# Storage Settings
+# -----------------------------------------------------------------------------
+# PGAnalyzer stores collected data in a local SQLite database.
 storage:
   # Path to SQLite database file
-  path: ./data/pganalyzer.db
-  # Data retention settings
+  # The directory will be created if it doesn't exist
+  path: ${STORAGE_PATH:-./data/pganalyzer.db}
+
+  # Data retention policies
+  # Older data is automatically purged during maintenance runs
   retention:
-    # How long to keep snapshots (default: 168h = 7 days)
+    # How long to keep snapshots
+    # Format: Go duration (e.g., 168h = 7 days, 720h = 30 days)
+    # Default: 168h (7 days)
     snapshots: 168h
-    # How long to keep query stats (default: 720h = 30 days)
+
+    # How long to keep detailed query statistics
+    # Default: 720h (30 days)
     query_stats: 720h
 
-# Collection scheduler settings
+# -----------------------------------------------------------------------------
+# Scheduler Settings
+# -----------------------------------------------------------------------------
+# Control how often data is collected and analyzed.
 scheduler:
-  # Interval for taking full snapshots (default: 5m)
+  # Interval for taking full snapshots
+  # Snapshots include: query stats, table stats, index stats, cache ratio
+  # Default: 5m (5 minutes)
+  # Recommended: 5m for active databases, 15m for less active ones
   snapshot_interval: 5m
-  # Interval for running analysis and generating suggestions (default: 15m)
+
+  # Interval for running analysis and generating suggestions
+  # Analysis includes: slow query detection, index recommendations, bloat checks
+  # Default: 15m (15 minutes)
+  # Should be >= snapshot_interval
   analysis_interval: 15m
 
-# HTTP server settings
-server:
-  # Bind address (default: 0.0.0.0)
-  host: 0.0.0.0
-  # Port to listen on (default: 8080)
-  port: 8080
-  # Authentication settings
-  auth:
-    # Enable/disable basic auth (default: true)
-    enabled: true
-    # Username for basic auth
-    username: admin
-    # Password - use environment variable for security
-    password: ${PGANALYZER_PASSWORD}
+  # Maintenance run interval (cleanup, purging old data)
+  # Default: 24h (daily)
+  # maintenance_interval: 24h
 
-# Analysis thresholds for issue detection
+# -----------------------------------------------------------------------------
+# HTTP Server Settings
+# -----------------------------------------------------------------------------
+# Configuration for the web UI and REST API server.
+server:
+  # Bind address
+  # 0.0.0.0 = listen on all interfaces
+  # 127.0.0.1 = localhost only (more secure)
+  host: ${SERVER_HOST:-0.0.0.0}
+
+  # Port to listen on
+  # Default: 8080
+  port: ${SERVER_PORT:-8080}
+
+  # Basic authentication settings
+  auth:
+    # Enable/disable basic auth
+    # Default: true
+    # IMPORTANT: Disable only for local development!
+    enabled: ${SERVER_AUTH_ENABLED:-true}
+
+    # Username for basic auth
+    username: ${SERVER_USERNAME:-admin}
+
+    # Password for basic auth
+    # IMPORTANT: Change this in production and use env variable!
+    password: ${SERVER_PASSWORD:-admin}
+
+  # Request timeout (optional)
+  # timeout: 30s
+
+  # CORS settings (optional, for API access from other domains)
+  # cors:
+  #   allowed_origins:
+  #     - https://example.com
+  #   allowed_methods:
+  #     - GET
+  #     - POST
+
+# -----------------------------------------------------------------------------
+# Analysis Thresholds
+# -----------------------------------------------------------------------------
+# Customize thresholds for issue detection and suggestion generation.
+# Adjust based on your workload and performance requirements.
 thresholds:
-  # Queries with mean execution time above this (ms) are flagged as slow
+  # Slow Query Detection
+  # -------------------
+  # Queries with mean execution time above this threshold are flagged as slow
+  # Unit: milliseconds
+  # Default: 1000 (1 second)
+  # Tip: Set lower for OLTP workloads, higher for analytics
   slow_query_ms: 1000
-  # Cache hit ratio below this triggers a warning (0.0-1.0)
+
+  # Cache Hit Ratio Warning
+  # ----------------------
+  # Database cache hit ratio below this triggers a warning
+  # Range: 0.0 to 1.0 (e.g., 0.95 = 95%)
+  # Default: 0.95 (95%)
+  # Tip: Healthy databases typically have >99% hit ratio
   cache_hit_ratio_warning: 0.95
-  # Tables with bloat percentage above this trigger a warning
+
+  # Table Bloat Detection
+  # --------------------
+  # Tables with dead tuple percentage above this are flagged for VACUUM
+  # Range: 0 to 100 (percentage)
+  # Default: 20 (20%)
+  # Tip: High bloat wastes disk space and slows queries
   bloat_percent_warning: 20
-  # Indexes unused for this many days are flagged (excludes PK/unique)
+
+  # Unused Index Detection
+  # ---------------------
+  # Indexes with zero scans are flagged (excludes primary keys and unique constraints)
+  # These indexes consume disk space and slow down writes
+  # Note: Value in days is for future reference, currently checks for idx_scan=0
   unused_index_days: 30
-  # Sequential scan ratio above this triggers index suggestion
+
+  # Missing Index Suggestions
+  # ------------------------
+  # Tables with sequential scan ratio above this are candidates for indexing
+  # Range: 0.0 to 1.0
+  # Default: 0.5 (50% sequential scans)
   seq_scan_ratio_warning: 0.5
-  # Minimum table size (rows) before suggesting indexes
+
+  # Minimum table size (in rows) before suggesting indexes
+  # Small tables don't benefit much from indexes
+  # Default: 10000
   min_table_size_for_index: 10000
+
+  # Stale Vacuum Detection (optional)
+  # ---------------------------------
+  # Days since last vacuum before flagging
+  # Default: 7 days
+  # stale_vacuum_days: 7
+
+  # Stale Analyze Detection (optional)
+  # ----------------------------------
+  # Days since last analyze before flagging
+  # Default: 7 days
+  # stale_analyze_days: 7
+
+# -----------------------------------------------------------------------------
+# Logging (optional)
+# -----------------------------------------------------------------------------
+# Configure application logging behavior.
+# logging:
+#   # Log level: debug, info, warn, error
+#   level: info
+#   # Output format: text, json
+#   format: text
+#   # Include request logging
+#   requests: true
+
+# -----------------------------------------------------------------------------
+# Metrics (optional)
+# -----------------------------------------------------------------------------
+# Prometheus metrics endpoint configuration.
+# metrics:
+#   # Enable metrics endpoint
+#   enabled: false
+#   # Metrics path
+#   path: /metrics
+
+# =============================================================================
+# Example Configurations
+# =============================================================================
+#
+# Development (minimal security):
+# -------------------------------
+# postgres:
+#   host: localhost
+#   database: mydb
+#   user: postgres
+#   password: postgres
+#   sslmode: disable
+# server:
+#   auth:
+#     enabled: false
+#
+# Production (with SSL and proper auth):
+# -------------------------------------
+# postgres:
+#   host: ${PG_HOST}
+#   database: ${PG_DATABASE}
+#   user: ${PG_USER}
+#   password: ${PG_PASSWORD}
+#   sslmode: require
+# server:
+#   host: 127.0.0.1  # Behind reverse proxy
+#   auth:
+#     enabled: true
+#     username: ${ADMIN_USER}
+#     password: ${ADMIN_PASSWORD}
+#
+# High-frequency monitoring:
+# -------------------------
+# scheduler:
+#   snapshot_interval: 1m
+#   analysis_interval: 5m
+# thresholds:
+#   slow_query_ms: 500  # More sensitive to slow queries
+#
+# =============================================================================

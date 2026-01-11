@@ -18,6 +18,8 @@ import (
 	"github.com/user/pganalyzer/internal/collector/resource"
 	"github.com/user/pganalyzer/internal/collector/schema"
 	"github.com/user/pganalyzer/internal/config"
+	"github.com/user/pganalyzer/internal/logging"
+	"github.com/user/pganalyzer/internal/metrics"
 	"github.com/user/pganalyzer/internal/models"
 	"github.com/user/pganalyzer/internal/postgres"
 	"github.com/user/pganalyzer/internal/scheduler"
@@ -49,11 +51,10 @@ func main() {
 		os.Exit(0)
 	}
 
-	// Setup structured logging
-	logger := slog.New(slog.NewTextHandler(os.Stdout, &slog.HandlerOptions{
+	// Setup initial logger (will be reconfigured after loading config)
+	slog.SetDefault(slog.New(slog.NewTextHandler(os.Stdout, &slog.HandlerOptions{
 		Level: slog.LevelInfo,
-	}))
-	slog.SetDefault(logger)
+	})))
 
 	slog.Info("starting pganalyzer",
 		"version", version,
@@ -90,10 +91,18 @@ func run(ctx context.Context, configPath string) error {
 	if err != nil {
 		return fmt.Errorf("loading config: %w", err)
 	}
+
+	// Setup structured logging based on configuration
+	logging.Setup(cfg.Logging)
 	slog.Info("configuration loaded",
 		"postgres_host", cfg.Postgres.Host,
 		"postgres_db", cfg.Postgres.Database,
+		"log_level", cfg.Logging.Level,
+		"log_format", cfg.Logging.Format,
 	)
+
+	// Record build info for metrics
+	metrics.RecordBuildInfo(version, commit, buildDate)
 
 	// Initialize storage
 	storage, err := sqlite.NewStorage(cfg.Storage.Path)
@@ -215,12 +224,14 @@ func run(ctx context.Context, configPath string) error {
 
 	// Create API server
 	server, err := api.NewServer(api.ServerConfig{
-		Config:     &cfg.Server,
-		Storage:    storage,
-		PGClient:   pgClient,
-		Scheduler:  sched,
-		InstanceID: instanceID,
-		Version:    version,
+		Config:        &cfg.Server,
+		LoggingConfig: &cfg.Logging,
+		MetricsConfig: &cfg.Metrics,
+		Storage:       storage,
+		PGClient:      pgClient,
+		Scheduler:     sched,
+		InstanceID:    instanceID,
+		Version:       version,
 	})
 	if err != nil {
 		return fmt.Errorf("creating api server: %w", err)

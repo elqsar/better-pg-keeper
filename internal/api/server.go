@@ -22,25 +22,28 @@ import (
 
 // Server represents the HTTP API server.
 type Server struct {
-	echo       *echo.Echo
-	config     *config.ServerConfig
-	storage    sqlite.Storage
-	pgClient   postgres.Client
-	scheduler  *scheduler.Scheduler
-	instanceID int64
-	logger     *log.Logger
-	version    string
+	echo          *echo.Echo
+	config        *config.ServerConfig
+	metricsConfig *config.MetricsConfig
+	storage       sqlite.Storage
+	pgClient      postgres.Client
+	scheduler     *scheduler.Scheduler
+	instanceID    int64
+	logger        *log.Logger
+	version       string
 }
 
 // ServerConfig holds configuration for creating a Server.
 type ServerConfig struct {
-	Config     *config.ServerConfig
-	Storage    sqlite.Storage
-	PGClient   postgres.Client
-	Scheduler  *scheduler.Scheduler
-	InstanceID int64
-	Logger     *log.Logger
-	Version    string
+	Config        *config.ServerConfig
+	LoggingConfig *config.LoggingConfig
+	MetricsConfig *config.MetricsConfig
+	Storage       sqlite.Storage
+	PGClient      postgres.Client
+	Scheduler     *scheduler.Scheduler
+	InstanceID    int64
+	Logger        *log.Logger
+	Version       string
 }
 
 // NewServer creates a new API server.
@@ -87,9 +90,16 @@ func NewServer(cfg ServerConfig) (*Server, error) {
 	// Configure middleware
 	e.Use(echomiddleware.Recover())
 	e.Use(echomiddleware.RequestID())
-	e.Use(echomiddleware.LoggerWithConfig(echomiddleware.LoggerConfig{
-		Format: "${time_rfc3339} ${method} ${uri} ${status} ${latency_human}\n",
-	}))
+
+	// Use custom structured request logger if configured, otherwise use echo's logger
+	if cfg.LoggingConfig != nil && cfg.LoggingConfig.Requests {
+		e.Use(middleware.RequestLoggerWithConfig(true, "/health"))
+	} else {
+		e.Use(echomiddleware.LoggerWithConfig(echomiddleware.LoggerConfig{
+			Format: "${time_rfc3339} ${method} ${uri} ${status} ${latency_human}\n",
+		}))
+	}
+
 	e.Use(echomiddleware.CORSWithConfig(echomiddleware.CORSConfig{
 		AllowOrigins: []string{"*"},
 		AllowMethods: []string{http.MethodGet, http.MethodPost, http.MethodPut, http.MethodDelete, http.MethodOptions},
@@ -105,14 +115,15 @@ func NewServer(cfg ServerConfig) (*Server, error) {
 	}
 
 	server := &Server{
-		echo:       e,
-		config:     cfg.Config,
-		storage:    cfg.Storage,
-		pgClient:   cfg.PGClient,
-		scheduler:  cfg.Scheduler,
-		instanceID: cfg.InstanceID,
-		logger:     logger,
-		version:    version,
+		echo:          e,
+		config:        cfg.Config,
+		metricsConfig: cfg.MetricsConfig,
+		storage:       cfg.Storage,
+		pgClient:      cfg.PGClient,
+		scheduler:     cfg.Scheduler,
+		instanceID:    cfg.InstanceID,
+		logger:        logger,
+		version:       version,
 	}
 
 	// Register routes
@@ -134,6 +145,15 @@ func (s *Server) registerRoutes() {
 
 	// Health endpoint (no auth required - handled in middleware)
 	s.echo.GET("/health", healthHandler.GetHealth)
+
+	// Metrics endpoint (if enabled)
+	if s.metricsConfig != nil && s.metricsConfig.Enabled {
+		path := s.metricsConfig.Path
+		if path == "" {
+			path = "/metrics"
+		}
+		s.echo.GET(path, handlers.MetricsHandler())
+	}
 
 	// Web UI routes (HTML pages)
 	s.echo.GET("/", pageHandler.Dashboard)

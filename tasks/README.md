@@ -80,7 +80,7 @@ Update this section as tasks are completed:
 - [x] 08 - Scheduler (completed 2026-01-10)
 - [x] 09 - API Server (completed 2026-01-10)
 - [x] 10 - Web UI (completed 2026-01-10)
-- [ ] 11 - Production Readiness
+- [x] 11 - Production Readiness (completed 2026-01-11)
 - [x] 12 - Main Wiring (completed 2026-01-11)
 
 ## Quick Commands
@@ -634,3 +634,84 @@ task
 - Structured logging with slog at each initialization step
 - Error handling with wrapped errors for debugging
 - Created task documentation in `tasks/12-main-wiring.md`
+
+## What Was Completed in Task 11
+
+- Dockerfile with multi-stage build:
+  - `golang:1.22-alpine` for builder stage
+  - `alpine:3.19` for runtime stage
+  - CGO_ENABLED=0 for pure Go build (modernc.org/sqlite)
+  - Non-root user (`pganalyzer`) for security
+  - Volume for persistent data directory
+  - Health check configuration
+  - Exposes port 8080
+- Docker Compose configuration in `docker-compose.yaml`:
+  - Three profiles: `full`, `standalone`, `postgres-only`
+  - `pganalyzer` service with health check
+  - `postgres` service with pg_stat_statements enabled
+  - Volume mounts for data and config
+  - Environment variable passthrough
+- Updated `Taskfile.yaml` with docker tasks:
+  - `docker:build` - Build Docker image with version info
+  - `docker:run` - Run standalone container
+  - `docker:up` - Start full stack with docker-compose
+  - `docker:up:standalone` - Start pganalyzer only
+  - `docker:up:postgres` - Start test PostgreSQL only
+  - `docker:down`, `docker:logs`, `docker:clean`
+  - `test:integration`, `test:integration:docker` for integration tests
+- Integration tests in `tests/integration/`:
+  - `setup_test.go` - Test environment setup with real PostgreSQL
+  - `collection_test.go` - Full collection cycle tests
+  - `analysis_test.go` - Analysis and suggestion generation tests
+  - `api_test.go` - API endpoints end-to-end tests
+  - Tests use build tag `//go:build integration`
+- README.md with comprehensive documentation:
+  - Project description and features list
+  - Quick start guide with prerequisites
+  - Configuration reference
+  - Docker deployment instructions
+  - API endpoint documentation
+  - Web UI pages overview
+  - Development commands
+  - Architecture overview
+  - Analysis rules table
+- Enhanced `configs/config.example.yaml`:
+  - Detailed comments for all options
+  - Environment variable placeholders
+  - Example configurations for different scenarios
+  - Section headers and documentation
+- PostgreSQL setup documentation in `docs/postgresql-setup.md`:
+  - Enable pg_stat_statements extension
+  - Create monitoring user with minimal privileges
+  - Grant necessary permissions
+  - Network configuration (pg_hba.conf)
+  - Verification steps
+  - Docker and cloud provider setup
+  - Troubleshooting guide
+- Structured logging implementation:
+  - `LoggingConfig` in config with level, format, requests options
+  - `internal/logging/logging.go` - Setup helper with JSON/text format
+  - `internal/api/middleware/request_logger.go` - HTTP request logging
+  - Configurable log levels (debug, info, warn, error)
+  - JSON format option for production
+- Prometheus metrics endpoint (optional):
+  - `MetricsConfig` in config with enabled flag and path
+  - `internal/metrics/metrics.go` - Prometheus metrics:
+    - Collection duration histogram
+    - Snapshot count counter
+    - Analysis duration and issue counts
+    - Database metrics (cache ratio, query count)
+    - HTTP request metrics
+    - Build info metric
+  - `GET /metrics` endpoint (no auth required)
+- Security review completed:
+  - No secrets logged (verified password fields not in logs)
+  - SQL injection prevention (parameterized queries only)
+  - Write query protection in Explain function
+  - Input validation in API handlers
+  - No database modifications (read-only operations)
+  - Auth middleware skips health and metrics endpoints
+- Helper script `scripts/init-postgres.sql`:
+  - Creates pg_stat_statements extension
+  - Sample tables for testing
+  - Generates initial query activity

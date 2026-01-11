@@ -17,7 +17,7 @@ type errorResponse struct {
 
 // BasicAuth creates a Basic Authentication middleware.
 // It validates credentials against the provided config.
-// The health endpoint is excluded from authentication.
+// The health and metrics endpoints are excluded from authentication.
 func BasicAuth(authConfig config.AuthConfig) echo.MiddlewareFunc {
 	return func(next echo.HandlerFunc) echo.HandlerFunc {
 		return func(c echo.Context) error {
@@ -26,8 +26,9 @@ func BasicAuth(authConfig config.AuthConfig) echo.MiddlewareFunc {
 				return next(c)
 			}
 
-			// Skip auth for health endpoint
-			if c.Path() == "/health" {
+			// Skip auth for health and metrics endpoints
+			path := c.Path()
+			if path == "/health" || path == "/metrics" {
 				return next(c)
 			}
 
