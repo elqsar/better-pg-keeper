@@ -1,48 +1,58 @@
 {{define "schema"}}
 <!DOCTYPE html>
-<html lang="en">
+<html lang="en" class="h-full">
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>{{.Title}} - PG Analyzer</title>
     <link rel="stylesheet" href="/static/style.css">
 </head>
-<body>
-    <header class="header">
-        <div class="header-content">
-            <div class="logo">
-                <a href="/">PG Analyzer</a>
+<body class="min-h-full flex flex-col bg-gray-50">
+    <header class="bg-white border-b border-gray-200 sticky top-0 z-50">
+        <div class="max-w-7xl mx-auto px-4 lg:px-6">
+            <div class="flex items-center justify-between h-16">
+                <a href="/" class="text-xl font-semibold text-gray-900 hover:text-primary transition-colors">
+                    PG Analyzer
+                </a>
+                <nav class="flex items-center gap-1">
+                    <a href="/" class="nav-link-inactive">Dashboard</a>
+                    <a href="/queries" class="nav-link-inactive">Queries</a>
+                    <a href="/schema" class="nav-link-active">Schema</a>
+                    <a href="/suggestions" class="nav-link-inactive">Suggestions</a>
+                </nav>
             </div>
-            <nav class="nav">
-                <a href="/" class="nav-link">Dashboard</a>
-                <a href="/queries" class="nav-link">Queries</a>
-                <a href="/schema" class="nav-link active">Schema</a>
-                <a href="/suggestions" class="nav-link">Suggestions</a>
-            </nav>
         </div>
     </header>
 
-    <main class="main">
-        <div class="container">
-            <div class="page-header">
-                <h1 class="page-title">Schema</h1>
-                <p class="page-subtitle">Database schema analysis</p>
+    <main class="flex-1 py-8 px-4 lg:px-6">
+        <div class="max-w-7xl mx-auto">
+            <div class="mb-8">
+                <h1 class="text-2xl font-bold text-gray-900">Schema</h1>
+                <p class="mt-1 text-gray-500">Database schema analysis</p>
             </div>
 
             <!-- Tabs -->
-            <div class="tabs">
-                <a href="/schema?tab=tables" class="tab{{if eq .ActiveTab "tables"}} active{{end}}">Tables</a>
-                <a href="/schema?tab=indexes" class="tab{{if eq .ActiveTab "indexes"}} active{{end}}">Indexes</a>
-                <a href="/schema?tab=bloat" class="tab{{if eq .ActiveTab "bloat"}} active{{end}}">Bloat</a>
+            <div class="border-b border-gray-200 mb-6">
+                <nav class="flex gap-4" aria-label="Tabs">
+                    <a href="/schema?tab=tables" class="{{if eq .ActiveTab "tables"}}tab-active{{else}}tab-inactive{{end}}">
+                        Tables
+                    </a>
+                    <a href="/schema?tab=indexes" class="{{if eq .ActiveTab "indexes"}}tab-active{{else}}tab-inactive{{end}}">
+                        Indexes
+                    </a>
+                    <a href="/schema?tab=bloat" class="{{if eq .ActiveTab "bloat"}}tab-active{{else}}tab-inactive{{end}}">
+                        Bloat
+                    </a>
+                </nav>
             </div>
 
-            <div class="card">
-                <div class="card-body">
+            <div class="card overflow-hidden">
+                <div class="p-6">
                     {{if eq .ActiveTab "tables"}}
                     <!-- Tables Tab -->
                     {{if .Tables}}
                     <div class="table-container">
-                        <table>
+                        <table class="table">
                             <thead>
                                 <tr>
                                     <th>Table</th>
@@ -55,21 +65,21 @@
                                     <th>Last Analyze</th>
                                 </tr>
                             </thead>
-                            <tbody>
+                            <tbody class="divide-y divide-gray-100">
                                 {{range .Tables}}
                                 <tr>
                                     <td>
-                                        <strong>{{.SchemaName}}.{{.RelName}}</strong>
+                                        <span class="font-medium text-gray-900">{{.SchemaName}}.{{.RelName}}</span>
                                     </td>
-                                    <td class="text-right">{{formatBytes .TableSize}}</td>
-                                    <td class="text-right">{{formatNumber .NLiveTup}}</td>
-                                    <td class="text-right{{if gt .NDeadTup 10000}} severity-warning{{end}}">{{formatNumber .NDeadTup}}</td>
-                                    <td class="text-right">{{formatNumber .SeqScan}}</td>
-                                    <td class="text-right">{{formatNumber .IdxScan}}</td>
-                                    <td class="text-muted">
-                                        {{if .LastVacuum}}{{formatTimeShort .LastVacuum}}{{else if .LastAutovacuum}}{{formatTimeShort .LastAutovacuum}} (auto){{else}}Never{{end}}
+                                    <td class="text-right tabular-nums">{{formatBytes .TableSize}}</td>
+                                    <td class="text-right tabular-nums">{{formatNumber .NLiveTup}}</td>
+                                    <td class="text-right tabular-nums {{if gt .NDeadTup 10000}}text-severity-warning font-medium{{end}}">{{formatNumber .NDeadTup}}</td>
+                                    <td class="text-right tabular-nums">{{formatNumber .SeqScan}}</td>
+                                    <td class="text-right tabular-nums">{{formatNumber .IdxScan}}</td>
+                                    <td class="text-gray-500 text-sm">
+                                        {{if .LastVacuum}}{{formatTimeShort .LastVacuum}}{{else if .LastAutovacuum}}{{formatTimeShort .LastAutovacuum}} <span class="text-xs text-gray-400">(auto)</span>{{else}}Never{{end}}
                                     </td>
-                                    <td class="text-muted">
+                                    <td class="text-gray-500 text-sm">
                                         {{if .LastAnalyze}}{{formatTimeShort .LastAnalyze}}{{else}}Never{{end}}
                                     </td>
                                 </tr>
@@ -79,8 +89,11 @@
                     </div>
                     {{else}}
                     <div class="empty-state">
+                        <svg class="empty-state-icon" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M4 7v10c0 2.21 3.582 4 8 4s8-1.79 8-4V7M4 7c0 2.21 3.582 4 8 4s8-1.79 8-4M4 7c0-2.21 3.582-4 8-4s8 1.79 8 4"/>
+                        </svg>
                         <div class="empty-state-title">No tables found</div>
-                        <p>Waiting for first snapshot</p>
+                        <p class="empty-state-description">Waiting for first snapshot</p>
                     </div>
                     {{end}}
 
@@ -88,7 +101,7 @@
                     <!-- Indexes Tab -->
                     {{if .Indexes}}
                     <div class="table-container">
-                        <table>
+                        <table class="table">
                             <thead>
                                 <tr>
                                     <th>Index</th>
@@ -99,27 +112,27 @@
                                     <th class="text-center">Status</th>
                                 </tr>
                             </thead>
-                            <tbody>
+                            <tbody class="divide-y divide-gray-100">
                                 {{range .Indexes}}
                                 <tr>
-                                    <td><strong>{{.IndexRelName}}</strong></td>
-                                    <td class="text-muted">{{.SchemaName}}.{{.RelName}}</td>
-                                    <td class="text-right">{{formatNumber .IdxScan}}</td>
-                                    <td class="text-right">{{formatBytes .IndexSize}}</td>
+                                    <td><span class="font-medium text-gray-900">{{.IndexRelName}}</span></td>
+                                    <td class="text-gray-500 font-mono text-sm">{{.SchemaName}}.{{.RelName}}</td>
+                                    <td class="text-right tabular-nums">{{formatNumber .IdxScan}}</td>
+                                    <td class="text-right tabular-nums">{{formatBytes .IndexSize}}</td>
                                     <td class="text-center">
                                         {{if .IsPrimary}}
-                                        <span class="status-badge status-active">PK</span>
+                                        <span class="badge-success">PK</span>
                                         {{else if .IsUnique}}
-                                        <span class="status-badge status-active">UQ</span>
+                                        <span class="badge-info">UQ</span>
                                         {{else}}
-                                        <span class="text-muted">Idx</span>
+                                        <span class="text-gray-400 text-sm">Idx</span>
                                         {{end}}
                                     </td>
                                     <td class="text-center">
                                         {{if and (eq .IdxScan 0) (not .IsPrimary) (not .IsUnique)}}
-                                        <span class="severity-badge severity-warning">Unused</span>
+                                        <span class="badge-warning">Unused</span>
                                         {{else}}
-                                        <span class="text-muted">Active</span>
+                                        <span class="text-gray-400 text-sm">Active</span>
                                         {{end}}
                                     </td>
                                 </tr>
@@ -129,8 +142,11 @@
                     </div>
                     {{else}}
                     <div class="empty-state">
+                        <svg class="empty-state-icon" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M9 5H7a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2V7a2 2 0 00-2-2h-2M9 5a2 2 0 002 2h2a2 2 0 002-2M9 5a2 2 0 012-2h2a2 2 0 012 2m-3 7h3m-3 4h3m-6-4h.01M9 16h.01"/>
+                        </svg>
                         <div class="empty-state-title">No indexes found</div>
-                        <p>Waiting for first snapshot</p>
+                        <p class="empty-state-description">Waiting for first snapshot</p>
                     </div>
                     {{end}}
 
@@ -138,7 +154,7 @@
                     <!-- Bloat Tab -->
                     {{if .Bloat}}
                     <div class="table-container">
-                        <table>
+                        <table class="table">
                             <thead>
                                 <tr>
                                     <th>Table</th>
@@ -148,24 +164,24 @@
                                     <th>Recommendation</th>
                                 </tr>
                             </thead>
-                            <tbody>
+                            <tbody class="divide-y divide-gray-100">
                                 {{range .Bloat}}
                                 <tr>
-                                    <td><strong>{{.SchemaName}}.{{.RelName}}</strong></td>
-                                    <td class="text-right">{{formatNumber .NLiveTup}}</td>
-                                    <td class="text-right">{{formatNumber .NDeadTup}}</td>
-                                    <td class="text-right">
-                                        <span class="{{if gt .BloatPercent 50.0}}severity-critical{{else if gt .BloatPercent 20.0}}severity-warning{{else}}text-muted{{end}}">
+                                    <td><span class="font-medium text-gray-900">{{.SchemaName}}.{{.RelName}}</span></td>
+                                    <td class="text-right tabular-nums">{{formatNumber .NLiveTup}}</td>
+                                    <td class="text-right tabular-nums">{{formatNumber .NDeadTup}}</td>
+                                    <td class="text-right tabular-nums">
+                                        <span class="{{if gt .BloatPercent 50.0}}text-severity-critical font-medium{{else if gt .BloatPercent 20.0}}text-severity-warning font-medium{{else}}text-gray-500{{end}}">
                                             {{formatPercent .BloatPercent}}
                                         </span>
                                     </td>
                                     <td>
                                         {{if gt .BloatPercent 50.0}}
-                                        <code>VACUUM FULL {{.SchemaName}}.{{.RelName}};</code>
+                                        <code class="text-sm bg-gray-100 px-2 py-1 rounded font-mono">VACUUM FULL {{.SchemaName}}.{{.RelName}};</code>
                                         {{else if gt .BloatPercent 20.0}}
-                                        <code>VACUUM {{.SchemaName}}.{{.RelName}};</code>
+                                        <code class="text-sm bg-gray-100 px-2 py-1 rounded font-mono">VACUUM {{.SchemaName}}.{{.RelName}};</code>
                                         {{else}}
-                                        <span class="text-muted">No action needed</span>
+                                        <span class="text-gray-400 text-sm">No action needed</span>
                                         {{end}}
                                     </td>
                                 </tr>
@@ -175,8 +191,11 @@
                     </div>
                     {{else}}
                     <div class="empty-state">
+                        <svg class="empty-state-icon" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z"/>
+                        </svg>
                         <div class="empty-state-title">No bloated tables</div>
-                        <p>All tables have acceptable dead tuple ratios</p>
+                        <p class="empty-state-description">All tables have acceptable dead tuple ratios</p>
                     </div>
                     {{end}}
 
@@ -186,11 +205,11 @@
         </div>
     </main>
 
-    <footer class="footer">
-        <div class="footer-content">
+    <footer class="bg-white border-t border-gray-200 py-4 px-4 lg:px-6">
+        <div class="max-w-7xl mx-auto flex items-center gap-4 text-sm text-gray-500">
             <span>PG Analyzer {{.Version}}</span>
             {{if not .LastSnapshot.IsZero}}
-            <span class="separator">|</span>
+            <span class="text-gray-300">|</span>
             <span>Last snapshot: {{formatTime .LastSnapshot}}</span>
             {{end}}
         </div>

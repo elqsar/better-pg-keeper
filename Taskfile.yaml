@@ -17,8 +17,36 @@ tasks:
     cmds:
       - task --list-all
 
+  css:
+    desc: Build CSS with Tailwind
+    cmds:
+      - ./scripts/build-css.sh
+    sources:
+      - internal/web/templates/**/*.html
+      - internal/web/tailwind/**/*
+    generates:
+      - internal/web/static/style.css
+
+  css:watch:
+    desc: Watch and rebuild CSS on changes
+    cmds:
+      - |
+        ./bin/tailwindcss \
+          -c internal/web/tailwind/tailwind.config.js \
+          -i internal/web/tailwind/input.css \
+          -o internal/web/static/style.css \
+          --watch
+
+  css:install:
+    desc: Download Tailwind CLI binary
+    cmds:
+      - ./scripts/build-css.sh
+    status:
+      - test -f ./bin/tailwindcss
+
   build:
     desc: Build the application
+    deps: [css]
     cmds:
       - mkdir -p {{.BUILD_DIR}}
       - go build -ldflags "{{.LDFLAGS}}" -o {{.BUILD_DIR}}/{{.BINARY_NAME}} ./cmd/pganalyzer

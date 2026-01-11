@@ -1,131 +1,146 @@
 {{define "query_detail"}}
 <!DOCTYPE html>
-<html lang="en">
+<html lang="en" class="h-full">
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>{{.Title}} - PG Analyzer</title>
     <link rel="stylesheet" href="/static/style.css">
 </head>
-<body>
-    <header class="header">
-        <div class="header-content">
-            <div class="logo">
-                <a href="/">PG Analyzer</a>
+<body class="min-h-full flex flex-col bg-gray-50">
+    <header class="bg-white border-b border-gray-200 sticky top-0 z-50">
+        <div class="max-w-7xl mx-auto px-4 lg:px-6">
+            <div class="flex items-center justify-between h-16">
+                <a href="/" class="text-xl font-semibold text-gray-900 hover:text-primary transition-colors">
+                    PG Analyzer
+                </a>
+                <nav class="flex items-center gap-1">
+                    <a href="/" class="nav-link-inactive">Dashboard</a>
+                    <a href="/queries" class="nav-link-active">Queries</a>
+                    <a href="/schema" class="nav-link-inactive">Schema</a>
+                    <a href="/suggestions" class="nav-link-inactive">Suggestions</a>
+                </nav>
             </div>
-            <nav class="nav">
-                <a href="/" class="nav-link">Dashboard</a>
-                <a href="/queries" class="nav-link active">Queries</a>
-                <a href="/schema" class="nav-link">Schema</a>
-                <a href="/suggestions" class="nav-link">Suggestions</a>
-            </nav>
         </div>
     </header>
 
-    <main class="main">
-        <div class="container">
-            <div class="page-header">
-                <h1 class="page-title">Query Details</h1>
-                <p class="page-subtitle">Query ID: {{.Query.QueryID}}</p>
+    <main class="flex-1 py-8 px-4 lg:px-6">
+        <div class="max-w-7xl mx-auto">
+            <div class="mb-8">
+                <h1 class="text-2xl font-bold text-gray-900">Query Details</h1>
+                <p class="mt-1 text-gray-500 font-mono">Query ID: {{.Query.QueryID}}</p>
             </div>
 
-            <div class="grid-2 mb-4">
+            <div class="grid grid-cols-1 lg:grid-cols-2 gap-6 mb-6">
                 <!-- Stats Card -->
-                <div class="card">
-                    <div class="card-header">Execution Statistics</div>
-                    <div class="card-body">
-                        <table>
-                            <tr>
-                                <td class="text-muted">Total Calls</td>
-                                <td class="text-right"><strong>{{formatNumber .Query.Calls}}</strong></td>
-                            </tr>
-                            <tr>
-                                <td class="text-muted">Mean Execution Time</td>
-                                <td class="text-right"><strong>{{formatDuration .Query.MeanExecTime}}</strong></td>
-                            </tr>
-                            <tr>
-                                <td class="text-muted">Total Execution Time</td>
-                                <td class="text-right"><strong>{{formatDuration .Query.TotalExecTime}}</strong></td>
-                            </tr>
-                            <tr>
-                                <td class="text-muted">Min Execution Time</td>
-                                <td class="text-right">{{formatDuration .Query.MinExecTime}}</td>
-                            </tr>
-                            <tr>
-                                <td class="text-muted">Max Execution Time</td>
-                                <td class="text-right">{{formatDuration .Query.MaxExecTime}}</td>
-                            </tr>
-                            <tr>
-                                <td class="text-muted">Total Rows</td>
-                                <td class="text-right">{{formatNumber .Query.Rows}}</td>
-                            </tr>
-                            <tr>
-                                <td class="text-muted">Rows per Call</td>
-                                <td class="text-right">{{printf "%.1f" .Query.RowsPerCall}}</td>
-                            </tr>
+                <div class="card overflow-hidden">
+                    <div class="px-6 py-4 border-b border-gray-200 bg-gray-50">
+                        <h2 class="font-semibold text-gray-900">Execution Statistics</h2>
+                    </div>
+                    <div class="p-6">
+                        <table class="w-full">
+                            <tbody class="divide-y divide-gray-100">
+                                <tr>
+                                    <td class="py-3 text-gray-500">Total Calls</td>
+                                    <td class="py-3 text-right font-semibold text-gray-900 tabular-nums">{{formatNumber .Query.Calls}}</td>
+                                </tr>
+                                <tr>
+                                    <td class="py-3 text-gray-500">Mean Execution Time</td>
+                                    <td class="py-3 text-right font-semibold text-gray-900 tabular-nums">{{formatDuration .Query.MeanExecTime}}</td>
+                                </tr>
+                                <tr>
+                                    <td class="py-3 text-gray-500">Total Execution Time</td>
+                                    <td class="py-3 text-right font-semibold text-gray-900 tabular-nums">{{formatDuration .Query.TotalExecTime}}</td>
+                                </tr>
+                                <tr>
+                                    <td class="py-3 text-gray-500">Min Execution Time</td>
+                                    <td class="py-3 text-right text-gray-700 tabular-nums">{{formatDuration .Query.MinExecTime}}</td>
+                                </tr>
+                                <tr>
+                                    <td class="py-3 text-gray-500">Max Execution Time</td>
+                                    <td class="py-3 text-right text-gray-700 tabular-nums">{{formatDuration .Query.MaxExecTime}}</td>
+                                </tr>
+                                <tr>
+                                    <td class="py-3 text-gray-500">Total Rows</td>
+                                    <td class="py-3 text-right text-gray-700 tabular-nums">{{formatNumber .Query.Rows}}</td>
+                                </tr>
+                                <tr>
+                                    <td class="py-3 text-gray-500">Rows per Call</td>
+                                    <td class="py-3 text-right text-gray-700 tabular-nums">{{printf "%.1f" .Query.RowsPerCall}}</td>
+                                </tr>
+                            </tbody>
                         </table>
                     </div>
                 </div>
 
                 <!-- Cache Stats Card -->
-                <div class="card">
-                    <div class="card-header">Cache Statistics</div>
-                    <div class="card-body">
-                        <table>
-                            <tr>
-                                <td class="text-muted">Cache Hit Ratio</td>
-                                <td class="text-right">
-                                    <strong class="{{cacheRatioClass .Query.CacheHitRatio}}">{{formatPercent .Query.CacheHitRatio}}</strong>
-                                </td>
-                            </tr>
-                            <tr>
-                                <td class="text-muted">Shared Blocks Hit</td>
-                                <td class="text-right">{{formatNumber .Query.SharedBlksHit}}</td>
-                            </tr>
-                            <tr>
-                                <td class="text-muted">Shared Blocks Read</td>
-                                <td class="text-right">{{formatNumber .Query.SharedBlksRead}}</td>
-                            </tr>
-                            {{if gt .Query.Plans 0}}
-                            <tr>
-                                <td class="text-muted">Plans</td>
-                                <td class="text-right">{{formatNumber .Query.Plans}}</td>
-                            </tr>
-                            <tr>
-                                <td class="text-muted">Total Plan Time</td>
-                                <td class="text-right">{{formatDuration .Query.TotalPlanTime}}</td>
-                            </tr>
-                            {{end}}
+                <div class="card overflow-hidden">
+                    <div class="px-6 py-4 border-b border-gray-200 bg-gray-50">
+                        <h2 class="font-semibold text-gray-900">Cache Statistics</h2>
+                    </div>
+                    <div class="p-6">
+                        <table class="w-full">
+                            <tbody class="divide-y divide-gray-100">
+                                <tr>
+                                    <td class="py-3 text-gray-500">Cache Hit Ratio</td>
+                                    <td class="py-3 text-right">
+                                        <span class="font-semibold tabular-nums {{cacheRatioClass .Query.CacheHitRatio}}">{{formatPercent .Query.CacheHitRatio}}</span>
+                                    </td>
+                                </tr>
+                                <tr>
+                                    <td class="py-3 text-gray-500">Shared Blocks Hit</td>
+                                    <td class="py-3 text-right text-gray-700 tabular-nums">{{formatNumber .Query.SharedBlksHit}}</td>
+                                </tr>
+                                <tr>
+                                    <td class="py-3 text-gray-500">Shared Blocks Read</td>
+                                    <td class="py-3 text-right text-gray-700 tabular-nums">{{formatNumber .Query.SharedBlksRead}}</td>
+                                </tr>
+                                {{if gt .Query.Plans 0}}
+                                <tr>
+                                    <td class="py-3 text-gray-500">Plans</td>
+                                    <td class="py-3 text-right text-gray-700 tabular-nums">{{formatNumber .Query.Plans}}</td>
+                                </tr>
+                                <tr>
+                                    <td class="py-3 text-gray-500">Total Plan Time</td>
+                                    <td class="py-3 text-right text-gray-700 tabular-nums">{{formatDuration .Query.TotalPlanTime}}</td>
+                                </tr>
+                                {{end}}
+                            </tbody>
                         </table>
                     </div>
                 </div>
             </div>
 
             <!-- Query Text -->
-            <div class="card mb-4">
-                <div class="card-header">Query Text</div>
-                <div class="card-body">
-                    <pre class="query-full">{{.Query.Query}}</pre>
+            <div class="card overflow-hidden mb-6">
+                <div class="px-6 py-4 border-b border-gray-200 bg-gray-50">
+                    <h2 class="font-semibold text-gray-900">Query Text</h2>
+                </div>
+                <div class="p-6">
+                    <pre class="code-block whitespace-pre-wrap">{{.Query.Query}}</pre>
                 </div>
             </div>
 
             <!-- EXPLAIN Plan -->
-            <div class="card mb-4">
-                <div class="card-header">
-                    EXPLAIN Plan
-                    <button class="btn btn-sm btn-primary" style="float: right;" onclick="refreshExplain()" id="explain-btn">
+            <div class="card overflow-hidden mb-6">
+                <div class="px-6 py-4 border-b border-gray-200 bg-gray-50 flex items-center justify-between">
+                    <h2 class="font-semibold text-gray-900">EXPLAIN Plan</h2>
+                    <button class="btn-primary btn-sm" onclick="refreshExplain()" id="explain-btn">
                         {{if .ExplainPlan}}Refresh{{else}}Generate{{end}}
                     </button>
                 </div>
-                <div class="card-body">
+                <div class="p-6">
                     <div id="explain-content">
                         {{if .ExplainPlan}}
-                        <pre class="explain-plan">{{.ExplainPlan.PlanText}}</pre>
-                        <p class="text-muted mt-2">Captured: {{formatTime .ExplainPlan.CapturedAt}}</p>
+                        <pre class="code-block whitespace-pre-wrap">{{.ExplainPlan.PlanText}}</pre>
+                        <p class="text-gray-500 text-sm mt-4">Captured: {{formatTime .ExplainPlan.CapturedAt}}</p>
                         {{else}}
                         <div class="empty-state">
+                            <svg class="empty-state-icon" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M9 17v-2m3 2v-4m3 4v-6m2 10H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z"/>
+                            </svg>
                             <div class="empty-state-title">No EXPLAIN plan available</div>
-                            <p>Click "Generate" to create an EXPLAIN plan for this query</p>
+                            <p class="empty-state-description">Click "Generate" to create an EXPLAIN plan for this query</p>
                         </div>
                         {{end}}
                     </div>
@@ -133,15 +148,20 @@
             </div>
 
             <!-- Back link -->
-            <a href="/queries" class="btn btn-secondary">Back to Queries</a>
+            <a href="/queries" class="btn-secondary">
+                <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M10 19l-7-7m0 0l7-7m-7 7h18"/>
+                </svg>
+                Back to Queries
+            </a>
         </div>
     </main>
 
-    <footer class="footer">
-        <div class="footer-content">
+    <footer class="bg-white border-t border-gray-200 py-4 px-4 lg:px-6">
+        <div class="max-w-7xl mx-auto flex items-center gap-4 text-sm text-gray-500">
             <span>PG Analyzer {{.Version}}</span>
             {{if not .LastSnapshot.IsZero}}
-            <span class="separator">|</span>
+            <span class="text-gray-300">|</span>
             <span>Last snapshot: {{formatTime .LastSnapshot}}</span>
             {{end}}
         </div>
@@ -153,7 +173,7 @@
         const content = document.getElementById('explain-content');
 
         btn.disabled = true;
-        btn.innerHTML = '<span class="loading"></span> Loading...';
+        btn.innerHTML = '<div class="spinner h-4 w-4 inline-block mr-2"></div> Loading...';
 
         fetch('/api/v1/queries/{{.Query.QueryID}}/explain', {
             method: 'POST'
@@ -164,16 +184,16 @@
             btn.innerHTML = 'Refresh';
 
             if (data.error) {
-                content.innerHTML = '<div class="severity-critical">Error: ' + escapeHtml(data.error) + '</div>';
+                content.innerHTML = '<div class="text-severity-critical p-4 bg-severity-critical-bg rounded-lg">Error: ' + escapeHtml(data.error) + '</div>';
             } else {
-                content.innerHTML = '<pre class="explain-plan">' + escapeHtml(data.plan_text) + '</pre>' +
-                    '<p class="text-muted mt-2">Captured: just now</p>';
+                content.innerHTML = '<pre class="code-block whitespace-pre-wrap">' + escapeHtml(data.plan_text) + '</pre>' +
+                    '<p class="text-gray-500 text-sm mt-4">Captured: just now</p>';
             }
         })
         .catch(error => {
             btn.disabled = false;
             btn.innerHTML = 'Refresh';
-            content.innerHTML = '<div class="severity-critical">Failed to load EXPLAIN plan</div>';
+            content.innerHTML = '<div class="text-severity-critical p-4 bg-severity-critical-bg rounded-lg">Failed to load EXPLAIN plan</div>';
         });
     }
 

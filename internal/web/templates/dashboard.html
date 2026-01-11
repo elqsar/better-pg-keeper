@@ -1,74 +1,78 @@
 {{define "dashboard"}}
 <!DOCTYPE html>
-<html lang="en">
+<html lang="en" class="h-full">
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>{{.Title}} - PG Analyzer</title>
     <link rel="stylesheet" href="/static/style.css">
 </head>
-<body>
-    <header class="header">
-        <div class="header-content">
-            <div class="logo">
-                <a href="/">PG Analyzer</a>
+<body class="min-h-full flex flex-col bg-gray-50">
+    <header class="bg-white border-b border-gray-200 sticky top-0 z-50">
+        <div class="max-w-7xl mx-auto px-4 lg:px-6">
+            <div class="flex items-center justify-between h-16">
+                <a href="/" class="text-xl font-semibold text-gray-900 hover:text-primary transition-colors">
+                    PG Analyzer
+                </a>
+                <nav class="flex items-center gap-1">
+                    <a href="/" class="nav-link-active">Dashboard</a>
+                    <a href="/queries" class="nav-link-inactive">Queries</a>
+                    <a href="/schema" class="nav-link-inactive">Schema</a>
+                    <a href="/suggestions" class="nav-link-inactive">Suggestions</a>
+                </nav>
             </div>
-            <nav class="nav">
-                <a href="/" class="nav-link active">Dashboard</a>
-                <a href="/queries" class="nav-link">Queries</a>
-                <a href="/schema" class="nav-link">Schema</a>
-                <a href="/suggestions" class="nav-link">Suggestions</a>
-            </nav>
         </div>
     </header>
 
-    <main class="main">
-        <div class="container">
-            <div class="page-header">
-                <h1 class="page-title">Dashboard</h1>
-                <p class="page-subtitle">PostgreSQL performance overview</p>
+    <main class="flex-1 py-8 px-4 lg:px-6">
+        <div class="max-w-7xl mx-auto">
+            <div class="mb-8">
+                <h1 class="text-2xl font-bold text-gray-900">Dashboard</h1>
+                <p class="mt-1 text-gray-500">PostgreSQL performance overview</p>
             </div>
 
             <!-- Stats Cards -->
-            <div class="stats-grid">
+            <div class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-6 mb-8">
                 <div class="stat-card">
                     <div class="stat-label">Cache Hit Ratio</div>
                     {{if .CacheHitRatio}}
                     <div class="stat-value {{cacheRatioClass .CacheHitRatio}}">{{formatPercent .CacheHitRatio}}</div>
                     <div class="stat-hint">Target: &gt;99%</div>
                     {{else}}
-                    <div class="stat-value text-muted">N/A</div>
+                    <div class="stat-value text-gray-400">N/A</div>
                     <div class="stat-hint">No data available</div>
                     {{end}}
                 </div>
                 <div class="stat-card">
                     <div class="stat-label">Total Queries</div>
-                    <div class="stat-value">{{formatNumber .TotalQueries}}</div>
+                    <div class="stat-value text-gray-900">{{formatNumber .TotalQueries}}</div>
                     <div class="stat-hint">Tracked in pg_stat_statements</div>
                 </div>
                 <div class="stat-card">
                     <div class="stat-label">Slow Queries</div>
-                    <div class="stat-value{{if gt .SlowQueriesCount 0}} severity-warning{{end}}">{{.SlowQueriesCount}}</div>
+                    <div class="stat-value {{if gt .SlowQueriesCount 0}}text-severity-warning{{else}}text-gray-900{{end}}">{{.SlowQueriesCount}}</div>
                     <div class="stat-hint">Mean exec time &gt;1s</div>
                 </div>
                 <div class="stat-card">
                     <div class="stat-label">Active Suggestions</div>
-                    <div class="stat-value{{if gt .ActiveSuggestions 0}} severity-warning{{end}}">{{.ActiveSuggestions}}</div>
-                    <div class="stat-hint"><a href="/suggestions">View all</a></div>
+                    <div class="stat-value {{if gt .ActiveSuggestions 0}}text-severity-warning{{else}}text-gray-900{{end}}">{{.ActiveSuggestions}}</div>
+                    <div class="stat-hint"><a href="/suggestions" class="text-primary hover:text-primary-hover">View all</a></div>
                 </div>
             </div>
 
-            <div class="grid-2">
+            <div class="grid grid-cols-1 lg:grid-cols-2 gap-6">
                 <!-- Top Queries -->
-                <div class="card">
-                    <div class="card-header">
-                        Top Queries by Total Time
-                        <a href="/queries?sort=total_time" class="btn btn-sm btn-secondary" style="float: right;">View All</a>
+                <div class="card overflow-hidden">
+                    <div class="px-6 py-4 border-b border-gray-200 flex items-center justify-between">
+                        <h2 class="font-semibold text-gray-900">Top Queries by Total Time</h2>
+                        <a href="/queries?sort=total_time" class="text-sm text-primary hover:text-primary-hover font-medium">
+                            View All
+                        </a>
                     </div>
-                    <div class="card-body">
+                    <div class="p-6">
                         {{if .TopQueries}}
                         <div class="table-container">
-                            <table>
+                            <table class="table">
                                 <thead>
                                     <tr>
                                         <th>Query</th>
@@ -77,13 +81,13 @@
                                         <th class="text-right">Total Time</th>
                                     </tr>
                                 </thead>
-                                <tbody>
+                                <tbody class="divide-y divide-gray-100">
                                     {{range .TopQueries}}
                                     <tr>
-                                        <td class="query-text">{{truncate .QueryPreview 60}}</td>
-                                        <td class="text-right">{{formatNumber .Calls}}</td>
-                                        <td class="text-right">{{formatDuration .MeanExecTimeMs}}</td>
-                                        <td class="text-right">{{formatDuration .TotalExecTimeMs}}</td>
+                                        <td class="query-text max-w-xs truncate">{{truncate .QueryPreview 60}}</td>
+                                        <td class="text-right tabular-nums">{{formatNumber .Calls}}</td>
+                                        <td class="text-right tabular-nums">{{formatDuration .MeanExecTimeMs}}</td>
+                                        <td class="text-right tabular-nums">{{formatDuration .TotalExecTimeMs}}</td>
                                     </tr>
                                     {{end}}
                                 </tbody>
@@ -91,41 +95,47 @@
                         </div>
                         {{else}}
                         <div class="empty-state">
+                            <svg class="empty-state-icon" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M9 5H7a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2V7a2 2 0 00-2-2h-2M9 5a2 2 0 002 2h2a2 2 0 002-2M9 5a2 2 0 012-2h2a2 2 0 012 2"/>
+                            </svg>
                             <div class="empty-state-title">No query data</div>
-                            <p>Waiting for first snapshot</p>
+                            <p class="empty-state-description">Waiting for first snapshot</p>
                         </div>
                         {{end}}
                     </div>
                 </div>
 
                 <!-- Recent Suggestions -->
-                <div class="card">
-                    <div class="card-header">
-                        Recent Suggestions
-                        <a href="/suggestions" class="btn btn-sm btn-secondary" style="float: right;">View All</a>
+                <div class="card overflow-hidden">
+                    <div class="px-6 py-4 border-b border-gray-200 flex items-center justify-between">
+                        <h2 class="font-semibold text-gray-900">Recent Suggestions</h2>
+                        <a href="/suggestions" class="text-sm text-primary hover:text-primary-hover font-medium">
+                            View All
+                        </a>
                     </div>
-                    <div class="card-body">
+                    <div class="p-6">
                         {{if .RecentSuggestions}}
-                        <div class="suggestions-list">
+                        <div class="space-y-4">
                             {{range .RecentSuggestions}}
-                            <div class="suggestion-card {{.Severity}}">
-                                <div class="suggestion-header">
-                                    <div>
-                                        <span class="severity-badge {{severityClass .Severity}}">{{.Severity}}</span>
-                                        <span class="suggestion-title">{{.Title}}</span>
-                                    </div>
+                            <div class="{{suggestionCardClass .Severity}}">
+                                <div class="flex items-center gap-2 mb-2">
+                                    <span class="{{severityBadgeClass .Severity}}">{{.Severity}}</span>
+                                    <span class="font-medium text-gray-900">{{.Title}}</span>
                                 </div>
-                                <div class="suggestion-target">{{.TargetObject}}</div>
-                                <div class="suggestion-meta">
-                                    <span>First seen: {{formatTimeShort .FirstSeenAt}}</span>
+                                <div class="text-sm font-mono text-gray-500 mb-2">{{.TargetObject}}</div>
+                                <div class="text-xs text-gray-400">
+                                    First seen: {{formatTimeShort .FirstSeenAt}}
                                 </div>
                             </div>
                             {{end}}
                         </div>
                         {{else}}
                         <div class="empty-state">
+                            <svg class="empty-state-icon" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z"/>
+                            </svg>
                             <div class="empty-state-title">No suggestions</div>
-                            <p>Your database is performing well</p>
+                            <p class="empty-state-description">Your database is performing well</p>
                         </div>
                         {{end}}
                     </div>
@@ -134,11 +144,11 @@
         </div>
     </main>
 
-    <footer class="footer">
-        <div class="footer-content">
+    <footer class="bg-white border-t border-gray-200 py-4 px-4 lg:px-6">
+        <div class="max-w-7xl mx-auto flex items-center gap-4 text-sm text-gray-500">
             <span>PG Analyzer {{.Version}}</span>
             {{if not .LastSnapshot.IsZero}}
-            <span class="separator">|</span>
+            <span class="text-gray-300">|</span>
             <span>Last snapshot: {{formatTime .LastSnapshot}}</span>
             {{end}}
         </div>

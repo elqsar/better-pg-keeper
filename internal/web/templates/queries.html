@@ -1,48 +1,50 @@
 {{define "queries"}}
 <!DOCTYPE html>
-<html lang="en">
+<html lang="en" class="h-full">
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>{{.Title}} - PG Analyzer</title>
     <link rel="stylesheet" href="/static/style.css">
 </head>
-<body>
-    <header class="header">
-        <div class="header-content">
-            <div class="logo">
-                <a href="/">PG Analyzer</a>
+<body class="min-h-full flex flex-col bg-gray-50">
+    <header class="bg-white border-b border-gray-200 sticky top-0 z-50">
+        <div class="max-w-7xl mx-auto px-4 lg:px-6">
+            <div class="flex items-center justify-between h-16">
+                <a href="/" class="text-xl font-semibold text-gray-900 hover:text-primary transition-colors">
+                    PG Analyzer
+                </a>
+                <nav class="flex items-center gap-1">
+                    <a href="/" class="nav-link-inactive">Dashboard</a>
+                    <a href="/queries" class="nav-link-active">Queries</a>
+                    <a href="/schema" class="nav-link-inactive">Schema</a>
+                    <a href="/suggestions" class="nav-link-inactive">Suggestions</a>
+                </nav>
             </div>
-            <nav class="nav">
-                <a href="/" class="nav-link">Dashboard</a>
-                <a href="/queries" class="nav-link active">Queries</a>
-                <a href="/schema" class="nav-link">Schema</a>
-                <a href="/suggestions" class="nav-link">Suggestions</a>
-            </nav>
         </div>
     </header>
 
-    <main class="main">
-        <div class="container">
-            <div class="page-header">
-                <h1 class="page-title">Queries</h1>
-                <p class="page-subtitle">Query performance analysis from pg_stat_statements</p>
+    <main class="flex-1 py-8 px-4 lg:px-6">
+        <div class="max-w-7xl mx-auto">
+            <div class="mb-8">
+                <h1 class="text-2xl font-bold text-gray-900">Queries</h1>
+                <p class="mt-1 text-gray-500">Query performance analysis from pg_stat_statements</p>
             </div>
 
             <!-- Filters -->
-            <div class="filters">
-                <div class="filter-group">
-                    <label class="filter-label">Sort by:</label>
-                    <select id="sort-select" onchange="updateSort(this.value)">
+            <div class="flex flex-wrap gap-4 mb-6">
+                <div class="flex items-center gap-2">
+                    <label class="text-sm font-medium text-gray-700">Sort by:</label>
+                    <select id="sort-select" onchange="updateSort(this.value)" class="select">
                         <option value="total_time"{{if eq .Sort "total_time"}} selected{{end}}>Total Time</option>
                         <option value="mean_time"{{if eq .Sort "mean_time"}} selected{{end}}>Mean Time</option>
                         <option value="calls"{{if eq .Sort "calls"}} selected{{end}}>Calls</option>
                         <option value="rows"{{if eq .Sort "rows"}} selected{{end}}>Rows</option>
                     </select>
                 </div>
-                <div class="filter-group">
-                    <label class="filter-label">Order:</label>
-                    <select id="order-select" onchange="updateOrder(this.value)">
+                <div class="flex items-center gap-2">
+                    <label class="text-sm font-medium text-gray-700">Order:</label>
+                    <select id="order-select" onchange="updateOrder(this.value)" class="select">
                         <option value="desc"{{if eq .Order "desc"}} selected{{end}}>Descending</option>
                         <option value="asc"{{if eq .Order "asc"}} selected{{end}}>Ascending</option>
                     </select>
@@ -50,11 +52,11 @@
             </div>
 
             <!-- Queries Table -->
-            <div class="card">
-                <div class="card-body">
+            <div class="card overflow-hidden">
+                <div class="p-6">
                     {{if .Queries}}
                     <div class="table-container">
-                        <table>
+                        <table class="table">
                             <thead>
                                 <tr>
                                     <th>Query</th>
@@ -66,21 +68,21 @@
                                     <th class="text-center">Actions</th>
                                 </tr>
                             </thead>
-                            <tbody>
+                            <tbody class="divide-y divide-gray-100">
                                 {{range .Queries}}
                                 <tr>
                                     <td>
-                                        <div class="query-text" title="{{.Query}}">{{truncate .Query 80}}</div>
+                                        <div class="query-text max-w-md truncate" title="{{.Query}}">{{truncate .Query 80}}</div>
                                     </td>
-                                    <td class="text-right">{{formatNumber .Calls}}</td>
-                                    <td class="text-right">{{formatDuration .MeanExecTime}}</td>
-                                    <td class="text-right">{{formatDuration .TotalExecTime}}</td>
-                                    <td class="text-right">{{printf "%.1f" .RowsPerCall}}</td>
-                                    <td class="text-right {{cacheRatioClass .CacheHitRatio}}">{{formatPercent .CacheHitRatio}}</td>
+                                    <td class="text-right tabular-nums">{{formatNumber .Calls}}</td>
+                                    <td class="text-right tabular-nums">{{formatDuration .MeanExecTime}}</td>
+                                    <td class="text-right tabular-nums">{{formatDuration .TotalExecTime}}</td>
+                                    <td class="text-right tabular-nums">{{printf "%.1f" .RowsPerCall}}</td>
+                                    <td class="text-right tabular-nums {{cacheRatioClass .CacheHitRatio}}">{{formatPercent .CacheHitRatio}}</td>
                                     <td class="text-center">
-                                        <div class="table-actions">
-                                            <a href="/queries/{{.QueryID}}" class="btn btn-sm btn-secondary">Details</a>
-                                            <button class="btn btn-sm btn-secondary" onclick="explainQuery({{.QueryID}})">EXPLAIN</button>
+                                        <div class="flex items-center justify-center gap-2">
+                                            <a href="/queries/{{.QueryID}}" class="btn-secondary btn-sm">Details</a>
+                                            <button class="btn-secondary btn-sm" onclick="explainQuery({{.QueryID}})">EXPLAIN</button>
                                         </div>
                                     </td>
                                 </tr>
@@ -91,42 +93,61 @@
 
                     <!-- Pagination -->
                     {{if gt .TotalPages 1}}
-                    <div class="pagination">
+                    <div class="pagination mt-6">
                         {{if gt .CurrentPage 1}}
-                        <a href="?page={{sub .CurrentPage 1}}&sort={{.Sort}}&order={{.Order}}" class="page-link">Previous</a>
+                        <a href="?page={{sub .CurrentPage 1}}&sort={{.Sort}}&order={{.Order}}" class="pagination-btn-active">
+                            Previous
+                        </a>
                         {{else}}
-                        <span class="page-link disabled">Previous</span>
+                        <span class="pagination-btn-disabled">Previous</span>
                         {{end}}
 
-                        <span class="page-info">Page {{.CurrentPage}} of {{.TotalPages}}</span>
+                        <span class="px-4 py-2 text-sm text-gray-500">
+                            Page {{.CurrentPage}} of {{.TotalPages}}
+                        </span>
 
                         {{if lt .CurrentPage .TotalPages}}
-                        <a href="?page={{add .CurrentPage 1}}&sort={{.Sort}}&order={{.Order}}" class="page-link">Next</a>
+                        <a href="?page={{add .CurrentPage 1}}&sort={{.Sort}}&order={{.Order}}" class="pagination-btn-active">
+                            Next
+                        </a>
                         {{else}}
-                        <span class="page-link disabled">Next</span>
+                        <span class="pagination-btn-disabled">Next</span>
                         {{end}}
                     </div>
                     {{end}}
 
                     {{else}}
                     <div class="empty-state">
+                        <svg class="empty-state-icon" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M9 5H7a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2V7a2 2 0 00-2-2h-2M9 5a2 2 0 002 2h2a2 2 0 002-2M9 5a2 2 0 012-2h2a2 2 0 012 2"/>
+                        </svg>
                         <div class="empty-state-title">No queries found</div>
-                        <p>Waiting for first snapshot or no matching queries</p>
+                        <p class="empty-state-description">Waiting for first snapshot or no matching queries</p>
                     </div>
                     {{end}}
                 </div>
             </div>
 
             <!-- EXPLAIN Modal -->
-            <div id="explain-modal" class="modal-backdrop" style="display: none;">
-                <div class="modal">
-                    <div class="modal-header">
-                        <h3 class="modal-title">EXPLAIN Plan</h3>
-                        <button class="modal-close" onclick="closeExplainModal()">&times;</button>
-                    </div>
-                    <div class="modal-body">
-                        <div id="explain-content">
-                            <div class="loading"></div> Loading...
+            <div id="explain-modal" class="fixed inset-0 z-50 hidden" aria-modal="true">
+                <div class="modal-backdrop" onclick="closeExplainModal()"></div>
+                <div class="modal-container">
+                    <div class="modal-content">
+                        <div class="modal-header">
+                            <h3 class="text-lg font-semibold text-gray-900">EXPLAIN Plan</h3>
+                            <button onclick="closeExplainModal()" class="text-gray-400 hover:text-gray-600 transition-colors">
+                                <svg class="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"/>
+                                </svg>
+                            </button>
+                        </div>
+                        <div class="modal-body max-h-[calc(90vh-80px)]">
+                            <div id="explain-content">
+                                <div class="flex items-center justify-center py-8">
+                                    <div class="spinner h-8 w-8"></div>
+                                    <span class="ml-3 text-gray-500">Loading...</span>
+                                </div>
+                            </div>
                         </div>
                     </div>
                 </div>
@@ -134,11 +155,11 @@
         </div>
     </main>
 
-    <footer class="footer">
-        <div class="footer-content">
+    <footer class="bg-white border-t border-gray-200 py-4 px-4 lg:px-6">
+        <div class="max-w-7xl mx-auto flex items-center gap-4 text-sm text-gray-500">
             <span>PG Analyzer {{.Version}}</span>
             {{if not .LastSnapshot.IsZero}}
-            <span class="separator">|</span>
+            <span class="text-gray-300">|</span>
             <span>Last snapshot: {{formatTime .LastSnapshot}}</span>
             {{end}}
         </div>
@@ -162,8 +183,8 @@
     function explainQuery(queryId) {
         const modal = document.getElementById('explain-modal');
         const content = document.getElementById('explain-content');
-        modal.style.display = 'flex';
-        content.innerHTML = '<div class="loading"></div> Loading...';
+        modal.classList.remove('hidden');
+        content.innerHTML = '<div class="flex items-center justify-center py-8"><div class="spinner h-8 w-8"></div><span class="ml-3 text-gray-500">Loading...</span></div>';
 
         fetch('/api/v1/queries/' + queryId + '/explain', {
             method: 'POST'
@@ -171,18 +192,18 @@
         .then(response => response.json())
         .then(data => {
             if (data.error) {
-                content.innerHTML = '<div class="severity-critical">Error: ' + data.error + '</div>';
+                content.innerHTML = '<div class="text-severity-critical p-4 bg-severity-critical-bg rounded-lg">Error: ' + escapeHtml(data.error) + '</div>';
             } else {
-                content.innerHTML = '<pre class="explain-plan">' + escapeHtml(data.plan_text) + '</pre>';
+                content.innerHTML = '<pre class="code-block whitespace-pre-wrap">' + escapeHtml(data.plan_text) + '</pre>';
             }
         })
         .catch(error => {
-            content.innerHTML = '<div class="severity-critical">Failed to load EXPLAIN plan</div>';
+            content.innerHTML = '<div class="text-severity-critical p-4 bg-severity-critical-bg rounded-lg">Failed to load EXPLAIN plan</div>';
         });
     }
 
     function closeExplainModal() {
-        document.getElementById('explain-modal').style.display = 'none';
+        document.getElementById('explain-modal').classList.add('hidden');
     }
 
     function escapeHtml(text) {
@@ -193,6 +214,12 @@
 
     document.getElementById('explain-modal').addEventListener('click', function(e) {
         if (e.target === this) {
+            closeExplainModal();
+        }
+    });
+
+    document.addEventListener('keydown', function(e) {
+        if (e.key === 'Escape') {
             closeExplainModal();
         }
     });

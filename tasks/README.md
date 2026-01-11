@@ -18,6 +18,7 @@ This directory contains implementation tasks for PostgreSQL Analyzer (pganalyzer
 | 10 | [Web UI](10-web-ui.md) | Server-rendered HTML pages | 09 |
 | 11 | [Production Readiness](11-production-readiness.md) | Docker, docs, testing | All |
 | 12 | [Main Wiring](12-main-wiring.md) | Connect all components in main.go | 01-10 |
+| 13 | [Tailwind Migration](13-tailwind-migration.md) | Migrate CSS to Tailwind, improve aesthetics | 10 |
 
 ## Dependency Graph
 
@@ -42,7 +43,9 @@ This directory contains implementation tasks for PostgreSQL Analyzer (pganalyzer
       │
       └── 10 Web UI
            │
-           └── 11 Production Readiness
+           ├── 11 Production Readiness
+           │
+           └── 13 Tailwind Migration
 ```
 
 ## Suggested Implementation Order
@@ -82,6 +85,7 @@ Update this section as tasks are completed:
 - [x] 10 - Web UI (completed 2026-01-10)
 - [x] 11 - Production Readiness (completed 2026-01-11)
 - [x] 12 - Main Wiring (completed 2026-01-11)
+- [x] 13 - Tailwind Migration (completed 2026-01-11)
 
 ## Quick Commands
 
@@ -111,6 +115,12 @@ task clean
 
 # Show version info
 task version
+
+# Build CSS with Tailwind
+task css
+
+# Watch CSS changes (development)
+task css:watch
 
 # Show all available tasks
 task
@@ -715,3 +725,49 @@ task
   - Creates pg_stat_statements extension
   - Sample tables for testing
   - Generates initial query activity
+
+## What Was Completed in Task 13
+
+- Tailwind CSS build system setup:
+  - `internal/web/tailwind/tailwind.config.js` - Custom theme configuration
+    - Primary color (#0d6efd) with hover state
+    - Severity colors (critical, warning, info, success) with backgrounds
+    - Cache ratio colors (excellent, good, warning, critical)
+    - Custom shadows and fonts
+  - `internal/web/tailwind/input.css` - Tailwind directives and component classes
+    - Base styles for html, body, headings
+    - Reusable component classes: buttons, cards, badges, tables
+    - Navigation links (active/inactive states)
+    - Tabs, forms, modals, pagination
+    - Empty state and loading spinner styles
+  - `scripts/build-css.sh` - Build script with auto-download
+    - Downloads Tailwind standalone CLI (~20MB, no Node.js required)
+    - Platform detection (macOS arm64/x64, Linux arm64/x64)
+    - Generates minified CSS output
+- Taskfile.yaml updates:
+  - `task css` - Build CSS with Tailwind (downloads CLI if needed)
+  - `task css:watch` - Watch mode for development
+  - `task css:install` - Explicit CLI download
+  - `task build` now depends on `css` task
+- Template helper functions in `internal/web/templates.go`:
+  - `severityBadgeClass()` - Returns Tailwind badge classes (badge-critical, etc.)
+  - `suggestionCardClass()` - Returns Tailwind card classes with severity borders
+  - `dict()` - Creates map for passing multiple values to sub-templates
+  - `eq()` - Equality comparison for template conditionals
+- All 5 templates migrated to Tailwind CSS:
+  - `dashboard.html` - Stats grid, top queries table, recent suggestions
+  - `suggestions.html` - Filters, severity badges, suggestion cards with dismiss
+  - `queries.html` - Table with sorting/pagination, EXPLAIN modal with backdrop blur
+  - `schema.html` - Tab navigation (Tables/Indexes/Bloat), data tables
+  - `query_detail.html` - Two-column stats layout, code blocks for query/EXPLAIN
+- Aesthetic improvements:
+  - Modern card styling with `rounded-xl`, `shadow-sm`, `hover:shadow-md`
+  - Pill-shaped severity badges with `rounded-full`
+  - Modal with backdrop blur effect (`bg-gray-900/50 backdrop-blur-sm`)
+  - Improved empty states with SVG icons
+  - Tabular numbers (`tabular-nums`) for aligned data columns
+  - Sticky header navigation
+  - Better visual hierarchy with improved typography
+  - Responsive grid layouts (mobile-first)
+  - Smooth transitions on interactive elements
+- All existing tests pass (template rendering, page handlers)

@@ -216,12 +216,29 @@ task lint
 # Format code
 task fmt
 
-# Build
+# Build (includes CSS)
 task build
 
 # Run all checks
 task all
 ```
+
+### CSS Development (Tailwind)
+
+The web UI uses [Tailwind CSS](https://tailwindcss.com/) with a standalone CLI (no Node.js required). The Tailwind CLI is automatically downloaded on first build.
+
+```bash
+# Build CSS (downloads Tailwind CLI if needed)
+task css
+
+# Watch mode for development (auto-rebuild on changes)
+task css:watch
+```
+
+**Configuration files:**
+- `internal/web/tailwind/tailwind.config.js` - Theme customization
+- `internal/web/tailwind/input.css` - Tailwind directives and component classes
+- `internal/web/static/style.css` - Generated output (do not edit directly)
 
 ### Running Integration Tests
 
@@ -256,7 +273,11 @@ pganalyzer/
 │   ├── storage/sqlite/   # SQLite storage layer
 │   ├── suggester/        # Recommendation engine
 │   └── web/              # Web UI templates and assets
+│       ├── templates/    # HTML templates
+│       ├── static/       # Static assets (generated CSS)
+│       └── tailwind/     # Tailwind CSS configuration
 ├── configs/              # Configuration files
+├── scripts/              # Build scripts (CSS, etc.)
 ├── docs/                 # Documentation
 └── tests/integration/    # Integration tests
 ```

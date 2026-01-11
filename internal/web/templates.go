@@ -26,22 +26,26 @@ type TemplateRenderer struct {
 // NewTemplateRenderer creates a new TemplateRenderer with templates loaded from embedded FS.
 func NewTemplateRenderer() (*TemplateRenderer, error) {
 	funcMap := template.FuncMap{
-		"formatTime":       formatTime,
-		"formatTimeShort":  formatTimeShort,
-		"formatDuration":   formatDuration,
-		"formatBytes":      formatBytes,
-		"formatNumber":     formatNumber,
-		"formatPercent":    formatPercent,
-		"truncate":         truncate,
-		"severityClass":    severityClass,
-		"severityIcon":     severityIcon,
-		"cacheRatioClass":  cacheRatioClass,
-		"add":              add,
-		"sub":              sub,
-		"mul":              mul,
-		"div":              div,
-		"seq":              seq,
-		"safeHTML":         safeHTML,
+		"formatTime":          formatTime,
+		"formatTimeShort":     formatTimeShort,
+		"formatDuration":      formatDuration,
+		"formatBytes":         formatBytes,
+		"formatNumber":        formatNumber,
+		"formatPercent":       formatPercent,
+		"truncate":            truncate,
+		"severityClass":       severityClass,
+		"severityIcon":        severityIcon,
+		"cacheRatioClass":     cacheRatioClass,
+		"add":                 add,
+		"sub":                 sub,
+		"mul":                 mul,
+		"div":                 div,
+		"seq":                 seq,
+		"safeHTML":            safeHTML,
+		"severityBadgeClass":  severityBadgeClass,
+		"suggestionCardClass": suggestionCardClass,
+		"dict":                dict,
+		"eq":                  eq,
 	}
 
 	tmpl, err := template.New("").Funcs(funcMap).ParseFS(templatesFS, "templates/*.html")
@@ -219,4 +223,53 @@ func seq(n int) []int {
 // safeHTML marks a string as safe HTML (use with caution).
 func safeHTML(s string) template.HTML {
 	return template.HTML(s)
+}
+
+// severityBadgeClass returns Tailwind CSS classes for severity badges.
+func severityBadgeClass(severity string) string {
+	switch severity {
+	case "critical":
+		return "badge-critical"
+	case "warning":
+		return "badge-warning"
+	case "info":
+		return "badge-info"
+	default:
+		return "badge-gray"
+	}
+}
+
+// suggestionCardClass returns Tailwind CSS classes for suggestion cards.
+func suggestionCardClass(severity string) string {
+	switch severity {
+	case "critical":
+		return "suggestion-card-critical"
+	case "warning":
+		return "suggestion-card-warning"
+	case "info":
+		return "suggestion-card-info"
+	default:
+		return "suggestion-card"
+	}
+}
+
+// dict creates a map from key-value pairs for use in templates.
+func dict(values ...interface{}) map[string]interface{} {
+	if len(values)%2 != 0 {
+		return nil
+	}
+	d := make(map[string]interface{}, len(values)/2)
+	for i := 0; i < len(values); i += 2 {
+		key, ok := values[i].(string)
+		if !ok {
+			continue
+		}
+		d[key] = values[i+1]
+	}
+	return d
+}
+
+// eq compares two values for equality.
+func eq(a, b interface{}) bool {
+	return a == b
 }

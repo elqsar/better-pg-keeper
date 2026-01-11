@@ -1,48 +1,52 @@
 {{define "suggestions"}}
 <!DOCTYPE html>
-<html lang="en">
+<html lang="en" class="h-full">
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>{{.Title}} - PG Analyzer</title>
     <link rel="stylesheet" href="/static/style.css">
 </head>
-<body>
-    <header class="header">
-        <div class="header-content">
-            <div class="logo">
-                <a href="/">PG Analyzer</a>
+<body class="min-h-full flex flex-col bg-gray-50">
+    <header class="bg-white border-b border-gray-200 sticky top-0 z-50">
+        <div class="max-w-7xl mx-auto px-4 lg:px-6">
+            <div class="flex items-center justify-between h-16">
+                <a href="/" class="text-xl font-semibold text-gray-900 hover:text-primary transition-colors">
+                    PG Analyzer
+                </a>
+                <nav class="flex items-center gap-1">
+                    <a href="/" class="nav-link-inactive">Dashboard</a>
+                    <a href="/queries" class="nav-link-inactive">Queries</a>
+                    <a href="/schema" class="nav-link-inactive">Schema</a>
+                    <a href="/suggestions" class="nav-link-active">Suggestions</a>
+                </nav>
             </div>
-            <nav class="nav">
-                <a href="/" class="nav-link">Dashboard</a>
-                <a href="/queries" class="nav-link">Queries</a>
-                <a href="/schema" class="nav-link">Schema</a>
-                <a href="/suggestions" class="nav-link active">Suggestions</a>
-            </nav>
         </div>
     </header>
 
-    <main class="main">
-        <div class="container">
-            <div class="page-header">
-                <h1 class="page-title">Suggestions</h1>
-                <p class="page-subtitle">Performance recommendations and issues</p>
+    <main class="flex-1 py-8 px-4 lg:px-6">
+        <div class="max-w-7xl mx-auto">
+            <div class="mb-8">
+                <h1 class="text-2xl font-bold text-gray-900">Suggestions</h1>
+                <p class="mt-1 text-gray-500">Performance recommendations and issues</p>
             </div>
 
             <!-- Filters -->
-            <div class="filters">
-                <div class="filter-group">
-                    <label class="filter-label">Severity:</label>
-                    <select id="severity-select" onchange="updateFilter('severity', this.value)">
+            <div class="flex flex-wrap gap-4 mb-6">
+                <div class="flex items-center gap-2">
+                    <label class="text-sm font-medium text-gray-700">Severity:</label>
+                    <select id="severity-select" onchange="updateFilter('severity', this.value)"
+                            class="select">
                         <option value="">All</option>
                         <option value="critical"{{if eq .SeverityFilter "critical"}} selected{{end}}>Critical</option>
                         <option value="warning"{{if eq .SeverityFilter "warning"}} selected{{end}}>Warning</option>
                         <option value="info"{{if eq .SeverityFilter "info"}} selected{{end}}>Info</option>
                     </select>
                 </div>
-                <div class="filter-group">
-                    <label class="filter-label">Status:</label>
-                    <select id="status-select" onchange="updateFilter('status', this.value)">
+                <div class="flex items-center gap-2">
+                    <label class="text-sm font-medium text-gray-700">Status:</label>
+                    <select id="status-select" onchange="updateFilter('status', this.value)"
+                            class="select">
                         <option value="active"{{if eq .StatusFilter "active"}} selected{{end}}>Active</option>
                         <option value="dismissed"{{if eq .StatusFilter "dismissed"}} selected{{end}}>Dismissed</option>
                     </select>
@@ -51,78 +55,83 @@
 
             <!-- Summary -->
             {{if .Suggestions}}
-            <div class="stats-grid mb-4">
+            <div class="grid grid-cols-2 sm:grid-cols-4 gap-4 mb-6">
                 <div class="stat-card">
                     <div class="stat-label">Critical</div>
-                    <div class="stat-value severity-critical">{{.CriticalCount}}</div>
+                    <div class="stat-value text-severity-critical">{{.CriticalCount}}</div>
                 </div>
                 <div class="stat-card">
                     <div class="stat-label">Warnings</div>
-                    <div class="stat-value" style="color: #856404;">{{.WarningCount}}</div>
+                    <div class="stat-value text-amber-600">{{.WarningCount}}</div>
                 </div>
                 <div class="stat-card">
                     <div class="stat-label">Info</div>
-                    <div class="stat-value" style="color: #055160;">{{.InfoCount}}</div>
+                    <div class="stat-value text-cyan-600">{{.InfoCount}}</div>
                 </div>
                 <div class="stat-card">
                     <div class="stat-label">Total</div>
-                    <div class="stat-value">{{.TotalCount}}</div>
+                    <div class="stat-value text-gray-900">{{.TotalCount}}</div>
                 </div>
             </div>
             {{end}}
 
             <!-- Suggestions List -->
             {{if .Suggestions}}
-            <div class="suggestions-list">
+            <div class="space-y-4">
                 {{range .Suggestions}}
-                <div class="suggestion-card {{.Severity}}" id="suggestion-{{.ID}}">
-                    <div class="suggestion-header">
-                        <div>
-                            <span class="severity-badge {{severityClass .Severity}}">{{.Severity}}</span>
-                            <span class="suggestion-title">{{.Title}}</span>
+                <div class="{{suggestionCardClass .Severity}}" id="suggestion-{{.ID}}">
+                    <div class="flex items-start justify-between gap-4">
+                        <div class="flex-1">
+                            <div class="flex items-center gap-2 mb-2">
+                                <span class="{{severityBadgeClass .Severity}}">{{.Severity}}</span>
+                                <span class="font-medium text-gray-900">{{.Title}}</span>
+                            </div>
+                            <div class="text-sm font-mono text-gray-500 mb-2">{{.TargetObject}}</div>
+                            <div class="text-sm text-gray-600 mb-4">{{.Description}}</div>
+                            <div class="flex flex-wrap gap-4 text-xs text-gray-400">
+                                <span>Rule: {{.RuleID}}</span>
+                                <span>First seen: {{formatTimeShort .FirstSeenAt}}</span>
+                                <span>Last seen: {{formatTimeShort .LastSeenAt}}</span>
+                            </div>
                         </div>
-                        <div class="suggestion-actions">
+                        <div class="flex-shrink-0">
                             {{if eq .Status "active"}}
-                            <button class="btn btn-sm btn-secondary" onclick="dismissSuggestion({{.ID}})">Dismiss</button>
+                            <button class="btn-secondary btn-sm" onclick="dismissSuggestion({{.ID}})">
+                                Dismiss
+                            </button>
                             {{else}}
-                            <span class="status-badge status-dismissed">Dismissed</span>
+                            <span class="badge-gray">Dismissed</span>
                             {{end}}
                         </div>
-                    </div>
-                    <div class="suggestion-target">{{.TargetObject}}</div>
-                    <div class="suggestion-description">{{.Description}}</div>
-                    <div class="suggestion-meta">
-                        <span>Rule: {{.RuleID}}</span>
-                        <span>First seen: {{formatTimeShort .FirstSeenAt}}</span>
-                        <span>Last seen: {{formatTimeShort .LastSeenAt}}</span>
                     </div>
                 </div>
                 {{end}}
             </div>
             {{else}}
-            <div class="card">
-                <div class="card-body">
-                    <div class="empty-state">
-                        <div class="empty-state-title">No suggestions</div>
-                        <p>
-                            {{if eq .StatusFilter "dismissed"}}
-                            No dismissed suggestions found
-                            {{else}}
-                            Your database is performing well! No issues detected.
-                            {{end}}
-                        </p>
-                    </div>
+            <div class="card p-8">
+                <div class="empty-state">
+                    <svg class="empty-state-icon" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z"/>
+                    </svg>
+                    <div class="empty-state-title">No suggestions</div>
+                    <p class="empty-state-description">
+                        {{if eq .StatusFilter "dismissed"}}
+                        No dismissed suggestions found
+                        {{else}}
+                        Your database is performing well! No issues detected.
+                        {{end}}
+                    </p>
                 </div>
             </div>
             {{end}}
         </div>
     </main>
 
-    <footer class="footer">
-        <div class="footer-content">
+    <footer class="bg-white border-t border-gray-200 py-4 px-4 lg:px-6">
+        <div class="max-w-7xl mx-auto flex items-center gap-4 text-sm text-gray-500">
             <span>PG Analyzer {{.Version}}</span>
             {{if not .LastSnapshot.IsZero}}
-            <span class="separator">|</span>
+            <span class="text-gray-300">|</span>
             <span>Last snapshot: {{formatTime .LastSnapshot}}</span>
             {{end}}
         </div>
@@ -150,9 +159,11 @@
         .then(response => {
             if (response.ok) {
                 const card = document.getElementById('suggestion-' + id);
-                card.style.opacity = '0.5';
-                const actions = card.querySelector('.suggestion-actions');
-                actions.innerHTML = '<span class="status-badge status-dismissed">Dismissed</span>';
+                card.classList.add('opacity-50');
+                const btn = card.querySelector('button');
+                if (btn) {
+                    btn.outerHTML = '<span class="badge-gray">Dismissed</span>';
+                }
             } else {
                 alert('Failed to dismiss suggestion');
             }
