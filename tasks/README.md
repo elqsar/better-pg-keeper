@@ -17,6 +17,7 @@ This directory contains implementation tasks for PostgreSQL Analyzer (pganalyzer
 | 09 | [API Server](09-api-server.md) | REST API endpoints | 02, 03, 08 |
 | 10 | [Web UI](10-web-ui.md) | Server-rendered HTML pages | 09 |
 | 11 | [Production Readiness](11-production-readiness.md) | Docker, docs, testing | All |
+| 12 | [Main Wiring](12-main-wiring.md) | Connect all components in main.go | 01-10 |
 
 ## Dependency Graph
 
@@ -80,6 +81,7 @@ Update this section as tasks are completed:
 - [x] 09 - API Server (completed 2026-01-10)
 - [x] 10 - Web UI (completed 2026-01-10)
 - [ ] 11 - Production Readiness
+- [x] 12 - Main Wiring (completed 2026-01-11)
 
 ## Quick Commands
 
@@ -598,3 +600,37 @@ task
     - Suggestions page with and without filters
     - Helper function unit tests
     - Sort function tests
+
+## What Was Completed in Task 12
+
+- Updated `cmd/pganalyzer/main.go` with complete component wiring:
+  - Added imports for all internal packages (14 packages)
+  - Implemented `run()` function with proper initialization order
+- Component initialization sequence:
+  1. Load configuration using `config.Load()`
+  2. Initialize SQLite storage with `sqlite.NewStorage()`
+  3. Create and connect PostgreSQL client
+  4. Get or create monitored instance record
+  5. Create coordinator and register 5 collectors:
+     - `query.StatsCollector` - Query statistics
+     - `resource.TableStatsCollector` - Table statistics
+     - `resource.IndexStatsCollector` - Index statistics
+     - `resource.DatabaseStatsCollector` - Cache hit ratio
+     - `schema.BloatCollector` - Table bloat
+  6. Create analyzer with thresholds from config
+  7. Create suggester and register 6 rules:
+     - `SlowQueryRule` - Slow query detection
+     - `UnusedIndexRule` - Unused index detection
+     - `MissingIndexRule` - Missing index suggestions
+     - `BloatRule` - Table bloat detection
+     - `VacuumRule` - Stale vacuum detection
+     - `CacheRule` - Low cache hit ratio detection
+  8. Create and start scheduler for background jobs
+  9. Create and start HTTP API server
+- Graceful shutdown handling:
+  - Listens for SIGINT/SIGTERM signals
+  - Server shutdown with 30-second timeout
+  - Proper cleanup via deferred calls
+- Structured logging with slog at each initialization step
+- Error handling with wrapped errors for debugging
+- Created task documentation in `tasks/12-main-wiring.md`

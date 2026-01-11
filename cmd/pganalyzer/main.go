@@ -5,9 +5,25 @@ import (
 	"flag"
 	"fmt"
 	"log/slog"
+	"net/http"
 	"os"
 	"os/signal"
 	"syscall"
+	"time"
+
+	"github.com/user/pganalyzer/internal/analyzer"
+	"github.com/user/pganalyzer/internal/api"
+	"github.com/user/pganalyzer/internal/collector"
+	"github.com/user/pganalyzer/internal/collector/query"
+	"github.com/user/pganalyzer/internal/collector/resource"
+	"github.com/user/pganalyzer/internal/collector/schema"
+	"github.com/user/pganalyzer/internal/config"
+	"github.com/user/pganalyzer/internal/models"
+	"github.com/user/pganalyzer/internal/postgres"
+	"github.com/user/pganalyzer/internal/scheduler"
+	"github.com/user/pganalyzer/internal/storage/sqlite"
+	"github.com/user/pganalyzer/internal/suggester"
+	"github.com/user/pganalyzer/internal/suggester/rules"
 )
 
 // Build-time variables set via ldflags
@@ -69,20 +85,175 @@ func main() {
 
 // run contains the main application logic
 func run(ctx context.Context, configPath string) error {
-	// TODO: Load configuration
-	// TODO: Initialize storage
-	// TODO: Initialize PostgreSQL client
-	// TODO: Initialize collectors
-	// TODO: Initialize analyzer
-	// TODO: Initialize suggester
-	// TODO: Initialize scheduler
-	// TODO: Initialize API server
-	// TODO: Start services
+	// Load configuration
+	cfg, err := config.Load(configPath)
+	if err != nil {
+		return fmt.Errorf("loading config: %w", err)
+	}
+	slog.Info("configuration loaded",
+		"postgres_host", cfg.Postgres.Host,
+		"postgres_db", cfg.Postgres.Database,
+	)
 
-	// Wait for shutdown signal
-	<-ctx.Done()
+	// Initialize storage
+	storage, err := sqlite.NewStorage(cfg.Storage.Path)
+	if err != nil {
+		return fmt.Errorf("initializing storage: %w", err)
+	}
+	defer storage.Close()
+	slog.Info("storage initialized", "path", cfg.Storage.Path)
 
-	// TODO: Graceful shutdown of all services
+	// Initialize PostgreSQL client
+	pgClient, err := postgres.NewClient(postgres.ClientConfig{
+		Host:     cfg.Postgres.Host,
+		Port:     cfg.Postgres.Port,
+		Database: cfg.Postgres.Database,
+		User:     cfg.Postgres.User,
+		Password: cfg.Postgres.Password,
+		SSLMode:  cfg.Postgres.SSLMode,
+	})
+	if err != nil {
+		return fmt.Errorf("creating postgres client: %w", err)
+	}
+	if err := pgClient.Connect(ctx); err != nil {
+		return fmt.Errorf("connecting to postgres: %w", err)
+	}
+	defer pgClient.Close()
+	slog.Info("connected to PostgreSQL",
+		"host", cfg.Postgres.Host,
+		"database", cfg.Postgres.Database,
+	)
+
+	// Get or create instance record
+	instanceName := fmt.Sprintf("%s:%d/%s", cfg.Postgres.Host, cfg.Postgres.Port, cfg.Postgres.Database)
+	instanceID, err := storage.GetOrCreateInstance(ctx, &models.Instance{
+		Name:     instanceName,
+		Host:     cfg.Postgres.Host,
+		Port:     cfg.Postgres.Port,
+		Database: cfg.Postgres.Database,
+	})
+	if err != nil {
+		return fmt.Errorf("getting/creating instance: %w", err)
+	}
+	slog.Info("instance ready", "id", instanceID, "name", instanceName)
+
+	// Create coordinator and register collectors
+	coordinator := collector.NewCoordinator(collector.CoordinatorConfig{
+		PGClient:   pgClient,
+		Storage:    storage,
+		InstanceID: instanceID,
+	})
+
+	coordinator.RegisterCollectors(
+		query.NewStatsCollector(query.StatsCollectorConfig{
+			PGClient:   pgClient,
+			Storage:    storage,
+			InstanceID: instanceID,
+		}),
+		resource.NewTableStatsCollector(resource.TableStatsCollectorConfig{
+			PGClient:   pgClient,
+			Storage:    storage,
+			InstanceID: instanceID,
+		}),
+		resource.NewIndexStatsCollector(resource.IndexStatsCollectorConfig{
+			PGClient:   pgClient,
+			Storage:    storage,
+			InstanceID: instanceID,
+		}),
+		resource.NewDatabaseStatsCollector(resource.DatabaseStatsCollectorConfig{
+			PGClient:   pgClient,
+			Storage:    storage,
+			InstanceID: instanceID,
+		}),
+		schema.NewBloatCollector(schema.BloatCollectorConfig{
+			PGClient:   pgClient,
+			Storage:    storage,
+			InstanceID: instanceID,
+		}),
+	)
+	slog.Info("collectors registered", "count", len(coordinator.Collectors()))
+
+	// Create analyzer
+	analyzerCfg := analyzer.ConfigFromThresholds(cfg.Thresholds)
+	mainAnalyzer := analyzer.NewMainAnalyzer(storage, analyzerCfg)
+	slog.Info("analyzer initialized")
+
+	// Create suggester and register rules
+	suggesterCfg := suggester.DefaultConfig()
+	mainSuggester := suggester.NewSuggester(storage, suggesterCfg, nil)
+	mainSuggester.RegisterRules(
+		rules.NewSlowQueryRule(suggesterCfg),
+		rules.NewUnusedIndexRule(suggesterCfg),
+		rules.NewMissingIndexRule(suggesterCfg),
+		rules.NewBloatRule(suggesterCfg),
+		rules.NewVacuumRule(suggesterCfg),
+		rules.NewCacheRule(suggesterCfg),
+	)
+	slog.Info("suggester initialized", "rules", len(mainSuggester.Rules()))
+
+	// Create and start scheduler
+	sched, err := scheduler.NewScheduler(scheduler.Config{
+		SchedulerConfig: &cfg.Scheduler,
+		RetentionConfig: &cfg.Storage.Retention,
+		Coordinator:     coordinator,
+		Analyzer:        mainAnalyzer,
+		Suggester:       mainSuggester,
+		Storage:         storage,
+		InstanceID:      instanceID,
+	})
+	if err != nil {
+		return fmt.Errorf("creating scheduler: %w", err)
+	}
+	if err := sched.Start(ctx); err != nil {
+		return fmt.Errorf("starting scheduler: %w", err)
+	}
+	defer sched.Stop()
+	slog.Info("scheduler started",
+		"snapshot_interval", cfg.Scheduler.SnapshotInterval,
+		"analysis_interval", cfg.Scheduler.AnalysisInterval,
+	)
+
+	// Create API server
+	server, err := api.NewServer(api.ServerConfig{
+		Config:     &cfg.Server,
+		Storage:    storage,
+		PGClient:   pgClient,
+		Scheduler:  sched,
+		InstanceID: instanceID,
+		Version:    version,
+	})
+	if err != nil {
+		return fmt.Errorf("creating api server: %w", err)
+	}
+
+	// Start server in background
+	serverErr := make(chan error, 1)
+	go func() {
+		slog.Info("starting HTTP server",
+			"host", cfg.Server.Host,
+			"port", cfg.Server.Port,
+		)
+		if err := server.Start(); err != nil && err != http.ErrServerClosed {
+			serverErr <- err
+		}
+	}()
+
+	// Wait for shutdown signal or server error
+	select {
+	case <-ctx.Done():
+		slog.Info("shutdown signal received")
+	case err := <-serverErr:
+		return fmt.Errorf("server error: %w", err)
+	}
+
+	// Graceful shutdown
+	slog.Info("initiating graceful shutdown")
+	shutdownCtx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+
+	if err := server.Shutdown(shutdownCtx); err != nil {
+		slog.Warn("server shutdown error", "error", err)
+	}
 
 	return nil
 }
