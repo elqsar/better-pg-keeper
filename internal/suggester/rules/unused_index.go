@@ -5,8 +5,8 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/user/pganalyzer/internal/analyzer"
-	"github.com/user/pganalyzer/internal/suggester"
+	"github.com/elqsar/pganalyzer/internal/analyzer"
+	"github.com/elqsar/pganalyzer/internal/suggester"
 )
 
 // UnusedIndexRule generates suggestions for indexes that have zero scans.

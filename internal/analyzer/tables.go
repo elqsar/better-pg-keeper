@@ -5,7 +5,7 @@ import (
 	"fmt"
 	"time"
 
-	"github.com/user/pganalyzer/internal/models"
+	"github.com/elqsar/pganalyzer/internal/models"
 )
 
 // TableAnalyzer detects issues with tables such as bloat, stale vacuum/analyze,

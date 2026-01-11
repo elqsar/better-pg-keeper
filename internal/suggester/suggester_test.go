@@ -7,10 +7,10 @@ import (
 	"testing"
 	"time"
 
-	"github.com/user/pganalyzer/internal/analyzer"
-	"github.com/user/pganalyzer/internal/models"
-	"github.com/user/pganalyzer/internal/suggester"
-	"github.com/user/pganalyzer/internal/suggester/rules"
+	"github.com/elqsar/pganalyzer/internal/analyzer"
+	"github.com/elqsar/pganalyzer/internal/models"
+	"github.com/elqsar/pganalyzer/internal/suggester"
+	"github.com/elqsar/pganalyzer/internal/suggester/rules"
 )
 
 // mockStorage implements the Storage interface for testing.

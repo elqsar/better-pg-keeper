@@ -6,7 +6,7 @@ Initialize the Go project structure with dependencies and basic scaffolding.
 ## Subtasks
 
 ### 1.1 Initialize Go Module
-- [x] Run `go mod init github.com/user/pganalyzer`
+- [x] Run `go mod init github.com/elqsar/pganalyzer`
 - [x] Create directory structure:
   ```
   cmd/pganalyzer/

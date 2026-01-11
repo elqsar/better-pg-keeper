@@ -7,7 +7,7 @@ import (
 
 	"github.com/labstack/echo/v4"
 
-	"github.com/user/pganalyzer/internal/models"
+	"github.com/elqsar/pganalyzer/internal/models"
 )
 
 // DashboardStorage defines the storage interface needed by the dashboard handler.
@@ -25,12 +25,12 @@ type DashboardHandler struct {
 
 // DashboardResponse represents the dashboard API response.
 type DashboardResponse struct {
-	CacheHitRatio      *float64            `json:"cache_hit_ratio"`
-	TotalQueries       int                 `json:"total_queries"`
-	SlowQueriesCount   int                 `json:"slow_queries_count"`
-	ActiveSuggestions  int                 `json:"active_suggestions"`
-	TopQueries         []TopQuerySummary   `json:"top_queries"`
-	RecentSuggestions  []SuggestionSummary `json:"recent_suggestions"`
+	CacheHitRatio     *float64            `json:"cache_hit_ratio"`
+	TotalQueries      int                 `json:"total_queries"`
+	SlowQueriesCount  int                 `json:"slow_queries_count"`
+	ActiveSuggestions int                 `json:"active_suggestions"`
+	TopQueries        []TopQuerySummary   `json:"top_queries"`
+	RecentSuggestions []SuggestionSummary `json:"recent_suggestions"`
 }
 
 // TopQuerySummary represents a summarized query for the dashboard.

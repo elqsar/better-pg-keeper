@@ -7,7 +7,7 @@ import (
 	"os"
 	"strings"
 
-	"github.com/user/pganalyzer/internal/config"
+	"github.com/elqsar/pganalyzer/internal/config"
 )
 
 // Setup initializes the global logger based on configuration.

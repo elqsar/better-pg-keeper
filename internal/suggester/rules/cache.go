@@ -5,8 +5,8 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/user/pganalyzer/internal/analyzer"
-	"github.com/user/pganalyzer/internal/suggester"
+	"github.com/elqsar/pganalyzer/internal/analyzer"
+	"github.com/elqsar/pganalyzer/internal/suggester"
 )
 
 // CacheRule generates suggestions for low cache hit ratios.
@@ -106,9 +106,9 @@ func (r *CacheRule) Evaluate(ctx context.Context, analysis *analyzer.AnalysisRes
 		Description:  desc.String(),
 		TargetObject: "database",
 		Metadata: map[string]any{
-			"hit_ratio":          cache.OverallHitRatio,
-			"threshold":          r.warningThreshold * 100,
-			"poor_query_count":   len(cache.PoorCacheQueries),
+			"hit_ratio":        cache.OverallHitRatio,
+			"threshold":        r.warningThreshold * 100,
+			"poor_query_count": len(cache.PoorCacheQueries),
 		},
 	})
 

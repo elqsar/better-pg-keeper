@@ -6,7 +6,7 @@ import (
 	"context"
 	"time"
 
-	"github.com/user/pganalyzer/internal/models"
+	"github.com/elqsar/pganalyzer/internal/models"
 )
 
 // Client defines the interface for PostgreSQL database operations.

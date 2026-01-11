@@ -6,12 +6,12 @@ import (
 	"testing"
 	"time"
 
-	"github.com/user/pganalyzer/internal/collector"
-	"github.com/user/pganalyzer/internal/collector/query"
-	"github.com/user/pganalyzer/internal/collector/resource"
-	"github.com/user/pganalyzer/internal/collector/schema"
-	"github.com/user/pganalyzer/internal/models"
-	"github.com/user/pganalyzer/internal/storage/sqlite"
+	"github.com/elqsar/pganalyzer/internal/collector"
+	"github.com/elqsar/pganalyzer/internal/collector/query"
+	"github.com/elqsar/pganalyzer/internal/collector/resource"
+	"github.com/elqsar/pganalyzer/internal/collector/schema"
+	"github.com/elqsar/pganalyzer/internal/models"
+	"github.com/elqsar/pganalyzer/internal/storage/sqlite"
 )
 
 // mockPGClient is a mock PostgreSQL client for testing.

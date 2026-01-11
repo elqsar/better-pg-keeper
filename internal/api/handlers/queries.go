@@ -9,8 +9,8 @@ import (
 
 	"github.com/labstack/echo/v4"
 
-	"github.com/user/pganalyzer/internal/models"
-	"github.com/user/pganalyzer/internal/postgres"
+	"github.com/elqsar/pganalyzer/internal/models"
+	"github.com/elqsar/pganalyzer/internal/postgres"
 )
 
 // QueriesStorage defines the storage interface needed by the queries handler.

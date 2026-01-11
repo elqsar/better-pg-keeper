@@ -1,4 +1,4 @@
-module github.com/user/pganalyzer
+module github.com/elqsar/pganalyzer
 
 go 1.25.2
 

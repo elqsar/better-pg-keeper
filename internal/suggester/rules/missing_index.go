@@ -5,15 +5,15 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/user/pganalyzer/internal/analyzer"
-	"github.com/user/pganalyzer/internal/suggester"
+	"github.com/elqsar/pganalyzer/internal/analyzer"
+	"github.com/elqsar/pganalyzer/internal/suggester"
 )
 
 // MissingIndexRule generates suggestions for tables with high sequential scan ratios.
 type MissingIndexRule struct {
-	warningRatio     float64
-	criticalRatio    float64
-	minTableSize     int64
+	warningRatio  float64
+	criticalRatio float64
+	minTableSize  int64
 }
 
 // NewMissingIndexRule creates a new MissingIndexRule with the given thresholds.

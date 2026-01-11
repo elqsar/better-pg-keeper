@@ -11,8 +11,8 @@ import (
 
 	"github.com/labstack/echo/v4"
 
-	"github.com/user/pganalyzer/internal/models"
-	"github.com/user/pganalyzer/internal/web"
+	"github.com/elqsar/pganalyzer/internal/models"
+	"github.com/elqsar/pganalyzer/internal/web"
 )
 
 // mockPageStorage implements PageStorage for testing.

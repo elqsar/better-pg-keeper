@@ -6,10 +6,10 @@ import (
 	"log"
 	"time"
 
-	"github.com/user/pganalyzer/internal/collector"
-	"github.com/user/pganalyzer/internal/models"
-	"github.com/user/pganalyzer/internal/postgres"
-	"github.com/user/pganalyzer/internal/storage/sqlite"
+	"github.com/elqsar/pganalyzer/internal/collector"
+	"github.com/elqsar/pganalyzer/internal/models"
+	"github.com/elqsar/pganalyzer/internal/postgres"
+	"github.com/elqsar/pganalyzer/internal/storage/sqlite"
 )
 
 const (

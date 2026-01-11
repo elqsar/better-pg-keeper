@@ -7,9 +7,9 @@ import (
 	"strings"
 	"time"
 
+	"github.com/elqsar/pganalyzer/internal/models"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
-	"github.com/user/pganalyzer/internal/models"
 )
 
 // PgxClient implements the Client interface using pgx.

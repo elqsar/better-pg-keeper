@@ -132,7 +132,7 @@ task
 
 ## What Was Completed in Task 01
 
-- Go module initialized (`github.com/user/pganalyzer`)
+- Go module initialized (`github.com/elqsar/pganalyzer`)
 - Directory structure created matching tech design
 - Dependencies added: pgx/v5, sqlite, echo/v4, yaml.v3
 - Entry point created with signal handling and version flags

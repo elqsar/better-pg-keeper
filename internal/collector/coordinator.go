@@ -8,9 +8,9 @@ import (
 	"sync"
 	"time"
 
-	"github.com/user/pganalyzer/internal/models"
-	"github.com/user/pganalyzer/internal/postgres"
-	"github.com/user/pganalyzer/internal/storage/sqlite"
+	"github.com/elqsar/pganalyzer/internal/models"
+	"github.com/elqsar/pganalyzer/internal/postgres"
+	"github.com/elqsar/pganalyzer/internal/storage/sqlite"
 )
 
 // Coordinator manages the lifecycle of snapshots and coordinates collector execution.

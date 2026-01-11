@@ -5,7 +5,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/user/pganalyzer/internal/models"
+	"github.com/elqsar/pganalyzer/internal/models"
 )
 
 func TestDefaultClientConfig(t *testing.T) {

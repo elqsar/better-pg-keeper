@@ -9,12 +9,12 @@ import (
 	"testing"
 	"time"
 
-	"github.com/user/pganalyzer/internal/analyzer"
-	"github.com/user/pganalyzer/internal/collector"
-	"github.com/user/pganalyzer/internal/config"
-	"github.com/user/pganalyzer/internal/models"
-	"github.com/user/pganalyzer/internal/scheduler"
-	"github.com/user/pganalyzer/internal/suggester"
+	"github.com/elqsar/pganalyzer/internal/analyzer"
+	"github.com/elqsar/pganalyzer/internal/collector"
+	"github.com/elqsar/pganalyzer/internal/config"
+	"github.com/elqsar/pganalyzer/internal/models"
+	"github.com/elqsar/pganalyzer/internal/scheduler"
+	"github.com/elqsar/pganalyzer/internal/suggester"
 )
 
 var errNotConnected = errors.New("not connected")

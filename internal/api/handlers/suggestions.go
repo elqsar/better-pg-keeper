@@ -8,7 +8,7 @@ import (
 
 	"github.com/labstack/echo/v4"
 
-	"github.com/user/pganalyzer/internal/models"
+	"github.com/elqsar/pganalyzer/internal/models"
 )
 
 // SuggestionsStorage defines the storage interface needed by the suggestions handler.

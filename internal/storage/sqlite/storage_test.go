@@ -7,7 +7,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/user/pganalyzer/internal/models"
+	"github.com/elqsar/pganalyzer/internal/models"
 )
 
 func setupTestStorage(t *testing.T) *SQLiteStorage {

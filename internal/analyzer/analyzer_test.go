@@ -5,8 +5,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/user/pganalyzer/internal/config"
-	"github.com/user/pganalyzer/internal/models"
+	"github.com/elqsar/pganalyzer/internal/config"
+	"github.com/elqsar/pganalyzer/internal/models"
 )
 
 // mockStorage implements the Storage interface for testing.
@@ -345,12 +345,12 @@ func TestTableAnalyzer_StaleVacuum(t *testing.T) {
 	oldVacuum := time.Now().AddDate(0, 0, -14) // 14 days ago
 	storage.tableStats[1] = []models.TableStat{
 		{
-			SchemaName:   "public",
-			RelName:      "orders",
-			NLiveTup:     50000,
-			NDeadTup:     5000, // Significant dead tuples
-			LastVacuum:   &oldVacuum,
-			TableSize:    10 * 1024 * 1024,
+			SchemaName: "public",
+			RelName:    "orders",
+			NLiveTup:   50000,
+			NDeadTup:   5000, // Significant dead tuples
+			LastVacuum: &oldVacuum,
+			TableSize:  10 * 1024 * 1024,
 		},
 	}
 
@@ -763,12 +763,12 @@ func TestArePotentialDuplicates(t *testing.T) {
 		name2    string
 		expected bool
 	}{
-		{"idx_users_email", "idx_users_email_1", true},          // Common suffix pattern
-		{"idx_users_email", "idx_users_email_old", true},        // Backup pattern
-		{"idx_orders_date", "idx_orders_status", false},         // Different columns
-		{"idx_users_name", "idx_users_name_idx", true},          // Suffix variation
-		{"short", "shorty", false},                              // Too short for contains check
-		{"idx_products_category", "idx_products", true},         // One contains other
+		{"idx_users_email", "idx_users_email_1", true},   // Common suffix pattern
+		{"idx_users_email", "idx_users_email_old", true}, // Backup pattern
+		{"idx_orders_date", "idx_orders_status", false},  // Different columns
+		{"idx_users_name", "idx_users_name_idx", true},   // Suffix variation
+		{"short", "shorty", false},                       // Too short for contains check
+		{"idx_products_category", "idx_products", true},  // One contains other
 	}
 
 	for _, tt := range tests {

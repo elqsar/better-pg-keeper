@@ -5,8 +5,8 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/user/pganalyzer/internal/analyzer"
-	"github.com/user/pganalyzer/internal/suggester"
+	"github.com/elqsar/pganalyzer/internal/analyzer"
+	"github.com/elqsar/pganalyzer/internal/suggester"
 )
 
 // LockContentionRule generates suggestions for blocked queries and lock contention.
@@ -95,16 +95,16 @@ func (r *LockContentionRule) Evaluate(ctx context.Context, analysis *analyzer.An
 			Description:  desc.String(),
 			TargetObject: fmt.Sprintf("blocked_pid:%d", blocked.BlockedPID),
 			Metadata: map[string]any{
-				"blocked_pid":      blocked.BlockedPID,
-				"blocked_user":     blocked.BlockedUser,
-				"blocked_query":    blocked.BlockedQuery,
-				"blocking_pid":     blocked.BlockingPID,
-				"blocking_user":    blocked.BlockingUser,
-				"blocking_query":   blocked.BlockingQuery,
-				"wait_duration":    blocked.WaitDuration,
-				"lock_type":        blocked.LockType,
-				"lock_mode":        blocked.LockMode,
-				"relation":         blocked.Relation,
+				"blocked_pid":    blocked.BlockedPID,
+				"blocked_user":   blocked.BlockedUser,
+				"blocked_query":  blocked.BlockedQuery,
+				"blocking_pid":   blocked.BlockingPID,
+				"blocking_user":  blocked.BlockingUser,
+				"blocking_query": blocked.BlockingQuery,
+				"wait_duration":  blocked.WaitDuration,
+				"lock_type":      blocked.LockType,
+				"lock_mode":      blocked.LockMode,
+				"relation":       blocked.Relation,
 			},
 		})
 	}

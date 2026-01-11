@@ -6,7 +6,7 @@ import (
 	"sort"
 	"strings"
 
-	"github.com/user/pganalyzer/internal/models"
+	"github.com/elqsar/pganalyzer/internal/models"
 )
 
 // IndexAnalyzer detects issues with indexes such as unused or duplicate indexes.
@@ -82,11 +82,11 @@ func (a *IndexAnalyzer) detectUnusedIndexes(stats []models.IndexStat) []IndexIss
 		}
 
 		issues = append(issues, IndexIssue{
-			SchemaName:   stat.SchemaName,
-			TableName:    stat.RelName,
-			IndexName:    stat.IndexRelName,
-			IssueType:    IndexIssueUnused,
-			Severity:     severity,
+			SchemaName: stat.SchemaName,
+			TableName:  stat.RelName,
+			IndexName:  stat.IndexRelName,
+			IssueType:  IndexIssueUnused,
+			Severity:   severity,
 			Description: fmt.Sprintf(
 				"Index has never been used (0 scans). Consider dropping to save %s.",
 				formatBytes(stat.IndexSize),
@@ -165,11 +165,11 @@ func (a *IndexAnalyzer) detectDuplicateIndexes(stats []models.IndexStat) []Index
 					}
 
 					issues = append(issues, IndexIssue{
-						SchemaName:   lessUsed.SchemaName,
-						TableName:    lessUsed.RelName,
-						IndexName:    lessUsed.IndexRelName,
-						IssueType:    IndexIssueDuplicate,
-						Severity:     models.SeverityInfo,
+						SchemaName: lessUsed.SchemaName,
+						TableName:  lessUsed.RelName,
+						IndexName:  lessUsed.IndexRelName,
+						IssueType:  IndexIssueDuplicate,
+						Severity:   models.SeverityInfo,
 						Description: fmt.Sprintf(
 							"Index may be redundant with '%s'. Has %d scans vs %d. Review and consider dropping to save %s.",
 							moreUsed.IndexRelName, lessUsed.IdxScan, moreUsed.IdxScan, formatBytes(lessUsed.IndexSize),

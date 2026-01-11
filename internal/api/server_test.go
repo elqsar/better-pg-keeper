@@ -11,9 +11,9 @@ import (
 
 	"github.com/labstack/echo/v4"
 
-	"github.com/user/pganalyzer/internal/config"
-	"github.com/user/pganalyzer/internal/models"
-	"github.com/user/pganalyzer/internal/scheduler"
+	"github.com/elqsar/pganalyzer/internal/config"
+	"github.com/elqsar/pganalyzer/internal/models"
+	"github.com/elqsar/pganalyzer/internal/scheduler"
 )
 
 // mockStorage implements all storage interfaces needed for testing.

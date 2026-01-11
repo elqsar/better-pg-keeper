@@ -6,8 +6,8 @@ import (
 	"strings"
 	"time"
 
-	"github.com/user/pganalyzer/internal/analyzer"
-	"github.com/user/pganalyzer/internal/suggester"
+	"github.com/elqsar/pganalyzer/internal/analyzer"
+	"github.com/elqsar/pganalyzer/internal/suggester"
 )
 
 // VacuumRule generates suggestions for tables with stale vacuum.

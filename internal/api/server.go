@@ -11,13 +11,13 @@ import (
 	"github.com/labstack/echo/v4"
 	echomiddleware "github.com/labstack/echo/v4/middleware"
 
-	"github.com/user/pganalyzer/internal/api/handlers"
-	"github.com/user/pganalyzer/internal/api/middleware"
-	"github.com/user/pganalyzer/internal/config"
-	"github.com/user/pganalyzer/internal/postgres"
-	"github.com/user/pganalyzer/internal/scheduler"
-	"github.com/user/pganalyzer/internal/storage/sqlite"
-	"github.com/user/pganalyzer/internal/web"
+	"github.com/elqsar/pganalyzer/internal/api/handlers"
+	"github.com/elqsar/pganalyzer/internal/api/middleware"
+	"github.com/elqsar/pganalyzer/internal/config"
+	"github.com/elqsar/pganalyzer/internal/postgres"
+	"github.com/elqsar/pganalyzer/internal/scheduler"
+	"github.com/elqsar/pganalyzer/internal/storage/sqlite"
+	"github.com/elqsar/pganalyzer/internal/web"
 )
 
 // Server represents the HTTP API server.

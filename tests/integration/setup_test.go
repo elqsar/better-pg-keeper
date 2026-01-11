@@ -9,9 +9,9 @@ import (
 	"testing"
 	"time"
 
-	"github.com/user/pganalyzer/internal/config"
-	"github.com/user/pganalyzer/internal/postgres"
-	"github.com/user/pganalyzer/internal/storage/sqlite"
+	"github.com/elqsar/pganalyzer/internal/config"
+	"github.com/elqsar/pganalyzer/internal/postgres"
+	"github.com/elqsar/pganalyzer/internal/storage/sqlite"
 )
 
 // TestEnv holds the test environment configuration.

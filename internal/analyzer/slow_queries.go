@@ -4,13 +4,13 @@ import (
 	"context"
 	"sort"
 
-	"github.com/user/pganalyzer/internal/models"
+	"github.com/elqsar/pganalyzer/internal/models"
 )
 
 // SlowQueryAnalyzer identifies queries that exceed execution time thresholds.
 type SlowQueryAnalyzer struct {
-	storage   Storage
-	config    *Config
+	storage Storage
+	config  *Config
 }
 
 // NewSlowQueryAnalyzer creates a new SlowQueryAnalyzer.

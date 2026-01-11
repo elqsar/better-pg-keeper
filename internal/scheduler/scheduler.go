@@ -9,10 +9,10 @@ import (
 	"sync/atomic"
 	"time"
 
-	"github.com/user/pganalyzer/internal/analyzer"
-	"github.com/user/pganalyzer/internal/collector"
-	"github.com/user/pganalyzer/internal/config"
-	"github.com/user/pganalyzer/internal/suggester"
+	"github.com/elqsar/pganalyzer/internal/analyzer"
+	"github.com/elqsar/pganalyzer/internal/collector"
+	"github.com/elqsar/pganalyzer/internal/config"
+	"github.com/elqsar/pganalyzer/internal/suggester"
 )
 
 // Storage defines the storage interface needed by the scheduler.
@@ -32,11 +32,11 @@ type Scheduler struct {
 	logger      *log.Logger
 
 	// State management
-	mu           sync.RWMutex
-	running      atomic.Bool
-	stopCh       chan struct{}
-	wg           sync.WaitGroup
-	manualMu     sync.Mutex // Prevents concurrent manual triggers
+	mu       sync.RWMutex
+	running  atomic.Bool
+	stopCh   chan struct{}
+	wg       sync.WaitGroup
+	manualMu sync.Mutex // Prevents concurrent manual triggers
 
 	// Health status
 	health *HealthStatus

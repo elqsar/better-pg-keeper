@@ -4,9 +4,9 @@ import (
 	"context"
 	"time"
 
-	"github.com/user/pganalyzer/internal/analyzer"
-	"github.com/user/pganalyzer/internal/collector"
-	"github.com/user/pganalyzer/internal/suggester"
+	"github.com/elqsar/pganalyzer/internal/analyzer"
+	"github.com/elqsar/pganalyzer/internal/collector"
+	"github.com/elqsar/pganalyzer/internal/suggester"
 )
 
 // runCollectionLoop runs the collection job at the minimum collector interval.

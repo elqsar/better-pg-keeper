@@ -6,8 +6,8 @@ import (
 	"log"
 	"time"
 
-	"github.com/user/pganalyzer/internal/analyzer"
-	"github.com/user/pganalyzer/internal/models"
+	"github.com/elqsar/pganalyzer/internal/analyzer"
+	"github.com/elqsar/pganalyzer/internal/models"
 )
 
 // Storage defines the storage interface needed by the suggester.

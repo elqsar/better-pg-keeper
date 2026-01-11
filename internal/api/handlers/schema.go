@@ -6,7 +6,7 @@ import (
 
 	"github.com/labstack/echo/v4"
 
-	"github.com/user/pganalyzer/internal/models"
+	"github.com/elqsar/pganalyzer/internal/models"
 )
 
 // SchemaStorage defines the storage interface needed by the schema handler.
@@ -25,19 +25,19 @@ type SchemaHandler struct {
 
 // TableResponse represents a table in the API response.
 type TableResponse struct {
-	Schema       string  `json:"schema"`
-	Name         string  `json:"name"`
-	FullName     string  `json:"full_name"`
-	LiveTuples   int64   `json:"live_tuples"`
-	DeadTuples   int64   `json:"dead_tuples"`
-	SeqScans     int64   `json:"seq_scans"`
-	IdxScans     int64   `json:"idx_scans"`
-	TableSize    int64   `json:"table_size"`
-	IndexSize    int64   `json:"index_size"`
-	TotalSize    int64   `json:"total_size"`
-	LastVacuum   *string `json:"last_vacuum,omitempty"`
-	LastAnalyze  *string `json:"last_analyze,omitempty"`
-	ScanRatio    float64 `json:"seq_scan_ratio"`
+	Schema      string  `json:"schema"`
+	Name        string  `json:"name"`
+	FullName    string  `json:"full_name"`
+	LiveTuples  int64   `json:"live_tuples"`
+	DeadTuples  int64   `json:"dead_tuples"`
+	SeqScans    int64   `json:"seq_scans"`
+	IdxScans    int64   `json:"idx_scans"`
+	TableSize   int64   `json:"table_size"`
+	IndexSize   int64   `json:"index_size"`
+	TotalSize   int64   `json:"total_size"`
+	LastVacuum  *string `json:"last_vacuum,omitempty"`
+	LastAnalyze *string `json:"last_analyze,omitempty"`
+	ScanRatio   float64 `json:"seq_scan_ratio"`
 }
 
 // TablesResponse represents the tables list response.
@@ -229,16 +229,16 @@ func (h *SchemaHandler) GetBloat(c echo.Context) error {
 // tableStatToResponse converts a TableStat to TableResponse.
 func tableStatToResponse(stat models.TableStat) TableResponse {
 	resp := TableResponse{
-		Schema:      stat.SchemaName,
-		Name:        stat.RelName,
-		FullName:    stat.SchemaName + "." + stat.RelName,
-		LiveTuples:  stat.NLiveTup,
-		DeadTuples:  stat.NDeadTup,
-		SeqScans:    stat.SeqScan,
-		IdxScans:    stat.IdxScan,
-		TableSize:   stat.TableSize,
-		IndexSize:   stat.IndexSize,
-		TotalSize:   stat.TableSize + stat.IndexSize,
+		Schema:     stat.SchemaName,
+		Name:       stat.RelName,
+		FullName:   stat.SchemaName + "." + stat.RelName,
+		LiveTuples: stat.NLiveTup,
+		DeadTuples: stat.NDeadTup,
+		SeqScans:   stat.SeqScan,
+		IdxScans:   stat.IdxScan,
+		TableSize:  stat.TableSize,
+		IndexSize:  stat.IndexSize,
+		TotalSize:  stat.TableSize + stat.IndexSize,
 	}
 
 	// Calculate seq scan ratio

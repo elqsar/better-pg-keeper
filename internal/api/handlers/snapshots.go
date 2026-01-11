@@ -7,8 +7,8 @@ import (
 
 	"github.com/labstack/echo/v4"
 
-	"github.com/user/pganalyzer/internal/models"
-	"github.com/user/pganalyzer/internal/scheduler"
+	"github.com/elqsar/pganalyzer/internal/models"
+	"github.com/elqsar/pganalyzer/internal/scheduler"
 )
 
 // SnapshotsStorage defines the storage interface needed by the snapshots handler.

@@ -6,7 +6,7 @@ import (
 
 	"github.com/labstack/echo/v4"
 
-	"github.com/user/pganalyzer/internal/config"
+	"github.com/elqsar/pganalyzer/internal/config"
 )
 
 // errorResponse represents a standardized error response.

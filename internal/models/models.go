@@ -33,10 +33,10 @@ type QueryStat struct {
 	QueryID        int64   `json:"queryid"`
 	Query          string  `json:"query"`
 	Calls          int64   `json:"calls"`
-	TotalExecTime  float64 `json:"total_exec_time"`  // milliseconds
-	MeanExecTime   float64 `json:"mean_exec_time"`   // milliseconds
-	MinExecTime    float64 `json:"min_exec_time"`    // milliseconds
-	MaxExecTime    float64 `json:"max_exec_time"`    // milliseconds
+	TotalExecTime  float64 `json:"total_exec_time"` // milliseconds
+	MeanExecTime   float64 `json:"mean_exec_time"`  // milliseconds
+	MinExecTime    float64 `json:"min_exec_time"`   // milliseconds
+	MaxExecTime    float64 `json:"max_exec_time"`   // milliseconds
 	Rows           int64   `json:"rows"`
 	SharedBlksHit  int64   `json:"shared_blks_hit"`
 	SharedBlksRead int64   `json:"shared_blks_read"`
@@ -46,18 +46,18 @@ type QueryStat struct {
 
 // QueryStatDelta represents the difference in query statistics between two snapshots.
 type QueryStatDelta struct {
-	QueryID           int64   `json:"queryid"`
-	Query             string  `json:"query"`
-	DeltaCalls        int64   `json:"delta_calls"`
-	DeltaTotalTime    float64 `json:"delta_total_time"`    // milliseconds
-	DeltaRows         int64   `json:"delta_rows"`
-	DeltaBlksHit      int64   `json:"delta_blks_hit"`
-	DeltaBlksRead     int64   `json:"delta_blks_read"`
-	MeanExecTime      float64 `json:"mean_exec_time"`      // milliseconds
-	CacheHitRatio     float64 `json:"cache_hit_ratio"`     // 0-1
-	AvgRowsPerCall    float64 `json:"avg_rows_per_call"`
-	FromSnapshotID    int64   `json:"from_snapshot_id"`
-	ToSnapshotID      int64   `json:"to_snapshot_id"`
+	QueryID        int64   `json:"queryid"`
+	Query          string  `json:"query"`
+	DeltaCalls     int64   `json:"delta_calls"`
+	DeltaTotalTime float64 `json:"delta_total_time"` // milliseconds
+	DeltaRows      int64   `json:"delta_rows"`
+	DeltaBlksHit   int64   `json:"delta_blks_hit"`
+	DeltaBlksRead  int64   `json:"delta_blks_read"`
+	MeanExecTime   float64 `json:"mean_exec_time"`  // milliseconds
+	CacheHitRatio  float64 `json:"cache_hit_ratio"` // 0-1
+	AvgRowsPerCall float64 `json:"avg_rows_per_call"`
+	FromSnapshotID int64   `json:"from_snapshot_id"`
+	ToSnapshotID   int64   `json:"to_snapshot_id"`
 }
 
 // TableStat represents statistics for a single table.
@@ -98,8 +98,8 @@ type IndexStat struct {
 type Suggestion struct {
 	ID           int64      `json:"id"`
 	InstanceID   int64      `json:"instance_id"`
-	RuleID       string     `json:"rule_id"`       // e.g., "unused_index", "slow_query"
-	Severity     string     `json:"severity"`      // "critical", "warning", "info"
+	RuleID       string     `json:"rule_id"`  // e.g., "unused_index", "slow_query"
+	Severity     string     `json:"severity"` // "critical", "warning", "info"
 	Title        string     `json:"title"`
 	Description  string     `json:"description"`
 	TargetObject string     `json:"target_object"` // table/index/query identifier
@@ -126,12 +126,12 @@ const (
 
 // ExplainPlan represents a cached EXPLAIN plan for a query.
 type ExplainPlan struct {
-	ID            int64      `json:"id"`
-	QueryID       int64      `json:"queryid"`
-	PlanText      string     `json:"plan_text"`
-	PlanJSON      string     `json:"plan_json,omitempty"`
-	CapturedAt    time.Time  `json:"captured_at"`
-	ExecutionTime *float64   `json:"execution_time,omitempty"` // if ANALYZE was used
+	ID            int64     `json:"id"`
+	QueryID       int64     `json:"queryid"`
+	PlanText      string    `json:"plan_text"`
+	PlanJSON      string    `json:"plan_json,omitempty"`
+	CapturedAt    time.Time `json:"captured_at"`
+	ExecutionTime *float64  `json:"execution_time,omitempty"` // if ANALYZE was used
 }
 
 // DatabaseStats represents database-level statistics.
@@ -153,18 +153,18 @@ type BloatInfo struct {
 
 // IndexDetail represents extended index information.
 type IndexDetail struct {
-	SchemaName   string `json:"schemaname"`
-	TableName    string `json:"table_name"`
-	IndexName    string `json:"index_name"`
-	IndexDef     string `json:"index_def"`
-	IndexSize    int64  `json:"index_size"`
-	IdxScan      int64  `json:"idx_scan"`
-	IdxTupRead   int64  `json:"idx_tup_read"`
-	IdxTupFetch  int64  `json:"idx_tup_fetch"`
-	IsUnique     bool   `json:"is_unique"`
-	IsPrimary    bool   `json:"is_primary"`
-	IsValid      bool   `json:"is_valid"`
-	TableSize    int64  `json:"table_size"`
+	SchemaName  string `json:"schemaname"`
+	TableName   string `json:"table_name"`
+	IndexName   string `json:"index_name"`
+	IndexDef    string `json:"index_def"`
+	IndexSize   int64  `json:"index_size"`
+	IdxScan     int64  `json:"idx_scan"`
+	IdxTupRead  int64  `json:"idx_tup_read"`
+	IdxTupFetch int64  `json:"idx_tup_fetch"`
+	IsUnique    bool   `json:"is_unique"`
+	IsPrimary   bool   `json:"is_primary"`
+	IsValid     bool   `json:"is_valid"`
+	TableSize   int64  `json:"table_size"`
 }
 
 // ConnectionActivity represents a snapshot of pg_stat_activity aggregates.
@@ -222,19 +222,19 @@ type LockStats struct {
 
 // BlockedQuery represents a query blocked by another transaction.
 type BlockedQuery struct {
-	ID           int64     `json:"id"`
-	SnapshotID   int64     `json:"snapshot_id"`
-	BlockedPID   int       `json:"blocked_pid"`
-	BlockedUser  string    `json:"blocked_user"`
-	BlockedQuery string    `json:"blocked_query"`
-	BlockedStart time.Time `json:"blocked_start"`
-	WaitDuration float64   `json:"wait_duration_seconds"`
-	BlockingPID  int       `json:"blocking_pid"`
-	BlockingUser string    `json:"blocking_user"`
-	BlockingQuery string   `json:"blocking_query"`
-	LockType     string    `json:"lock_type"`
-	LockMode     string    `json:"lock_mode"`
-	Relation     *string   `json:"relation,omitempty"`
+	ID            int64     `json:"id"`
+	SnapshotID    int64     `json:"snapshot_id"`
+	BlockedPID    int       `json:"blocked_pid"`
+	BlockedUser   string    `json:"blocked_user"`
+	BlockedQuery  string    `json:"blocked_query"`
+	BlockedStart  time.Time `json:"blocked_start"`
+	WaitDuration  float64   `json:"wait_duration_seconds"`
+	BlockingPID   int       `json:"blocking_pid"`
+	BlockingUser  string    `json:"blocking_user"`
+	BlockingQuery string    `json:"blocking_query"`
+	LockType      string    `json:"lock_type"`
+	LockMode      string    `json:"lock_mode"`
+	Relation      *string   `json:"relation,omitempty"`
 }
 
 // ExtendedDatabaseStats represents operational database metrics.

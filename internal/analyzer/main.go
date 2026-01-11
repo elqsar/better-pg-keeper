@@ -8,8 +8,8 @@ import (
 
 // MainAnalyzer orchestrates all sub-analyzers to produce a complete analysis.
 type MainAnalyzer struct {
-	storage         Storage
-	config          *Config
+	storage           Storage
+	config            *Config
 	slowQueryAnalyzer *SlowQueryAnalyzer
 	cacheAnalyzer     *CacheAnalyzer
 	tableAnalyzer     *TableAnalyzer

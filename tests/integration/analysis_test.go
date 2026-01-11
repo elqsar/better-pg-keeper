@@ -7,13 +7,13 @@ import (
 	"testing"
 	"time"
 
-	"github.com/user/pganalyzer/internal/analyzer"
-	"github.com/user/pganalyzer/internal/collector"
-	"github.com/user/pganalyzer/internal/collector/query"
-	"github.com/user/pganalyzer/internal/collector/resource"
-	"github.com/user/pganalyzer/internal/models"
-	"github.com/user/pganalyzer/internal/suggester"
-	"github.com/user/pganalyzer/internal/suggester/rules"
+	"github.com/elqsar/pganalyzer/internal/analyzer"
+	"github.com/elqsar/pganalyzer/internal/collector"
+	"github.com/elqsar/pganalyzer/internal/collector/query"
+	"github.com/elqsar/pganalyzer/internal/collector/resource"
+	"github.com/elqsar/pganalyzer/internal/models"
+	"github.com/elqsar/pganalyzer/internal/suggester"
+	"github.com/elqsar/pganalyzer/internal/suggester/rules"
 )
 
 func TestAnalysisAfterCollection(t *testing.T) {

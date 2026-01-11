@@ -7,8 +7,8 @@ import (
 	"encoding/json"
 	"fmt"
 
-	"github.com/user/pganalyzer/internal/analyzer"
-	"github.com/user/pganalyzer/internal/models"
+	"github.com/elqsar/pganalyzer/internal/analyzer"
+	"github.com/elqsar/pganalyzer/internal/models"
 )
 
 // Severity levels for suggestions.
@@ -61,17 +61,17 @@ func (s *Suggestion) ToModel(instanceID int64) (*models.Suggestion, error) {
 
 // Config holds configuration for the suggester.
 type Config struct {
-	SlowQueryMs            float64 // queries slower than this are flagged
-	SlowQueryCriticalMs    float64 // queries slower than this are critical
-	CacheHitRatioWarning   float64 // warn below this ratio (0-1)
-	CacheHitRatioCritical  float64 // critical below this ratio (0-1)
-	BloatPercentWarning    float64 // tables with > this % bloat are warnings
-	BloatPercentCritical   float64 // tables with > this % bloat are critical
-	UnusedIndexDays        int     // days without scans
-	SeqScanRatioWarning    float64 // seq_scan / total_scan ratio for warning
-	SeqScanRatioCritical   float64 // seq_scan / total_scan ratio for critical
-	MinTableSizeForIndex   int64   // skip index suggestions for tiny tables
-	VacuumStaleDays        int     // days since last vacuum to consider stale
+	SlowQueryMs           float64 // queries slower than this are flagged
+	SlowQueryCriticalMs   float64 // queries slower than this are critical
+	CacheHitRatioWarning  float64 // warn below this ratio (0-1)
+	CacheHitRatioCritical float64 // critical below this ratio (0-1)
+	BloatPercentWarning   float64 // tables with > this % bloat are warnings
+	BloatPercentCritical  float64 // tables with > this % bloat are critical
+	UnusedIndexDays       int     // days without scans
+	SeqScanRatioWarning   float64 // seq_scan / total_scan ratio for warning
+	SeqScanRatioCritical  float64 // seq_scan / total_scan ratio for critical
+	MinTableSizeForIndex  int64   // skip index suggestions for tiny tables
+	VacuumStaleDays       int     // days since last vacuum to consider stale
 
 	// Operational thresholds
 	LongRunningQuerySeconds      float64 // queries running longer flagged (warning)

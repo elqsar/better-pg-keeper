@@ -5,8 +5,8 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/user/pganalyzer/internal/analyzer"
-	"github.com/user/pganalyzer/internal/suggester"
+	"github.com/elqsar/pganalyzer/internal/analyzer"
+	"github.com/elqsar/pganalyzer/internal/suggester"
 )
 
 // BloatRule generates suggestions for tables with high dead tuple ratios.
@@ -97,12 +97,12 @@ func (r *BloatRule) Evaluate(ctx context.Context, analysis *analyzer.AnalysisRes
 			Description:  desc.String(),
 			TargetObject: fmt.Sprintf("%s.%s", issue.SchemaName, issue.TableName),
 			Metadata: map[string]any{
-				"schema_name":  issue.SchemaName,
-				"table_name":   issue.TableName,
-				"dead_tuples":  issue.NDeadTup,
-				"live_tuples":  issue.NLiveTup,
-				"bloat_ratio":  deadTupleRatio,
-				"table_size":   issue.TableSize,
+				"schema_name": issue.SchemaName,
+				"table_name":  issue.TableName,
+				"dead_tuples": issue.NDeadTup,
+				"live_tuples": issue.NLiveTup,
+				"bloat_ratio": deadTupleRatio,
+				"table_size":  issue.TableSize,
 			},
 		})
 	}

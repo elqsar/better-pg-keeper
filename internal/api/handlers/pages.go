@@ -9,7 +9,7 @@ import (
 
 	"github.com/labstack/echo/v4"
 
-	"github.com/user/pganalyzer/internal/models"
+	"github.com/elqsar/pganalyzer/internal/models"
 )
 
 // PageStorage defines the storage interface needed by page handlers.
@@ -326,20 +326,20 @@ type QueryDetailPageData struct {
 
 // PageQueryDetail represents detailed query info for the page.
 type PageQueryDetail struct {
-	QueryID       int64
-	Query         string
-	Calls         int64
-	MeanExecTime  float64
-	MinExecTime   float64
-	MaxExecTime   float64
-	TotalExecTime float64
-	Rows          int64
-	RowsPerCall   float64
-	SharedBlksHit int64
+	QueryID        int64
+	Query          string
+	Calls          int64
+	MeanExecTime   float64
+	MinExecTime    float64
+	MaxExecTime    float64
+	TotalExecTime  float64
+	Rows           int64
+	RowsPerCall    float64
+	SharedBlksHit  int64
 	SharedBlksRead int64
-	CacheHitRatio float64
-	Plans         int64
-	TotalPlanTime float64
+	CacheHitRatio  float64
+	Plans          int64
+	TotalPlanTime  float64
 }
 
 // QueryDetail handles GET /queries/:id requests.
