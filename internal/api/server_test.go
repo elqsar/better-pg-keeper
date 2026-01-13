@@ -287,11 +287,44 @@ func (m *mockPGClient) Explain(ctx context.Context, query string, analyze bool) 
 	}, nil
 }
 
+func (m *mockPGClient) ExplainWithParams(ctx context.Context, query string, params []any, analyze bool) (*models.ExplainPlan, error) {
+	return &models.ExplainPlan{
+		QueryID:    0,
+		PlanText:   "Seq Scan on users  (cost=0.00..10.00 rows=100 width=100)",
+		PlanJSON:   `[{"Plan": {"Node Type": "Seq Scan"}}]`,
+		CapturedAt: time.Now(),
+	}, nil
+}
+
 func (m *mockPGClient) GetVersion(ctx context.Context) (string, error) {
 	return "PostgreSQL 15.0", nil
 }
 
 func (m *mockPGClient) GetStatsResetTime(ctx context.Context) (*time.Time, error) {
+	return nil, nil
+}
+
+func (m *mockPGClient) GetConnectionActivity(ctx context.Context) (*models.ConnectionActivity, error) {
+	return nil, nil
+}
+
+func (m *mockPGClient) GetLongRunningQueries(ctx context.Context, thresholdSeconds float64) ([]models.LongRunningQuery, error) {
+	return nil, nil
+}
+
+func (m *mockPGClient) GetIdleInTransaction(ctx context.Context, thresholdSeconds float64) ([]models.IdleInTransaction, error) {
+	return nil, nil
+}
+
+func (m *mockPGClient) GetLockStats(ctx context.Context) (*models.LockStats, error) {
+	return nil, nil
+}
+
+func (m *mockPGClient) GetBlockedQueries(ctx context.Context) ([]models.BlockedQuery, error) {
+	return nil, nil
+}
+
+func (m *mockPGClient) GetExtendedDatabaseStats(ctx context.Context) (*models.ExtendedDatabaseStats, error) {
 	return nil, nil
 }
 

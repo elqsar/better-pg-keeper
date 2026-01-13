@@ -88,6 +88,10 @@ func (m *mockPGClient) Explain(ctx context.Context, query string, analyze bool) 
 	return m.explainPlan, nil
 }
 
+func (m *mockPGClient) ExplainWithParams(ctx context.Context, query string, params []any, analyze bool) (*models.ExplainPlan, error) {
+	return m.explainPlan, nil
+}
+
 func (m *mockPGClient) GetVersion(ctx context.Context) (string, error) {
 	return m.version, nil
 }

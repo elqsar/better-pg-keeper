@@ -377,6 +377,10 @@ func (m *mockPGClient) Explain(ctx context.Context, query string, analyze bool) 
 	return nil, nil
 }
 
+func (m *mockPGClient) ExplainWithParams(ctx context.Context, query string, params []any, analyze bool) (*models.ExplainPlan, error) {
+	return nil, nil
+}
+
 // Operational stats methods
 func (m *mockPGClient) GetConnectionActivity(ctx context.Context) (*models.ConnectionActivity, error) {
 	return nil, nil

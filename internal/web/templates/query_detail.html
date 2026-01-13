@@ -130,6 +130,16 @@
                     </button>
                 </div>
                 <div class="p-6">
+                    <!-- Parameter Input Section -->
+                    <div id="param-section" class="hidden mb-6 pb-6 border-b border-gray-200">
+                        <h3 class="text-sm font-medium text-gray-700 mb-3">Query Parameters</h3>
+                        <p class="text-xs text-gray-500 mb-4">
+                            This query has placeholders. Provide values for more accurate execution plans.
+                        </p>
+                        <div id="param-inputs" class="space-y-3">
+                            <!-- Parameter inputs will be dynamically generated -->
+                        </div>
+                    </div>
                     <div id="explain-content">
                         {{if .ExplainPlan}}
                         <pre class="code-block whitespace-pre-wrap">{{.ExplainPlan.PlanText}}</pre>
@@ -168,6 +178,85 @@
     </footer>
 
     <script>
+    // Detect placeholders in query text
+    function detectPlaceholders(queryText) {
+        const regex = /\$(\d+)/g;
+        const placeholders = new Set();
+        let match;
+        while ((match = regex.exec(queryText)) !== null) {
+            placeholders.add(parseInt(match[1], 10));
+        }
+        return Array.from(placeholders).sort((a, b) => a - b);
+    }
+
+    // Generate parameter input fields
+    function generateParamInputs(placeholders) {
+        const container = document.getElementById('param-inputs');
+        const section = document.getElementById('param-section');
+
+        if (placeholders.length === 0) {
+            section.classList.add('hidden');
+            return;
+        }
+
+        section.classList.remove('hidden');
+        container.innerHTML = '';
+
+        placeholders.forEach(pos => {
+            const div = document.createElement('div');
+            div.className = 'flex items-center gap-3';
+            div.innerHTML = `
+                <label class="w-12 text-sm font-medium text-gray-600 font-mono">$${pos}</label>
+                <input type="text"
+                       id="param-${pos}"
+                       class="flex-1 px-3 py-2 border border-gray-300 rounded-md text-sm focus:ring-2 focus:ring-primary focus:border-primary"
+                       placeholder="Value for $${pos}">
+                <select id="param-type-${pos}" class="px-2 py-2 border border-gray-300 rounded-md text-sm bg-white">
+                    <option value="text">text</option>
+                    <option value="integer">integer</option>
+                    <option value="numeric">numeric</option>
+                    <option value="boolean">boolean</option>
+                    <option value="timestamp">timestamp</option>
+                    <option value="uuid">uuid</option>
+                </select>
+            `;
+            container.appendChild(div);
+        });
+    }
+
+    // Collect parameter values from inputs
+    function collectParams() {
+        const params = [];
+        const section = document.getElementById('param-section');
+        if (section.classList.contains('hidden')) {
+            return params;
+        }
+
+        const inputs = document.querySelectorAll('[id^="param-"]');
+        const positions = new Set();
+
+        inputs.forEach(input => {
+            if (input.tagName === 'INPUT') {
+                const pos = parseInt(input.id.replace('param-', ''), 10);
+                if (!positions.has(pos)) {
+                    positions.add(pos);
+                    const typeSelect = document.getElementById(`param-type-${pos}`);
+                    const value = input.value.trim();
+
+                    if (value) {
+                        params.push({
+                            position: pos,
+                            value: value,
+                            type: typeSelect ? typeSelect.value : 'text'
+                        });
+                    }
+                }
+            }
+        });
+
+        return params;
+    }
+
     function refreshExplain() {
         const btn = document.getElementById('explain-btn');
         const content = document.getElementById('explain-content');
@@ -175,8 +264,13 @@
         btn.disabled = true;
         btn.innerHTML = '<div class="spinner h-4 w-4 inline-block mr-2"></div> Loading...';
 
+        const params = collectParams();
+        const requestBody = params.length > 0 ? JSON.stringify({ parameters: params }) : null;
+
         fetch('/api/v1/queries/{{.Query.QueryID}}/explain', {
-            method: 'POST'
+            method: 'POST',
+            headers: requestBody ? { 'Content-Type': 'application/json' } : {},
+            body: requestBody
         })
         .then(response => response.json())
         .then(data => {
@@ -186,7 +280,12 @@
             if (data.error) {
                 content.innerHTML = '<div class="text-severity-critical p-4 bg-severity-critical-bg rounded-lg">Error: ' + escapeHtml(data.error) + '</div>';
             } else {
-                content.innerHTML = '<pre class="code-block whitespace-pre-wrap">' + escapeHtml(data.plan_text) + '</pre>' +
+                let paramNote = '';
+                if (data.used_params) {
+                    paramNote = '<div class="text-green-600 text-sm mb-3 flex items-center gap-2"><svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 13l4 4L19 7"></path></svg>Plan generated with provided parameter values</div>';
+                }
+                content.innerHTML = paramNote +
+                    '<pre class="code-block whitespace-pre-wrap">' + escapeHtml(data.plan_text) + '</pre>' +
                     '<p class="text-gray-500 text-sm mt-4">Captured: just now</p>';
             }
         })
@@ -202,6 +301,16 @@
         div.textContent = text;
         return div.innerHTML;
     }
+
+    // Initialize on page load
+    document.addEventListener('DOMContentLoaded', function() {
+        const queryBlock = document.querySelector('.code-block');
+        if (queryBlock) {
+            const queryText = queryBlock.textContent || '';
+            const placeholders = detectPlaceholders(queryText);
+            generateParamInputs(placeholders);
+        }
+    });
     </script>
 </body>
 </html>

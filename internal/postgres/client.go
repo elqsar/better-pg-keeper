@@ -36,6 +36,7 @@ type Client interface {
 
 	// Query analysis
 	Explain(ctx context.Context, query string, analyze bool) (*models.ExplainPlan, error)
+	ExplainWithParams(ctx context.Context, query string, params []any, analyze bool) (*models.ExplainPlan, error)
 
 	// Metadata
 	GetVersion(ctx context.Context) (string, error)

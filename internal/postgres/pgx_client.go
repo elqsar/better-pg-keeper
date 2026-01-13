@@ -505,6 +505,149 @@ func (c *PgxClient) Explain(ctx context.Context, query string, analyze bool) (*m
 	return plan, nil
 }
 
+// ExplainWithParams runs EXPLAIN on a query with actual parameter values.
+// It uses PREPARE/EXECUTE to provide parameters safely.
+func (c *PgxClient) ExplainWithParams(ctx context.Context, query string, params []any, analyze bool) (*models.ExplainPlan, error) {
+	if c.pool == nil {
+		return nil, fmt.Errorf("postgres: not connected")
+	}
+
+	// Never auto-analyze write queries
+	if analyze && isWriteQuery(query) {
+		return nil, fmt.Errorf("postgres: cannot use ANALYZE on write queries (INSERT/UPDATE/DELETE)")
+	}
+
+	// If no params provided, fall back to regular Explain
+	if len(params) == 0 {
+		return c.Explain(ctx, query, analyze)
+	}
+
+	// Generate unique statement name to avoid collisions
+	stmtName := fmt.Sprintf("pganalyzer_explain_%d", time.Now().UnixNano())
+
+	// Use a transaction to ensure PREPARE and DEALLOCATE are paired
+	tx, err := c.pool.Begin(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("postgres: failed to begin transaction: %w", err)
+	}
+	defer tx.Rollback(ctx) //nolint:errcheck // Best effort cleanup on defer
+
+	// PREPARE the statement
+	prepareQuery := fmt.Sprintf("PREPARE %s AS %s", stmtName, query)
+	_, err = tx.Exec(ctx, prepareQuery)
+	if err != nil {
+		return nil, fmt.Errorf("postgres: failed to prepare statement: %w", err)
+	}
+
+	// Ensure cleanup happens
+	defer func() {
+		deallocQuery := fmt.Sprintf("DEALLOCATE %s", stmtName)
+		tx.Exec(ctx, deallocQuery) //nolint:errcheck // Best effort cleanup
+	}()
+
+	// Build EXPLAIN EXECUTE query with SQL literals
+	// Note: EXECUTE takes literal values, not parameter placeholders
+	var explainOpts string
+	if analyze {
+		explainOpts = "ANALYZE, BUFFERS, VERBOSE, SETTINGS, FORMAT JSON"
+	} else {
+		explainOpts = "BUFFERS, VERBOSE, SETTINGS, FORMAT JSON"
+	}
+
+	// Format parameters as SQL literals
+	paramLiterals := make([]string, len(params))
+	for i, p := range params {
+		paramLiterals[i] = formatSQLLiteral(p)
+	}
+	explainQuery := fmt.Sprintf("EXPLAIN (%s) EXECUTE %s(%s)",
+		explainOpts, stmtName, strings.Join(paramLiterals, ", "))
+
+	// Execute EXPLAIN (no additional params needed - values are in the SQL)
+	rows, err := tx.Query(ctx, explainQuery)
+	if err != nil {
+		return nil, fmt.Errorf("postgres: failed to explain query with params: %w", err)
+	}
+	defer rows.Close()
+
+	var planParts []string
+	for rows.Next() {
+		var part string
+		if err := rows.Scan(&part); err != nil {
+			return nil, fmt.Errorf("postgres: failed to scan explain result: %w", err)
+		}
+		planParts = append(planParts, part)
+	}
+
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("postgres: error iterating explain results: %w", err)
+	}
+
+	// Commit transaction (DEALLOCATE will still run in defer)
+	if err := tx.Commit(ctx); err != nil {
+		return nil, fmt.Errorf("postgres: failed to commit: %w", err)
+	}
+
+	planJSON := strings.Join(planParts, "")
+
+	plan := &models.ExplainPlan{
+		PlanJSON:   planJSON,
+		CapturedAt: time.Now(),
+	}
+
+	// Parse JSON to extract plan text and execution time
+	var planData []map[string]any
+	if err := json.Unmarshal([]byte(planJSON), &planData); err == nil && len(planData) > 0 {
+		// Generate text representation from JSON
+		if planText, err := json.MarshalIndent(planData, "", "  "); err == nil {
+			plan.PlanText = string(planText)
+		}
+
+		// Extract execution time if ANALYZE was used
+		if analyze {
+			if planInfo, ok := planData[0]["Plan"].(map[string]any); ok {
+				if actualTime, ok := planInfo["Actual Total Time"].(float64); ok {
+					plan.ExecutionTime = &actualTime
+				}
+			}
+		}
+	} else {
+		plan.PlanText = planJSON
+	}
+
+	return plan, nil
+}
+
+// formatSQLLiteral converts a Go value to a PostgreSQL literal string.
+// This is safe for use in EXECUTE statements where parameter binding isn't available.
+func formatSQLLiteral(v any) string {
+	if v == nil {
+		return "NULL"
+	}
+
+	switch val := v.(type) {
+	case bool:
+		if val {
+			return "TRUE"
+		}
+		return "FALSE"
+	case int, int8, int16, int32, int64, uint, uint8, uint16, uint32, uint64:
+		return fmt.Sprintf("%d", val)
+	case float32, float64:
+		return fmt.Sprintf("%v", val)
+	case string:
+		// Escape single quotes by doubling them
+		escaped := strings.ReplaceAll(val, "'", "''")
+		return fmt.Sprintf("'%s'", escaped)
+	case time.Time:
+		return fmt.Sprintf("'%s'::timestamptz", val.Format(time.RFC3339))
+	default:
+		// For unknown types, convert to string and escape
+		str := fmt.Sprintf("%v", val)
+		escaped := strings.ReplaceAll(str, "'", "''")
+		return fmt.Sprintf("'%s'", escaped)
+	}
+}
+
 // GetVersion returns the PostgreSQL server version string.
 func (c *PgxClient) GetVersion(ctx context.Context) (string, error) {
 	if c.pool == nil {
