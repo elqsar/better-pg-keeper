@@ -219,6 +219,7 @@ type QueriesPageData struct {
 	Sort        string
 	Order       string
 	Filter      string
+	Search      string
 	CurrentPage int
 	TotalPages  int
 	Total       int
@@ -249,6 +250,7 @@ func (h *PageHandler) Queries(c echo.Context) error {
 		order = "desc"
 	}
 	filter := c.QueryParam("filter")
+	search := c.QueryParam("search")
 	page, _ := strconv.Atoi(c.QueryParam("page"))
 	if page < 1 {
 		page = 1
@@ -266,6 +268,7 @@ func (h *PageHandler) Queries(c echo.Context) error {
 		Sort:        sortField,
 		Order:       order,
 		Filter:      filter,
+		Search:      search,
 		CurrentPage: page,
 	}
 
@@ -283,6 +286,19 @@ func (h *PageHandler) Queries(c echo.Context) error {
 	if err != nil {
 		c.Logger().Errorf("failed to get current query stats: %v", err)
 		return c.Render(http.StatusOK, "queries", data)
+	}
+
+	// Apply search filter if requested (exact query ID match)
+	if search != "" {
+		if searchID, err := strconv.ParseInt(search, 10, 64); err == nil {
+			var filtered []models.QueryStat
+			for _, s := range stats {
+				if s.QueryID == searchID {
+					filtered = append(filtered, s)
+				}
+			}
+			stats = filtered
+		}
 	}
 
 	// Apply slow filter if requested
