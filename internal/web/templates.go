@@ -46,6 +46,7 @@ func NewTemplateRenderer() (*TemplateRenderer, error) {
 		"suggestionCardClass": suggestionCardClass,
 		"dict":                dict,
 		"eq":                  eq,
+		"formatDurationSec":   formatDurationSec,
 	}
 
 	tmpl, err := template.New("").Funcs(funcMap).ParseFS(templatesFS, "templates/*.html")
@@ -96,6 +97,20 @@ func formatDuration(ms float64) string {
 		return fmt.Sprintf("%.2f s", ms/1000)
 	}
 	return fmt.Sprintf("%.2f min", ms/60000)
+}
+
+// formatDurationSec formats seconds to a human-readable duration.
+func formatDurationSec(seconds float64) string {
+	if seconds < 1 {
+		return fmt.Sprintf("%.0f ms", seconds*1000)
+	}
+	if seconds < 60 {
+		return fmt.Sprintf("%.1f s", seconds)
+	}
+	if seconds < 3600 {
+		return fmt.Sprintf("%.1f min", seconds/60)
+	}
+	return fmt.Sprintf("%.1f h", seconds/3600)
 }
 
 // formatBytes formats bytes to a human-readable size.

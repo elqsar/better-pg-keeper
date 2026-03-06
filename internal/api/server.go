@@ -161,6 +161,8 @@ func (s *Server) registerRoutes() {
 	s.echo.GET("/queries/:id", pageHandler.QueryDetail)
 	s.echo.GET("/schema", pageHandler.Schema)
 	s.echo.GET("/suggestions", pageHandler.Suggestions)
+	s.echo.GET("/suggestions/:id", pageHandler.SuggestionDetail)
+	s.echo.GET("/activity", pageHandler.Activity)
 
 	// API v1 routes
 	apiV1 := s.echo.Group("/api/v1")

@@ -18,6 +18,7 @@
                     <a href="/" class="nav-link-active">Dashboard</a>
                     <a href="/queries" class="nav-link-inactive">Queries</a>
                     <a href="/schema" class="nav-link-inactive">Schema</a>
+                    <a href="/activity" class="nav-link-inactive">Activity</a>
                     <a href="/suggestions" class="nav-link-inactive">Suggestions</a>
                 </nav>
             </div>
@@ -51,7 +52,7 @@
                 <div class="stat-card">
                     <div class="stat-label">Slow Queries</div>
                     <div class="stat-value {{if gt .SlowQueriesCount 0}}text-severity-warning{{else}}text-gray-900{{end}}">{{.SlowQueriesCount}}</div>
-                    <div class="stat-hint">Mean exec time &gt;1s</div>
+                    <div class="stat-hint">Mean exec time &gt;1s · <a href="/queries?filter=slow&sort=mean_time&order=desc" class="text-primary hover:text-primary-hover">View all</a></div>
                 </div>
                 <div class="stat-card">
                     <div class="stat-label">Active Suggestions</div>
@@ -76,7 +77,7 @@
                     <div class="stat-label">Idle in Transaction</div>
                     {{if .ActivityStats}}
                     <div class="stat-value {{if gt .ActivityStats.IdleInTxCount 0}}text-severity-warning{{else}}text-gray-900{{end}}">{{.ActivityStats.IdleInTxCount}}</div>
-                    <div class="stat-hint">Connections idle in tx</div>
+                    <div class="stat-hint">Connections idle in tx · <a href="/activity?tab=idle_in_tx" class="text-primary hover:text-primary-hover">View all</a></div>
                     {{else}}
                     <div class="stat-value text-gray-400">N/A</div>
                     <div class="stat-hint">No data available</div>
@@ -85,12 +86,12 @@
                 <div class="stat-card">
                     <div class="stat-label">Long-Running Queries</div>
                     <div class="stat-value {{if gt .LongRunningCount 0}}text-severity-warning{{else}}text-gray-900{{end}}">{{.LongRunningCount}}</div>
-                    <div class="stat-hint">Running &gt;60s</div>
+                    <div class="stat-hint">Running &gt;60s · <a href="/activity?tab=long_running" class="text-primary hover:text-primary-hover">View all</a></div>
                 </div>
                 <div class="stat-card">
                     <div class="stat-label">Blocked Queries</div>
                     <div class="stat-value {{if gt .BlockedCount 0}}text-severity-critical{{else}}text-gray-900{{end}}">{{.BlockedCount}}</div>
-                    <div class="stat-hint">Waiting for locks</div>
+                    <div class="stat-hint">Waiting for locks · <a href="/activity?tab=blocked" class="text-primary hover:text-primary-hover">View all</a></div>
                 </div>
             </div>
 

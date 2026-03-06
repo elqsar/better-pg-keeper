@@ -1,0 +1,213 @@
+{{define "activity"}}
+<!DOCTYPE html>
+<html lang="en" class="h-full">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>{{.Title}} - PG Analyzer</title>
+    <link rel="stylesheet" href="/static/style.css">
+</head>
+<body class="min-h-full flex flex-col bg-gray-50">
+    <header class="bg-white border-b border-gray-200 sticky top-0 z-50">
+        <div class="max-w-7xl mx-auto px-4 lg:px-6">
+            <div class="flex items-center justify-between h-16">
+                <a href="/" class="text-xl font-semibold text-gray-900 hover:text-primary transition-colors">
+                    PG Analyzer
+                </a>
+                <nav class="flex items-center gap-1">
+                    <a href="/" class="nav-link-inactive">Dashboard</a>
+                    <a href="/queries" class="nav-link-inactive">Queries</a>
+                    <a href="/schema" class="nav-link-inactive">Schema</a>
+                    <a href="/activity" class="nav-link-active">Activity</a>
+                    <a href="/suggestions" class="nav-link-inactive">Suggestions</a>
+                </nav>
+            </div>
+        </div>
+    </header>
+
+    <main class="flex-1 py-8 px-4 lg:px-6">
+        <div class="max-w-7xl mx-auto">
+            <div class="mb-8">
+                <h1 class="text-2xl font-bold text-gray-900">Activity</h1>
+                <p class="mt-1 text-gray-500">Current database connection activity</p>
+            </div>
+
+            <!-- Tabs -->
+            <div class="border-b border-gray-200 mb-6">
+                <nav class="flex gap-4" aria-label="Tabs">
+                    <a href="/activity?tab=idle_in_tx" class="{{if eq .ActiveTab "idle_in_tx"}}tab-active{{else}}tab-inactive{{end}}">
+                        Idle in Transaction
+                    </a>
+                    <a href="/activity?tab=blocked" class="{{if eq .ActiveTab "blocked"}}tab-active{{else}}tab-inactive{{end}}">
+                        Blocked Queries
+                    </a>
+                    <a href="/activity?tab=long_running" class="{{if eq .ActiveTab "long_running"}}tab-active{{else}}tab-inactive{{end}}">
+                        Long-Running Queries
+                    </a>
+                </nav>
+            </div>
+
+            <div class="card overflow-hidden">
+                <div class="p-6">
+                    {{if eq .ActiveTab "idle_in_tx"}}
+                    <!-- Idle in Transaction Tab -->
+                    {{if .IdleInTx}}
+                    <div class="table-container">
+                        <table class="table">
+                            <thead>
+                                <tr>
+                                    <th>PID</th>
+                                    <th>User</th>
+                                    <th>Database</th>
+                                    <th>State</th>
+                                    <th>Transaction Start</th>
+                                    <th class="text-right">Duration</th>
+                                    <th>Query</th>
+                                </tr>
+                            </thead>
+                            <tbody class="divide-y divide-gray-100">
+                                {{range .IdleInTx}}
+                                <tr>
+                                    <td class="tabular-nums font-mono">{{.PID}}</td>
+                                    <td>{{.Username}}</td>
+                                    <td>{{.DatabaseName}}</td>
+                                    <td>
+                                        <span class="badge-warning">{{.State}}</span>
+                                    </td>
+                                    <td class="text-gray-500 text-sm">{{formatTime .XactStart}}</td>
+                                    <td class="text-right tabular-nums {{if gt .DurationSeconds 300.0}}text-severity-critical font-medium{{else if gt .DurationSeconds 60.0}}text-severity-warning font-medium{{end}}">{{formatDurationSec .DurationSeconds}}</td>
+                                    <td>
+                                        <div class="query-text max-w-xs truncate" title="{{.Query}}">{{truncate .Query 60}}</div>
+                                    </td>
+                                </tr>
+                                {{end}}
+                            </tbody>
+                        </table>
+                    </div>
+                    {{else}}
+                    <div class="empty-state">
+                        <svg class="empty-state-icon" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z"/>
+                        </svg>
+                        <div class="empty-state-title">No idle-in-transaction connections</div>
+                        <p class="empty-state-description">All connections are healthy</p>
+                    </div>
+                    {{end}}
+
+                    {{else if eq .ActiveTab "blocked"}}
+                    <!-- Blocked Queries Tab -->
+                    {{if .BlockedQueries}}
+                    <div class="table-container">
+                        <table class="table">
+                            <thead>
+                                <tr>
+                                    <th>Blocked PID</th>
+                                    <th>Blocked User</th>
+                                    <th>Blocked Query</th>
+                                    <th class="text-right">Wait Duration</th>
+                                    <th>Blocking PID</th>
+                                    <th>Blocking User</th>
+                                    <th>Blocking Query</th>
+                                    <th>Lock Type</th>
+                                    <th>Lock Mode</th>
+                                </tr>
+                            </thead>
+                            <tbody class="divide-y divide-gray-100">
+                                {{range .BlockedQueries}}
+                                <tr>
+                                    <td class="tabular-nums font-mono">{{.BlockedPID}}</td>
+                                    <td>{{.BlockedUser}}</td>
+                                    <td>
+                                        <div class="query-text max-w-xs truncate" title="{{.BlockedQuery}}">{{truncate .BlockedQuery 40}}</div>
+                                    </td>
+                                    <td class="text-right tabular-nums text-severity-critical font-medium">{{formatDurationSec .WaitDuration}}</td>
+                                    <td class="tabular-nums font-mono">{{.BlockingPID}}</td>
+                                    <td>{{.BlockingUser}}</td>
+                                    <td>
+                                        <div class="query-text max-w-xs truncate" title="{{.BlockingQuery}}">{{truncate .BlockingQuery 40}}</div>
+                                    </td>
+                                    <td><span class="text-gray-500 text-sm">{{.LockType}}</span></td>
+                                    <td><span class="text-gray-500 text-sm">{{.LockMode}}</span></td>
+                                </tr>
+                                {{end}}
+                            </tbody>
+                        </table>
+                    </div>
+                    {{else}}
+                    <div class="empty-state">
+                        <svg class="empty-state-icon" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z"/>
+                        </svg>
+                        <div class="empty-state-title">No blocked queries</div>
+                        <p class="empty-state-description">No queries are waiting for locks</p>
+                    </div>
+                    {{end}}
+
+                    {{else if eq .ActiveTab "long_running"}}
+                    <!-- Long-Running Queries Tab -->
+                    {{if .LongRunning}}
+                    <div class="table-container">
+                        <table class="table">
+                            <thead>
+                                <tr>
+                                    <th>PID</th>
+                                    <th>User</th>
+                                    <th>Database</th>
+                                    <th>State</th>
+                                    <th>Started</th>
+                                    <th class="text-right">Duration</th>
+                                    <th>Wait Event</th>
+                                    <th>Query</th>
+                                </tr>
+                            </thead>
+                            <tbody class="divide-y divide-gray-100">
+                                {{range .LongRunning}}
+                                <tr>
+                                    <td class="tabular-nums font-mono">{{.PID}}</td>
+                                    <td>{{.Username}}</td>
+                                    <td>{{.DatabaseName}}</td>
+                                    <td>
+                                        <span class="badge-warning">{{.State}}</span>
+                                    </td>
+                                    <td class="text-gray-500 text-sm">{{formatTime .QueryStart}}</td>
+                                    <td class="text-right tabular-nums {{if gt .DurationSeconds 300.0}}text-severity-critical font-medium{{else}}text-severity-warning font-medium{{end}}">{{formatDurationSec .DurationSeconds}}</td>
+                                    <td class="text-gray-500 text-sm">
+                                        {{if .WaitEventType}}{{.WaitEventType}}{{end}}{{if .WaitEvent}}/{{.WaitEvent}}{{end}}
+                                        {{if not .WaitEventType}}—{{end}}
+                                    </td>
+                                    <td>
+                                        <div class="query-text max-w-xs truncate" title="{{.Query}}">{{truncate .Query 60}}</div>
+                                    </td>
+                                </tr>
+                                {{end}}
+                            </tbody>
+                        </table>
+                    </div>
+                    {{else}}
+                    <div class="empty-state">
+                        <svg class="empty-state-icon" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z"/>
+                        </svg>
+                        <div class="empty-state-title">No long-running queries</div>
+                        <p class="empty-state-description">No queries running longer than 60 seconds</p>
+                    </div>
+                    {{end}}
+
+                    {{end}}
+                </div>
+            </div>
+        </div>
+    </main>
+
+    <footer class="bg-white border-t border-gray-200 py-4 px-4 lg:px-6">
+        <div class="max-w-7xl mx-auto flex items-center gap-4 text-sm text-gray-500">
+            <span>PG Analyzer {{.Version}}</span>
+            {{if not .LastSnapshot.IsZero}}
+            <span class="text-gray-300">|</span>
+            <span>Last snapshot: {{formatTime .LastSnapshot}}</span>
+            {{end}}
+        </div>
+    </footer>
+</body>
+</html>
+{{end}}

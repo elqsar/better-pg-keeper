@@ -17,15 +17,18 @@ import (
 
 // mockPageStorage implements PageStorage for testing.
 type mockPageStorage struct {
-	snapshot      *models.Snapshot
-	queryStats    []models.QueryStat
-	suggestions   []models.Suggestion
-	tableStats    []models.TableStat
-	indexStats    []models.IndexStat
-	bloatStats    []models.BloatInfo
-	explainPlan   *models.ExplainPlan
-	cacheHitRatio *float64
-	err           error
+	snapshot       *models.Snapshot
+	queryStats     []models.QueryStat
+	suggestions    []models.Suggestion
+	tableStats     []models.TableStat
+	indexStats     []models.IndexStat
+	bloatStats     []models.BloatInfo
+	explainPlan    *models.ExplainPlan
+	cacheHitRatio  *float64
+	idleInTx       []models.IdleInTransaction
+	longRunning    []models.LongRunningQuery
+	blockedQueries []models.BlockedQuery
+	err            error
 }
 
 func (m *mockPageStorage) GetLatestSnapshot(ctx context.Context, instanceID int64) (*models.Snapshot, error) {
@@ -41,6 +44,15 @@ func (m *mockPageStorage) GetSuggestionsByStatus(ctx context.Context, instanceID
 		}
 	}
 	return filtered, m.err
+}
+
+func (m *mockPageStorage) GetSuggestionByID(ctx context.Context, id int64) (*models.Suggestion, error) {
+	for _, s := range m.suggestions {
+		if s.ID == id {
+			return &s, nil
+		}
+	}
+	return nil, nil
 }
 
 func (m *mockPageStorage) GetExplainPlan(ctx context.Context, queryID int64) (*models.ExplainPlan, error) {
@@ -69,11 +81,15 @@ func (m *mockPageStorage) GetCurrentConnectionActivity(ctx context.Context, inst
 }
 
 func (m *mockPageStorage) GetCurrentLongRunningQueries(ctx context.Context, instanceID int64) ([]models.LongRunningQuery, error) {
-	return nil, m.err
+	return m.longRunning, m.err
 }
 
 func (m *mockPageStorage) GetCurrentBlockedQueries(ctx context.Context, instanceID int64) ([]models.BlockedQuery, error) {
-	return nil, m.err
+	return m.blockedQueries, m.err
+}
+
+func (m *mockPageStorage) GetCurrentIdleInTransaction(ctx context.Context, instanceID int64) ([]models.IdleInTransaction, error) {
+	return m.idleInTx, m.err
 }
 
 func (m *mockPageStorage) GetCurrentDatabaseStats(ctx context.Context, instanceID int64) (*models.ExtendedDatabaseStats, *float64, error) {
@@ -495,4 +511,165 @@ func TestSortQueryStats(t *testing.T) {
 			t.Errorf("First query should be ID 2, got %d", statsCopy[0].QueryID)
 		}
 	})
+}
+
+func TestActivityPageDefaultTab(t *testing.T) {
+	e := setupTestEcho()
+	storage := &mockPageStorage{
+		snapshot: &models.Snapshot{ID: 1, CapturedAt: time.Now()},
+		idleInTx: []models.IdleInTransaction{
+			{PID: 100, Username: "postgres", DatabaseName: "testdb", State: "idle in transaction", XactStart: time.Now(), DurationSeconds: 120.5, Query: "SELECT 1"},
+		},
+	}
+
+	handler := NewPageHandler(storage, 1, "1.0.0")
+
+	req := httptest.NewRequest(http.MethodGet, "/activity", nil)
+	rec := httptest.NewRecorder()
+	c := e.NewContext(req, rec)
+
+	err := handler.Activity(c)
+	if err != nil {
+		t.Fatalf("Activity() error = %v", err)
+	}
+
+	if rec.Code != http.StatusOK {
+		t.Errorf("Activity() status = %d, want %d", rec.Code, http.StatusOK)
+	}
+
+	body := rec.Body.String()
+	if !strings.Contains(body, "Activity") {
+		t.Error("Activity() response should contain 'Activity'")
+	}
+	if !strings.Contains(body, "idle in transaction") {
+		t.Error("Activity() default tab should show idle in transaction data")
+	}
+}
+
+func TestActivityPageBlockedTab(t *testing.T) {
+	e := setupTestEcho()
+	storage := &mockPageStorage{
+		snapshot: &models.Snapshot{ID: 1, CapturedAt: time.Now()},
+		blockedQueries: []models.BlockedQuery{
+			{BlockedPID: 200, BlockedUser: "app", BlockedQuery: "UPDATE users SET name='x'", WaitDuration: 5.2, BlockingPID: 201, BlockingUser: "admin", BlockingQuery: "ALTER TABLE users", LockType: "relation", LockMode: "AccessExclusiveLock"},
+		},
+	}
+
+	handler := NewPageHandler(storage, 1, "1.0.0")
+
+	req := httptest.NewRequest(http.MethodGet, "/activity?tab=blocked", nil)
+	rec := httptest.NewRecorder()
+	c := e.NewContext(req, rec)
+
+	err := handler.Activity(c)
+	if err != nil {
+		t.Fatalf("Activity() error = %v", err)
+	}
+
+	if rec.Code != http.StatusOK {
+		t.Errorf("Activity() status = %d, want %d", rec.Code, http.StatusOK)
+	}
+
+	body := rec.Body.String()
+	if !strings.Contains(body, "UPDATE users") {
+		t.Error("Activity() blocked tab should show blocked query data")
+	}
+}
+
+func TestActivityPageLongRunningTab(t *testing.T) {
+	e := setupTestEcho()
+	storage := &mockPageStorage{
+		snapshot: &models.Snapshot{ID: 1, CapturedAt: time.Now()},
+		longRunning: []models.LongRunningQuery{
+			{PID: 300, Username: "analytics", DatabaseName: "warehouse", State: "active", QueryStart: time.Now(), DurationSeconds: 180.0, Query: "SELECT * FROM big_table"},
+		},
+	}
+
+	handler := NewPageHandler(storage, 1, "1.0.0")
+
+	req := httptest.NewRequest(http.MethodGet, "/activity?tab=long_running", nil)
+	rec := httptest.NewRecorder()
+	c := e.NewContext(req, rec)
+
+	err := handler.Activity(c)
+	if err != nil {
+		t.Fatalf("Activity() error = %v", err)
+	}
+
+	if rec.Code != http.StatusOK {
+		t.Errorf("Activity() status = %d, want %d", rec.Code, http.StatusOK)
+	}
+
+	body := rec.Body.String()
+	if !strings.Contains(body, "big_table") {
+		t.Error("Activity() long_running tab should show long-running query data")
+	}
+}
+
+func TestActivityPageEmpty(t *testing.T) {
+	e := setupTestEcho()
+	storage := &mockPageStorage{
+		snapshot: &models.Snapshot{ID: 1, CapturedAt: time.Now()},
+	}
+
+	handler := NewPageHandler(storage, 1, "1.0.0")
+
+	req := httptest.NewRequest(http.MethodGet, "/activity?tab=idle_in_tx", nil)
+	rec := httptest.NewRecorder()
+	c := e.NewContext(req, rec)
+
+	err := handler.Activity(c)
+	if err != nil {
+		t.Fatalf("Activity() error = %v", err)
+	}
+
+	if rec.Code != http.StatusOK {
+		t.Errorf("Activity() status = %d, want %d", rec.Code, http.StatusOK)
+	}
+
+	body := rec.Body.String()
+	if !strings.Contains(body, "No idle-in-transaction connections") {
+		t.Error("Activity() empty tab should show empty state message")
+	}
+}
+
+func TestQueriesPageSlowFilter(t *testing.T) {
+	e := setupTestEcho()
+	storage := &mockPageStorage{
+		snapshot: &models.Snapshot{ID: 1, CapturedAt: time.Now()},
+		queryStats: []models.QueryStat{
+			{QueryID: 1, Query: "SELECT fast_query", Calls: 100, TotalExecTime: 500, MeanExecTime: 5},
+			{QueryID: 2, Query: "SELECT slow_query", Calls: 50, TotalExecTime: 100000, MeanExecTime: 2000},
+			{QueryID: 3, Query: "SELECT another_slow", Calls: 10, TotalExecTime: 50000, MeanExecTime: 5000},
+		},
+	}
+
+	handler := NewPageHandler(storage, 1, "1.0.0")
+
+	req := httptest.NewRequest(http.MethodGet, "/queries?filter=slow&sort=mean_time&order=desc", nil)
+	rec := httptest.NewRecorder()
+	c := e.NewContext(req, rec)
+
+	err := handler.Queries(c)
+	if err != nil {
+		t.Fatalf("Queries() error = %v", err)
+	}
+
+	if rec.Code != http.StatusOK {
+		t.Errorf("Queries() status = %d, want %d", rec.Code, http.StatusOK)
+	}
+
+	body := rec.Body.String()
+	// Should show slow queries
+	if !strings.Contains(body, "slow_query") {
+		t.Error("Queries() with slow filter should contain slow queries")
+	}
+	// Should NOT show fast queries
+	if strings.Contains(body, "fast_query") {
+		t.Error("Queries() with slow filter should not contain fast queries")
+	}
+	// Should show filter banner
+	if !strings.Contains(body, "Showing slow queries only") {
+		t.Error("Queries() with slow filter should show filter banner")
+	}
 }

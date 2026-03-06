@@ -18,6 +18,7 @@
                     <a href="/" class="nav-link-inactive">Dashboard</a>
                     <a href="/queries" class="nav-link-inactive">Queries</a>
                     <a href="/schema" class="nav-link-inactive">Schema</a>
+                    <a href="/activity" class="nav-link-inactive">Activity</a>
                     <a href="/suggestions" class="nav-link-active">Suggestions</a>
                 </nav>
             </div>
@@ -94,7 +95,8 @@
                                 <span>Last seen: {{formatTimeShort .LastSeenAt}}</span>
                             </div>
                         </div>
-                        <div class="flex-shrink-0">
+                        <div class="flex-shrink-0 flex flex-col gap-2 items-end">
+                            <a href="/suggestions/{{.ID}}" class="btn-secondary btn-sm">Details</a>
                             {{if eq .Status "active"}}
                             <button class="btn-secondary btn-sm" onclick="dismissSuggestion({{.ID}})">
                                 Dismiss

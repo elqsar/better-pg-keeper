@@ -16,6 +16,7 @@ import (
 type PageStorage interface {
 	GetLatestSnapshot(ctx context.Context, instanceID int64) (*models.Snapshot, error)
 	GetSuggestionsByStatus(ctx context.Context, instanceID int64, status string) ([]models.Suggestion, error)
+	GetSuggestionByID(ctx context.Context, id int64) (*models.Suggestion, error)
 	GetExplainPlan(ctx context.Context, queryID int64) (*models.ExplainPlan, error)
 
 	// Current state operations (for dashboard - always up-to-date)
@@ -26,6 +27,7 @@ type PageStorage interface {
 	GetCurrentConnectionActivity(ctx context.Context, instanceID int64) (*models.ConnectionActivity, error)
 	GetCurrentLongRunningQueries(ctx context.Context, instanceID int64) ([]models.LongRunningQuery, error)
 	GetCurrentBlockedQueries(ctx context.Context, instanceID int64) ([]models.BlockedQuery, error)
+	GetCurrentIdleInTransaction(ctx context.Context, instanceID int64) ([]models.IdleInTransaction, error)
 	GetCurrentDatabaseStats(ctx context.Context, instanceID int64) (*models.ExtendedDatabaseStats, *float64, error)
 }
 
@@ -216,6 +218,7 @@ type QueriesPageData struct {
 	Queries     []PageQuery
 	Sort        string
 	Order       string
+	Filter      string
 	CurrentPage int
 	TotalPages  int
 	Total       int
@@ -245,6 +248,7 @@ func (h *PageHandler) Queries(c echo.Context) error {
 	if order == "" {
 		order = "desc"
 	}
+	filter := c.QueryParam("filter")
 	page, _ := strconv.Atoi(c.QueryParam("page"))
 	if page < 1 {
 		page = 1
@@ -261,6 +265,7 @@ func (h *PageHandler) Queries(c echo.Context) error {
 		Queries:     []PageQuery{},
 		Sort:        sortField,
 		Order:       order,
+		Filter:      filter,
 		CurrentPage: page,
 	}
 
@@ -280,15 +285,23 @@ func (h *PageHandler) Queries(c echo.Context) error {
 		return c.Render(http.StatusOK, "queries", data)
 	}
 
+	// Apply slow filter if requested
+	if filter == "slow" {
+		var filtered []models.QueryStat
+		for _, s := range stats {
+			if s.MeanExecTime > 1000 {
+				filtered = append(filtered, s)
+			}
+		}
+		stats = filtered
+	}
+
 	// Sort stats
 	sortQueryStats(stats, sortField, order == "desc")
 
 	// Calculate pagination
 	data.Total = len(stats)
-	data.TotalPages = (data.Total + perPage - 1) / perPage
-	if data.TotalPages < 1 {
-		data.TotalPages = 1
-	}
+	data.TotalPages = max((data.Total+perPage-1)/perPage, 1)
 
 	// Apply pagination
 	offset := (page - 1) * perPage
@@ -296,10 +309,7 @@ func (h *PageHandler) Queries(c echo.Context) error {
 		offset = 0
 		data.CurrentPage = 1
 	}
-	end := offset + perPage
-	if end > len(stats) {
-		end = len(stats)
-	}
+	end := min(offset+perPage, len(stats))
 
 	// Convert to page format
 	for _, stat := range stats[offset:end] {
@@ -639,6 +649,114 @@ func (h *PageHandler) Suggestions(c echo.Context) error {
 	}
 
 	return c.Render(http.StatusOK, "suggestions", data)
+}
+
+// SuggestionDetailPageData contains data for the suggestion detail page.
+type SuggestionDetailPageData struct {
+	BasePageData
+	Suggestion *models.Suggestion
+}
+
+// SuggestionDetail handles GET /suggestions/:id requests.
+func (h *PageHandler) SuggestionDetail(c echo.Context) error {
+	ctx := c.Request().Context()
+
+	id, err := strconv.ParseInt(c.Param("id"), 10, 64)
+	if err != nil {
+		return c.Redirect(http.StatusFound, "/suggestions")
+	}
+
+	data := SuggestionDetailPageData{
+		BasePageData: BasePageData{
+			Title:      "Suggestion Details",
+			ActivePage: "suggestions",
+			Version:    h.version,
+		},
+	}
+
+	snapshot, err := h.storage.GetLatestSnapshot(ctx, h.instanceID)
+	if err != nil {
+		c.Logger().Errorf("failed to get latest snapshot: %v", err)
+	}
+	if snapshot != nil {
+		data.LastSnapshot = snapshot.CapturedAt
+	}
+
+	suggestion, err := h.storage.GetSuggestionByID(ctx, id)
+	if err != nil || suggestion == nil {
+		return c.Redirect(http.StatusFound, "/suggestions")
+	}
+	data.Suggestion = suggestion
+
+	return c.Render(http.StatusOK, "suggestion_detail", data)
+}
+
+// ActivityPageData contains data for the activity page.
+type ActivityPageData struct {
+	BasePageData
+	ActiveTab      string
+	IdleInTx       []models.IdleInTransaction
+	BlockedQueries []models.BlockedQuery
+	LongRunning    []models.LongRunningQuery
+}
+
+// Activity handles GET /activity requests.
+func (h *PageHandler) Activity(c echo.Context) error {
+	ctx := c.Request().Context()
+
+	tab := c.QueryParam("tab")
+	if tab == "" {
+		tab = "idle_in_tx"
+	}
+
+	data := ActivityPageData{
+		BasePageData: BasePageData{
+			Title:      "Activity",
+			ActivePage: "activity",
+			Version:    h.version,
+		},
+		ActiveTab:      tab,
+		IdleInTx:       []models.IdleInTransaction{},
+		BlockedQueries: []models.BlockedQuery{},
+		LongRunning:    []models.LongRunningQuery{},
+	}
+
+	// Get latest snapshot (for timestamp only)
+	snapshot, err := h.storage.GetLatestSnapshot(ctx, h.instanceID)
+	if err != nil {
+		c.Logger().Errorf("failed to get latest snapshot: %v", err)
+	}
+	if snapshot != nil {
+		data.LastSnapshot = snapshot.CapturedAt
+	}
+
+	switch tab {
+	case "idle_in_tx":
+		idleInTx, err := h.storage.GetCurrentIdleInTransaction(ctx, h.instanceID)
+		if err != nil {
+			c.Logger().Errorf("failed to get idle in transaction: %v", err)
+		} else if idleInTx != nil {
+			data.IdleInTx = idleInTx
+		}
+
+	case "blocked":
+		blocked, err := h.storage.GetCurrentBlockedQueries(ctx, h.instanceID)
+		if err != nil {
+			c.Logger().Errorf("failed to get blocked queries: %v", err)
+		} else if blocked != nil {
+			data.BlockedQueries = blocked
+		}
+
+	case "long_running":
+		longRunning, err := h.storage.GetCurrentLongRunningQueries(ctx, h.instanceID)
+		if err != nil {
+			c.Logger().Errorf("failed to get long-running queries: %v", err)
+		} else if longRunning != nil {
+			data.LongRunning = longRunning
+		}
+	}
+
+	return c.Render(http.StatusOK, "activity", data)
 }
 
 // Helper functions
