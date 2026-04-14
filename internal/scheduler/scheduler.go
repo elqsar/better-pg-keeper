@@ -32,14 +32,16 @@ type Scheduler struct {
 	logger      *log.Logger
 
 	// State management
-	mu       sync.RWMutex
-	running  atomic.Bool
-	stopCh   chan struct{}
-	wg       sync.WaitGroup
+	run      atomic.Pointer[schedulerRun]
 	manualMu sync.Mutex // Prevents concurrent manual triggers
 
 	// Health status
 	health *HealthStatus
+}
+
+type schedulerRun struct {
+	stopCh chan struct{}
+	wg     sync.WaitGroup
 }
 
 // Config holds configuration for creating a Scheduler.
@@ -136,7 +138,6 @@ func NewScheduler(cfg Config) (*Scheduler, error) {
 		storage:     cfg.Storage,
 		instanceID:  cfg.InstanceID,
 		logger:      logger,
-		stopCh:      make(chan struct{}),
 		health:      &HealthStatus{},
 	}, nil
 }
@@ -144,28 +145,26 @@ func NewScheduler(cfg Config) (*Scheduler, error) {
 // Start begins the scheduler's job execution.
 // It returns immediately and runs jobs in the background.
 func (s *Scheduler) Start(ctx context.Context) error {
-	if s.running.Swap(true) {
+	run := &schedulerRun{
+		stopCh: make(chan struct{}),
+	}
+	run.wg.Add(3)
+
+	if !s.run.CompareAndSwap(nil, run) {
 		return fmt.Errorf("scheduler is already running")
 	}
-
-	s.mu.Lock()
-	s.stopCh = make(chan struct{})
-	s.mu.Unlock()
 
 	s.logger.Printf("[scheduler] starting with snapshot_interval=%v, analysis_interval=%v",
 		s.config.SnapshotInterval.Duration(), s.config.AnalysisInterval.Duration())
 
 	// Start collection ticker
-	s.wg.Add(1)
-	go s.runCollectionLoop(ctx)
+	go s.runCollectionLoop(ctx, run)
 
 	// Start analysis ticker
-	s.wg.Add(1)
-	go s.runAnalysisLoop(ctx)
+	go s.runAnalysisLoop(ctx, run)
 
 	// Start maintenance ticker (daily)
-	s.wg.Add(1)
-	go s.runMaintenanceLoop(ctx)
+	go s.runMaintenanceLoop(ctx, run)
 
 	s.logger.Printf("[scheduler] started")
 	return nil
@@ -179,20 +178,19 @@ func (s *Scheduler) Stop() error {
 
 // StopWithTimeout gracefully shuts down the scheduler with a custom timeout.
 func (s *Scheduler) StopWithTimeout(timeout time.Duration) error {
-	if !s.running.Swap(false) {
+	run := s.run.Swap(nil)
+	if run == nil {
 		return fmt.Errorf("scheduler is not running")
 	}
 
 	s.logger.Printf("[scheduler] stopping...")
 
-	s.mu.Lock()
-	close(s.stopCh)
-	s.mu.Unlock()
+	close(run.stopCh)
 
 	// Wait for goroutines to finish with timeout
 	done := make(chan struct{})
 	go func() {
-		s.wg.Wait()
+		run.wg.Wait()
 		close(done)
 	}()
 
@@ -208,7 +206,7 @@ func (s *Scheduler) StopWithTimeout(timeout time.Duration) error {
 
 // IsRunning returns true if the scheduler is currently running.
 func (s *Scheduler) IsRunning() bool {
-	return s.running.Load()
+	return s.run.Load() != nil
 }
 
 // TriggerSnapshot manually triggers a collection and analysis cycle.
@@ -300,7 +298,7 @@ func (s *Scheduler) GetHealth() *HealthSnapshot {
 		TotalAnalyses:          s.health.TotalAnalyses,
 		FailedCollections:      s.health.FailedCollections,
 		FailedAnalyses:         s.health.FailedAnalyses,
-		IsRunning:              s.running.Load(),
+		IsRunning:              s.IsRunning(),
 	}
 }
 

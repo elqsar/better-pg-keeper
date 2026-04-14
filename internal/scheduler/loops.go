@@ -11,8 +11,8 @@ import (
 
 // runCollectionLoop runs the collection job at the minimum collector interval.
 // This ensures collectors with shorter intervals are triggered appropriately.
-func (s *Scheduler) runCollectionLoop(ctx context.Context) {
-	defer s.wg.Done()
+func (s *Scheduler) runCollectionLoop(ctx context.Context, run *schedulerRun) {
+	defer run.wg.Done()
 
 	// Use minimum collector interval, falling back to configured snapshot interval
 	interval := s.coordinator.MinInterval()
@@ -33,7 +33,7 @@ func (s *Scheduler) runCollectionLoop(ctx context.Context) {
 		case <-ctx.Done():
 			s.logger.Printf("[scheduler] collection loop stopping due to context cancellation")
 			return
-		case <-s.stopCh:
+		case <-run.stopCh:
 			s.logger.Printf("[scheduler] collection loop stopping")
 			return
 		case <-ticker.C:
@@ -43,8 +43,8 @@ func (s *Scheduler) runCollectionLoop(ctx context.Context) {
 }
 
 // runAnalysisLoop runs the analysis job at the configured interval.
-func (s *Scheduler) runAnalysisLoop(ctx context.Context) {
-	defer s.wg.Done()
+func (s *Scheduler) runAnalysisLoop(ctx context.Context, run *schedulerRun) {
+	defer run.wg.Done()
 
 	interval := s.config.AnalysisInterval.Duration()
 	ticker := time.NewTicker(interval)
@@ -61,7 +61,7 @@ func (s *Scheduler) runAnalysisLoop(ctx context.Context) {
 	case <-ctx.Done():
 		s.logger.Printf("[scheduler] analysis loop stopping due to context cancellation")
 		return
-	case <-s.stopCh:
+	case <-run.stopCh:
 		s.logger.Printf("[scheduler] analysis loop stopping")
 		return
 	case <-initialDelay.C:
@@ -73,7 +73,7 @@ func (s *Scheduler) runAnalysisLoop(ctx context.Context) {
 		case <-ctx.Done():
 			s.logger.Printf("[scheduler] analysis loop stopping due to context cancellation")
 			return
-		case <-s.stopCh:
+		case <-run.stopCh:
 			s.logger.Printf("[scheduler] analysis loop stopping")
 			return
 		case <-ticker.C:
@@ -83,8 +83,8 @@ func (s *Scheduler) runAnalysisLoop(ctx context.Context) {
 }
 
 // runMaintenanceLoop runs the maintenance job daily.
-func (s *Scheduler) runMaintenanceLoop(ctx context.Context) {
-	defer s.wg.Done()
+func (s *Scheduler) runMaintenanceLoop(ctx context.Context, run *schedulerRun) {
+	defer run.wg.Done()
 
 	// Run maintenance daily
 	interval := 24 * time.Hour
@@ -100,7 +100,7 @@ func (s *Scheduler) runMaintenanceLoop(ctx context.Context) {
 	select {
 	case <-ctx.Done():
 		return
-	case <-s.stopCh:
+	case <-run.stopCh:
 		return
 	case <-initialDelay.C:
 		s.executeMaintenance(ctx)
@@ -111,7 +111,7 @@ func (s *Scheduler) runMaintenanceLoop(ctx context.Context) {
 		case <-ctx.Done():
 			s.logger.Printf("[scheduler] maintenance loop stopping due to context cancellation")
 			return
-		case <-s.stopCh:
+		case <-run.stopCh:
 			s.logger.Printf("[scheduler] maintenance loop stopping")
 			return
 		case <-ticker.C:
