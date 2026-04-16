@@ -525,6 +525,12 @@ func TestIndexAnalyzer_DuplicateIndex(t *testing.T) {
 			if issue.IndexName != "idx_orders_user_id_old" {
 				t.Errorf("Expected idx_orders_user_id_old as duplicate, got %s", issue.IndexName)
 			}
+			if issue.DuplicateOf != "idx_orders_user_id" {
+				t.Errorf("Expected duplicate_of idx_orders_user_id, got %s", issue.DuplicateOf)
+			}
+			if issue.DuplicateOfIdxScan != 1000 {
+				t.Errorf("Expected duplicate_of_idx_scan 1000, got %d", issue.DuplicateOfIdxScan)
+			}
 		}
 	}
 

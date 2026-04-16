@@ -2,6 +2,7 @@ package handlers
 
 import (
 	"context"
+	"encoding/json"
 	"net/http"
 	"sort"
 	"strconv"
@@ -670,7 +671,21 @@ func (h *PageHandler) Suggestions(c echo.Context) error {
 // SuggestionDetailPageData contains data for the suggestion detail page.
 type SuggestionDetailPageData struct {
 	BasePageData
-	Suggestion *models.Suggestion
+	Suggestion     *models.Suggestion
+	DuplicateIndex *DuplicateIndexSuggestionDetails
+}
+
+// DuplicateIndexSuggestionDetails contains structured duplicate-index metadata for the UI.
+type DuplicateIndexSuggestionDetails struct {
+	SchemaName         string `json:"schema_name"`
+	TableName          string `json:"table_name"`
+	IndexName          string `json:"index_name"`
+	DuplicateOf        string `json:"duplicate_of"`
+	IdxScan            int64  `json:"idx_scan"`
+	DuplicateOfIdxScan int64  `json:"duplicate_of_idx_scan"`
+	IndexSize          int64  `json:"index_size"`
+	SpaceSavings       int64  `json:"space_savings"`
+	DetectionMethod    string `json:"detection_method"`
 }
 
 // SuggestionDetail handles GET /suggestions/:id requests.
@@ -703,6 +718,14 @@ func (h *PageHandler) SuggestionDetail(c echo.Context) error {
 		return c.Redirect(http.StatusFound, "/suggestions")
 	}
 	data.Suggestion = suggestion
+	if suggestion.RuleID == "duplicate_index" {
+		details, err := parseDuplicateIndexSuggestionDetails(suggestion.Metadata)
+		if err != nil {
+			c.Logger().Errorf("failed to parse duplicate index suggestion metadata: %v", err)
+		} else {
+			data.DuplicateIndex = details
+		}
+	}
 
 	return c.Render(http.StatusOK, "suggestion_detail", data)
 }
@@ -819,4 +842,29 @@ func calculateCacheHitRatio(hit, read int64) float64 {
 		return 100.0 // Assume 100% if no blocks accessed
 	}
 	return float64(hit) / float64(total) * 100
+}
+
+func parseDuplicateIndexSuggestionDetails(metadata string) (*DuplicateIndexSuggestionDetails, error) {
+	if metadata == "" {
+		return nil, nil
+	}
+
+	var details DuplicateIndexSuggestionDetails
+	if err := json.Unmarshal([]byte(metadata), &details); err != nil {
+		return nil, err
+	}
+	details.DetectionMethod = humanizeDuplicateIndexDetectionMethod(details.DetectionMethod)
+
+	return &details, nil
+}
+
+func humanizeDuplicateIndexDetectionMethod(method string) string {
+	switch method {
+	case "name_and_size_heuristic":
+		return "Name and size heuristic"
+	case "":
+		return "Unknown"
+	default:
+		return method
+	}
 }

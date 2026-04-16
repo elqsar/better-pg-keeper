@@ -449,6 +449,59 @@ func TestSuggestionsPageEmpty(t *testing.T) {
 	}
 }
 
+func TestSuggestionDetailPageDuplicateIndex(t *testing.T) {
+	e := setupTestEcho()
+	now := time.Now()
+	storage := &mockPageStorage{
+		snapshot: &models.Snapshot{ID: 1, CapturedAt: now},
+		suggestions: []models.Suggestion{
+			{
+				ID:           10,
+				RuleID:       "duplicate_index",
+				Severity:     "info",
+				Title:        "Potential duplicate index: idx_orders_user_id_old",
+				Description:  "Duplicate index details",
+				TargetObject: "public.orders.idx_orders_user_id_old",
+				Status:       "active",
+				FirstSeenAt:  now,
+				LastSeenAt:   now,
+				Metadata:     `{"schema_name":"public","table_name":"orders","index_name":"idx_orders_user_id_old","duplicate_of":"idx_orders_user_id","idx_scan":12,"duplicate_of_idx_scan":1200,"index_size":1048576,"space_savings":1048576,"detection_method":"name_and_size_heuristic"}`,
+			},
+		},
+	}
+
+	handler := NewPageHandler(storage, 1, "1.0.0")
+
+	req := httptest.NewRequest(http.MethodGet, "/suggestions/10", nil)
+	rec := httptest.NewRecorder()
+	c := e.NewContext(req, rec)
+	c.SetParamNames("id")
+	c.SetParamValues("10")
+
+	err := handler.SuggestionDetail(c)
+	if err != nil {
+		t.Fatalf("SuggestionDetail() error = %v", err)
+	}
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("SuggestionDetail() status = %d, want %d", rec.Code, http.StatusOK)
+	}
+
+	body := rec.Body.String()
+	if !strings.Contains(body, "idx_orders_user_id_old") {
+		t.Error("SuggestionDetail() should render the candidate index")
+	}
+	if !strings.Contains(body, "idx_orders_user_id") {
+		t.Error("SuggestionDetail() should render the retained index")
+	}
+	if !strings.Contains(body, "Name and size heuristic") {
+		t.Error("SuggestionDetail() should render the detection method")
+	}
+	if !strings.Contains(body, "Estimated Space Savings") {
+		t.Error("SuggestionDetail() should render duplicate index metadata fields")
+	}
+}
+
 func TestHelperFunctions(t *testing.T) {
 	t.Run("truncateString", func(t *testing.T) {
 		if result := truncateString("hello world", 8); result != "hello..." {

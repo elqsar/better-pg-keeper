@@ -70,8 +70,43 @@
                                     <td class="py-3 text-gray-500">Last Seen</td>
                                     <td class="py-3 text-right text-gray-700">{{formatTime .Suggestion.LastSeenAt}}</td>
                                 </tr>
+                                {{if .DuplicateIndex}}
+                                <tr>
+                                    <td class="py-3 text-gray-500">Candidate Index</td>
+                                    <td class="py-3 text-right font-mono text-gray-900">{{.DuplicateIndex.IndexName}}</td>
+                                </tr>
+                                <tr>
+                                    <td class="py-3 text-gray-500">Table</td>
+                                    <td class="py-3 text-right font-mono text-gray-900">{{.DuplicateIndex.SchemaName}}.{{.DuplicateIndex.TableName}}</td>
+                                </tr>
+                                <tr>
+                                    <td class="py-3 text-gray-500">Possible Duplicate Of</td>
+                                    <td class="py-3 text-right font-mono text-gray-900">{{.DuplicateIndex.DuplicateOf}}</td>
+                                </tr>
+                                <tr>
+                                    <td class="py-3 text-gray-500">Candidate Scans</td>
+                                    <td class="py-3 text-right text-gray-700">{{formatNumber .DuplicateIndex.IdxScan}}</td>
+                                </tr>
+                                <tr>
+                                    <td class="py-3 text-gray-500">Retained Index Scans</td>
+                                    <td class="py-3 text-right text-gray-700">{{formatNumber .DuplicateIndex.DuplicateOfIdxScan}}</td>
+                                </tr>
+                                <tr>
+                                    <td class="py-3 text-gray-500">Estimated Space Savings</td>
+                                    <td class="py-3 text-right text-gray-700">{{formatBytes .DuplicateIndex.SpaceSavings}}</td>
+                                </tr>
+                                <tr>
+                                    <td class="py-3 text-gray-500">Detection Method</td>
+                                    <td class="py-3 text-right text-gray-700">{{.DuplicateIndex.DetectionMethod}}</td>
+                                </tr>
+                                {{end}}
                             </tbody>
                         </table>
+                        {{if .DuplicateIndex}}
+                        <div class="mt-4 rounded-lg border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-900">
+                            Potential duplicate detection is heuristic-based. Verify index definitions and predicates before dropping the candidate index.
+                        </div>
+                        {{end}}
                     </div>
                 </div>
 

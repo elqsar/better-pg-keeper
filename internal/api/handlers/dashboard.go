@@ -3,6 +3,7 @@ package handlers
 import (
 	"context"
 	"net/http"
+	"sort"
 	"time"
 
 	"github.com/labstack/echo/v4"
@@ -97,6 +98,9 @@ func (h *DashboardHandler) GetDashboard(c echo.Context) error {
 			}
 
 			// Top 5 queries by total time
+			sort.SliceStable(stats, func(i, j int) bool {
+				return stats[i].TotalExecTime > stats[j].TotalExecTime
+			})
 			limit := 5
 			if len(stats) < limit {
 				limit = len(stats)

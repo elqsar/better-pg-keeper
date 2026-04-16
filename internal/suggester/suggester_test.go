@@ -4,6 +4,7 @@ import (
 	"context"
 	"log"
 	"os"
+	"strings"
 	"testing"
 	"time"
 
@@ -355,6 +356,91 @@ func TestMissingIndexRule_Evaluate(t *testing.T) {
 	}
 }
 
+func TestDuplicateIndexRule_Evaluate(t *testing.T) {
+	config := suggester.DefaultConfig()
+	rule := rules.NewDuplicateIndexRule(config)
+
+	tests := []struct {
+		name      string
+		analysis  *analyzer.AnalysisResult
+		wantCount int
+	}{
+		{
+			name:      "nil analysis",
+			analysis:  nil,
+			wantCount: 0,
+		},
+		{
+			name: "duplicate index issue",
+			analysis: &analyzer.AnalysisResult{
+				IndexIssues: []analyzer.IndexIssue{
+					{
+						SchemaName:         "public",
+						TableName:          "orders",
+						IndexName:          "idx_orders_user_id_old",
+						IssueType:          analyzer.IndexIssueDuplicate,
+						IdxScan:            12,
+						DuplicateOf:        "idx_orders_user_id",
+						DuplicateOfIdxScan: 1200,
+						IndexSize:          1024 * 1024,
+						SpaceSavings:       1024 * 1024,
+					},
+				},
+			},
+			wantCount: 1,
+		},
+		{
+			name: "skip unused issue type",
+			analysis: &analyzer.AnalysisResult{
+				IndexIssues: []analyzer.IndexIssue{
+					{
+						SchemaName: "public",
+						TableName:  "orders",
+						IndexName:  "idx_orders_user_id_old",
+						IssueType:  analyzer.IndexIssueUnused,
+					},
+				},
+			},
+			wantCount: 0,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			suggestions, err := rule.Evaluate(context.Background(), tt.analysis)
+			if err != nil {
+				t.Fatalf("Evaluate() error = %v", err)
+			}
+			if len(suggestions) != tt.wantCount {
+				t.Fatalf("Evaluate() got %d suggestions, want %d", len(suggestions), tt.wantCount)
+			}
+			if tt.wantCount == 0 {
+				return
+			}
+
+			suggestion := suggestions[0]
+			if suggestion.RuleID != "duplicate_index" {
+				t.Errorf("RuleID = %s, want duplicate_index", suggestion.RuleID)
+			}
+			if suggestion.Severity != suggester.SeverityInfo {
+				t.Errorf("Severity = %s, want %s", suggestion.Severity, suggester.SeverityInfo)
+			}
+			if suggestion.TargetObject != "public.orders.idx_orders_user_id_old" {
+				t.Errorf("TargetObject = %s, want public.orders.idx_orders_user_id_old", suggestion.TargetObject)
+			}
+			if got := suggestion.Metadata["duplicate_of"]; got != "idx_orders_user_id" {
+				t.Errorf("Metadata[duplicate_of] = %v, want idx_orders_user_id", got)
+			}
+			if got := suggestion.Metadata["duplicate_of_idx_scan"]; got != int64(1200) {
+				t.Errorf("Metadata[duplicate_of_idx_scan] = %v, want 1200", got)
+			}
+			if !strings.Contains(suggestion.Description, "heuristic-based") {
+				t.Errorf("Description should mention heuristic-based validation, got %q", suggestion.Description)
+			}
+		})
+	}
+}
+
 func TestBloatRule_Evaluate(t *testing.T) {
 	config := suggester.DefaultConfig()
 	rule := rules.NewBloatRule(config)
@@ -564,6 +650,7 @@ func TestSuggester_Suggest(t *testing.T) {
 	s.RegisterRules(
 		rules.NewSlowQueryRule(config),
 		rules.NewUnusedIndexRule(config),
+		rules.NewDuplicateIndexRule(config),
 		rules.NewBloatRule(config),
 		rules.NewCacheRule(config),
 	)
@@ -595,6 +682,14 @@ func TestSuggester_Suggest(t *testing.T) {
 						IsUnique:   false,
 						IsPrimary:  false,
 					},
+					{
+						SchemaName:         "public",
+						TableName:          "orders",
+						IndexName:          "idx_orders_user_id_old",
+						IssueType:          analyzer.IndexIssueDuplicate,
+						DuplicateOf:        "idx_orders_user_id",
+						DuplicateOfIdxScan: 500,
+					},
 				},
 				TableIssues: []analyzer.TableIssue{
 					{
@@ -605,8 +700,8 @@ func TestSuggester_Suggest(t *testing.T) {
 					},
 				},
 			},
-			wantTotal: 3,
-			wantNew:   3,
+			wantTotal: 4,
+			wantNew:   4,
 		},
 		{
 			name: "no issues",

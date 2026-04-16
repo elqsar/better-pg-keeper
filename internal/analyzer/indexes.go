@@ -174,12 +174,13 @@ func (a *IndexAnalyzer) detectDuplicateIndexes(stats []models.IndexStat) []Index
 							"Index may be redundant with '%s'. Has %d scans vs %d. Review and consider dropping to save %s.",
 							moreUsed.IndexRelName, lessUsed.IdxScan, moreUsed.IdxScan, formatBytes(lessUsed.IndexSize),
 						),
-						IndexSize:    lessUsed.IndexSize,
-						IdxScan:      lessUsed.IdxScan,
-						IsUnique:     lessUsed.IsUnique,
-						IsPrimary:    lessUsed.IsPrimary,
-						DuplicateOf:  moreUsed.IndexRelName,
-						SpaceSavings: lessUsed.IndexSize,
+						IndexSize:          lessUsed.IndexSize,
+						IdxScan:            lessUsed.IdxScan,
+						IsUnique:           lessUsed.IsUnique,
+						IsPrimary:          lessUsed.IsPrimary,
+						DuplicateOf:        moreUsed.IndexRelName,
+						DuplicateOfIdxScan: moreUsed.IdxScan,
+						SpaceSavings:       lessUsed.IndexSize,
 					})
 				}
 			}

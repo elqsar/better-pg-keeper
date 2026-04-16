@@ -95,18 +95,19 @@ const (
 
 // IndexIssue represents a detected issue with an index.
 type IndexIssue struct {
-	SchemaName   string `json:"schema_name"`
-	TableName    string `json:"table_name"`
-	IndexName    string `json:"index_name"`
-	IssueType    string `json:"issue_type"` // "unused", "duplicate"
-	Severity     string `json:"severity"`   // "critical", "warning", "info"
-	Description  string `json:"description"`
-	IndexSize    int64  `json:"index_size"`
-	IdxScan      int64  `json:"idx_scan"`
-	IsUnique     bool   `json:"is_unique"`
-	IsPrimary    bool   `json:"is_primary"`
-	DuplicateOf  string `json:"duplicate_of,omitempty"`  // for duplicate indexes
-	SpaceSavings int64  `json:"space_savings,omitempty"` // potential bytes saved
+	SchemaName         string `json:"schema_name"`
+	TableName          string `json:"table_name"`
+	IndexName          string `json:"index_name"`
+	IssueType          string `json:"issue_type"` // "unused", "duplicate"
+	Severity           string `json:"severity"`   // "critical", "warning", "info"
+	Description        string `json:"description"`
+	IndexSize          int64  `json:"index_size"`
+	IdxScan            int64  `json:"idx_scan"`
+	IsUnique           bool   `json:"is_unique"`
+	IsPrimary          bool   `json:"is_primary"`
+	DuplicateOf        string `json:"duplicate_of,omitempty"`          // for duplicate indexes
+	DuplicateOfIdxScan int64  `json:"duplicate_of_idx_scan,omitempty"` // scans on the retained index
+	SpaceSavings       int64  `json:"space_savings,omitempty"`         // potential bytes saved
 }
 
 // IndexIssueType constants.

@@ -205,6 +205,7 @@ func run(ctx context.Context, configPath string) error {
 	mainSuggester.RegisterRules(
 		rules.NewSlowQueryRule(suggesterCfg),
 		rules.NewUnusedIndexRule(suggesterCfg),
+		rules.NewDuplicateIndexRule(suggesterCfg),
 		rules.NewMissingIndexRule(suggesterCfg),
 		rules.NewBloatRule(suggesterCfg),
 		rules.NewVacuumRule(suggesterCfg),
