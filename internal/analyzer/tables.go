@@ -26,19 +26,31 @@ func NewTableAnalyzer(storage Storage, cfg *Config) *TableAnalyzer {
 	}
 }
 
-// Analyze detects table-related issues from the given snapshot.
+// Analyze detects table-related issues from the given snapshot, reading bloat data
+// from the same snapshot.
 func (a *TableAnalyzer) Analyze(ctx context.Context, snapshotID int64) ([]TableIssue, error) {
+	return a.AnalyzeSnapshots(ctx, snapshotID, snapshotID)
+}
+
+// AnalyzeSnapshots detects table-related issues, reading table and bloat statistics
+// from separate snapshots. The two collectors run on very different intervals (5m and
+// 1h), so they rarely land in the same snapshot; passing 0 for bloatSnapshotID skips
+// the bloat checks rather than silently reporting every table as unbloated.
+func (a *TableAnalyzer) AnalyzeSnapshots(ctx context.Context, tableSnapshotID, bloatSnapshotID int64) ([]TableIssue, error) {
 	// Get table stats
-	tableStats, err := a.storage.GetTableStats(ctx, snapshotID)
+	tableStats, err := a.storage.GetTableStats(ctx, tableSnapshotID)
 	if err != nil {
 		return nil, err
 	}
 
 	// Get bloat stats
-	bloatStats, err := a.storage.GetBloatStats(ctx, snapshotID)
-	if err != nil {
-		// Bloat stats might not be available; continue with other checks
-		bloatStats = nil
+	var bloatStats []models.BloatInfo
+	if bloatSnapshotID != 0 {
+		bloatStats, err = a.storage.GetBloatStats(ctx, bloatSnapshotID)
+		if err != nil {
+			// Bloat stats might not be available; continue with other checks
+			bloatStats = nil
+		}
 	}
 
 	// Build a map of bloat info by table

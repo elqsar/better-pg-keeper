@@ -791,3 +791,92 @@ func TestCollectorCustomInterval(t *testing.T) {
 		t.Errorf("expected custom interval %v, got %v", customInterval, c.Interval())
 	}
 }
+
+// TestCoordinatorRecordsCoverage verifies that every collector that runs leaves a
+// snapshot_collectors row. Analysis relies on these rows to tell "this domain was
+// observed and is clean" apart from "this domain was never collected"; without them
+// a collection gap looks like recovery and resolves live suggestions.
+func TestCoordinatorRecordsCoverage(t *testing.T) {
+	storage := setupTestStorage(t)
+	instanceID := setupTestInstance(t, storage)
+
+	mock := &mockPGClient{
+		version:          "PostgreSQL 14.5",
+		getStatementsErr: errors.New("query stats error"),
+		statTables: []models.TableStat{
+			{SchemaName: "public", RelName: "test", SeqScan: 5},
+		},
+	}
+
+	coord := collector.NewCoordinator(collector.CoordinatorConfig{
+		PGClient:   mock,
+		Storage:    storage,
+		InstanceID: instanceID,
+	})
+	coord.RegisterCollectors(
+		query.NewStatsCollector(query.StatsCollectorConfig{
+			PGClient:   mock,
+			Storage:    storage,
+			InstanceID: instanceID,
+		}),
+		resource.NewTableStatsCollector(resource.TableStatsCollectorConfig{
+			PGClient:   mock,
+			Storage:    storage,
+			InstanceID: instanceID,
+		}),
+	)
+
+	ctx := context.Background()
+	result, err := coord.Collect(ctx)
+	if err != nil {
+		t.Fatalf("Collect failed: %v", err)
+	}
+
+	rows, err := storage.GetSnapshotCollectors(ctx, result.SnapshotID)
+	if err != nil {
+		t.Fatalf("GetSnapshotCollectors failed: %v", err)
+	}
+
+	got := make(map[string]string, len(rows))
+	for _, row := range rows {
+		got[row.Collector] = row.Status
+	}
+
+	if want := map[string]string{
+		"query_stats": models.CollectorStatusError,
+		"table_stats": models.CollectorStatusSuccess,
+	}; len(got) != len(want) {
+		t.Fatalf("recorded coverage = %v, want %v", got, want)
+	}
+	if got["query_stats"] != models.CollectorStatusError {
+		t.Errorf("query_stats status = %q, want %q", got["query_stats"], models.CollectorStatusError)
+	}
+	if got["table_stats"] != models.CollectorStatusSuccess {
+		t.Errorf("table_stats status = %q, want %q", got["table_stats"], models.CollectorStatusSuccess)
+	}
+
+	// The failing collector's error must be retained, not just its status.
+	for _, row := range rows {
+		if row.Collector == "query_stats" && row.Error == "" {
+			t.Error("expected the failing collector's error to be recorded")
+		}
+	}
+
+	// A successful collector is resolvable as the latest holder of its domain.
+	snap, err := storage.GetLatestSnapshotWithCollector(ctx, instanceID, "table_stats", time.Time{})
+	if err != nil {
+		t.Fatalf("GetLatestSnapshotWithCollector failed: %v", err)
+	}
+	if snap == nil || snap.ID != result.SnapshotID {
+		t.Errorf("resolved snapshot = %v, want %d", snap, result.SnapshotID)
+	}
+
+	// The failing one is not, so nothing concludes "no query issues" from it.
+	snap, err = storage.GetLatestSnapshotWithCollector(ctx, instanceID, "query_stats", time.Time{})
+	if err != nil {
+		t.Fatalf("GetLatestSnapshotWithCollector failed: %v", err)
+	}
+	if snap != nil {
+		t.Errorf("expected no snapshot for the failed collector, got %d", snap.ID)
+	}
+}

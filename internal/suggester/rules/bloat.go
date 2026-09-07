@@ -33,6 +33,12 @@ func (r *BloatRule) Name() string {
 	return "Table Bloat Detection"
 }
 
+// RequiredDomains returns the analysis domains this rule reads.
+// Bloat percentages come from the bloat collector, keyed against table stats.
+func (r *BloatRule) RequiredDomains() []string {
+	return []string{analyzer.DomainTableStats, analyzer.DomainBloat}
+}
+
 // Evaluate analyzes table issues and generates suggestions for high bloat.
 func (r *BloatRule) Evaluate(ctx context.Context, analysis *analyzer.AnalysisResult) ([]suggester.Suggestion, error) {
 	if analysis == nil || len(analysis.TableIssues) == 0 {

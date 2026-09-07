@@ -52,6 +52,8 @@ func (a *CacheAnalyzer) Analyze(ctx context.Context, snapshotID int64) (*CacheAn
 		return nil, err
 	}
 
+	result.TrackedQueries = len(stats)
+
 	// Identify queries with poor cache hit ratio
 	threshold := a.config.CacheHitRatioWarning // 0-1 scale for per-query calculation
 

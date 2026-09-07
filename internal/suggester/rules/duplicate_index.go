@@ -30,6 +30,12 @@ func (r *DuplicateIndexRule) Name() string {
 	return "Duplicate Index Detection"
 }
 
+// RequiredDomains returns the analysis domains this rule reads.
+// Duplicate detection compares indexes within one index-stats collection.
+func (r *DuplicateIndexRule) RequiredDomains() []string {
+	return []string{analyzer.DomainIndexStats}
+}
+
 // Evaluate analyzes index issues and generates suggestions for potential duplicate indexes.
 func (r *DuplicateIndexRule) Evaluate(ctx context.Context, analysis *analyzer.AnalysisResult) ([]suggester.Suggestion, error) {
 	_ = ctx

@@ -32,6 +32,12 @@ func (r *VacuumRule) Name() string {
 	return "Stale Vacuum Detection"
 }
 
+// RequiredDomains returns the analysis domains this rule reads.
+// Vacuum and analyze timestamps come from table stats.
+func (r *VacuumRule) RequiredDomains() []string {
+	return []string{analyzer.DomainTableStats}
+}
+
 // Evaluate analyzes table issues and generates suggestions for stale vacuum.
 func (r *VacuumRule) Evaluate(ctx context.Context, analysis *analyzer.AnalysisResult) ([]suggester.Suggestion, error) {
 	if analysis == nil || len(analysis.TableIssues) == 0 {

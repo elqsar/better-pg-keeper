@@ -51,8 +51,14 @@ func TestNewStorage(t *testing.T) {
 			t.Fatalf("GetMigrationStatus failed: %v", err)
 		}
 
-		if len(status) != 11 {
-			t.Errorf("Expected 11 migrations applied, got %d", len(status))
+		// Compare against the embedded set rather than a literal, so adding a
+		// migration does not require editing this test.
+		all, err := loadMigrations()
+		if err != nil {
+			t.Fatalf("loadMigrations failed: %v", err)
+		}
+		if len(status) != len(all) {
+			t.Errorf("Expected %d migrations applied, got %d", len(all), len(status))
 		}
 	})
 
@@ -890,4 +896,162 @@ func TestCurrentQueryStatsOperations(t *testing.T) {
 	if got[0].QueryID != 1 {
 		t.Fatalf("Expected remaining query ID 1, got %d", got[0].QueryID)
 	}
+}
+
+// TestQueryStatsUniquePerSnapshot covers the identity invariant behind
+// GetQueryStatsDelta. pg_stat_statements keys rows by (userid, dbid, queryid,
+// toplevel), so one queryid can arrive several times; collection now aggregates by
+// queryid, and the schema enforces that. Without it the delta's join on queryid alone
+// multiplies rows and inflates every derived metric.
+func TestQueryStatsUniquePerSnapshot(t *testing.T) {
+	storage := setupTestStorage(t)
+	ctx := context.Background()
+
+	instID, err := storage.CreateInstance(ctx, &models.Instance{
+		Name: "dup-test", Host: "localhost", Port: 5432, Database: "dupdb",
+	})
+	if err != nil {
+		t.Fatalf("CreateInstance failed: %v", err)
+	}
+
+	from, err := storage.CreateSnapshot(ctx, &models.Snapshot{
+		InstanceID: instID, CapturedAt: time.Now().Add(-time.Minute), PGVersion: "15",
+	})
+	if err != nil {
+		t.Fatalf("CreateSnapshot failed: %v", err)
+	}
+	to, err := storage.CreateSnapshot(ctx, &models.Snapshot{
+		InstanceID: instID, CapturedAt: time.Now(), PGVersion: "15",
+	})
+	if err != nil {
+		t.Fatalf("CreateSnapshot failed: %v", err)
+	}
+
+	t.Run("rejects duplicate queryid within a snapshot", func(t *testing.T) {
+		dupes := []models.QueryStat{
+			{QueryID: 42, Query: "SELECT 1", Calls: 10, TotalExecTime: 100, MeanExecTime: 10},
+			{QueryID: 42, Query: "SELECT 1", Calls: 5, TotalExecTime: 50, MeanExecTime: 10},
+		}
+		if err := storage.SaveQueryStats(ctx, from, dupes); err == nil {
+			t.Error("expected a uniqueness violation for two rows with the same queryid")
+		}
+	})
+
+	t.Run("delta returns one row per queryid", func(t *testing.T) {
+		if err := storage.SaveQueryStats(ctx, from, []models.QueryStat{
+			{QueryID: 42, Query: "SELECT 1", Calls: 10, TotalExecTime: 100, MeanExecTime: 10},
+		}); err != nil {
+			t.Fatalf("SaveQueryStats failed: %v", err)
+		}
+		if err := storage.SaveQueryStats(ctx, to, []models.QueryStat{
+			{QueryID: 42, Query: "SELECT 1", Calls: 25, TotalExecTime: 300, MeanExecTime: 12},
+		}); err != nil {
+			t.Fatalf("SaveQueryStats failed: %v", err)
+		}
+
+		deltas, err := storage.GetQueryStatsDelta(ctx, from, to)
+		if err != nil {
+			t.Fatalf("GetQueryStatsDelta failed: %v", err)
+		}
+		if len(deltas) != 1 {
+			t.Fatalf("deltas = %d, want 1", len(deltas))
+		}
+		if deltas[0].DeltaCalls != 15 {
+			t.Errorf("DeltaCalls = %d, want 15", deltas[0].DeltaCalls)
+		}
+		if deltas[0].DeltaTotalTime != 200 {
+			t.Errorf("DeltaTotalTime = %v, want 200", deltas[0].DeltaTotalTime)
+		}
+	})
+}
+
+// TestSnapshotCoverageOperations verifies the coverage bookkeeping that lets analysis
+// tell "observed and clean" apart from "never collected".
+func TestSnapshotCoverageOperations(t *testing.T) {
+	storage := setupTestStorage(t)
+	ctx := context.Background()
+
+	instID, err := storage.CreateInstance(ctx, &models.Instance{
+		Name: "coverage-test", Host: "localhost", Port: 5432, Database: "covdb",
+	})
+	if err != nil {
+		t.Fatalf("CreateInstance failed: %v", err)
+	}
+
+	older := time.Now().Add(-10 * time.Minute)
+	newer := time.Now()
+	oldSnap, _ := storage.CreateSnapshot(ctx, &models.Snapshot{InstanceID: instID, CapturedAt: older, PGVersion: "15"})
+	newSnap, _ := storage.CreateSnapshot(ctx, &models.Snapshot{InstanceID: instID, CapturedAt: newer, PGVersion: "15"})
+
+	// table_stats ran only on the older snapshot; query_stats ran on both.
+	for _, rec := range []struct {
+		snap      int64
+		collector string
+		status    string
+	}{
+		{oldSnap, "table_stats", models.CollectorStatusSuccess},
+		{oldSnap, "query_stats", models.CollectorStatusSuccess},
+		{newSnap, "query_stats", models.CollectorStatusSuccess},
+		{newSnap, "bloat", models.CollectorStatusError},
+	} {
+		if err := storage.RecordCollectorRun(ctx, rec.snap, rec.collector, rec.status, time.Now(), ""); err != nil {
+			t.Fatalf("RecordCollectorRun failed: %v", err)
+		}
+	}
+
+	t.Run("resolves each domain to its own latest snapshot", func(t *testing.T) {
+		got, err := storage.GetLatestSnapshotWithCollector(ctx, instID, "table_stats", time.Time{})
+		if err != nil {
+			t.Fatalf("GetLatestSnapshotWithCollector failed: %v", err)
+		}
+		if got == nil || got.ID != oldSnap {
+			t.Errorf("table_stats resolved to %v, want snapshot %d", got, oldSnap)
+		}
+
+		got, err = storage.GetLatestSnapshotWithCollector(ctx, instID, "query_stats", time.Time{})
+		if err != nil {
+			t.Fatalf("GetLatestSnapshotWithCollector failed: %v", err)
+		}
+		if got == nil || got.ID != newSnap {
+			t.Errorf("query_stats resolved to %v, want snapshot %d", got, newSnap)
+		}
+	})
+
+	t.Run("a failed collector does not count as coverage", func(t *testing.T) {
+		got, err := storage.GetLatestSnapshotWithCollector(ctx, instID, "bloat", time.Time{})
+		if err != nil {
+			t.Fatalf("GetLatestSnapshotWithCollector failed: %v", err)
+		}
+		if got != nil {
+			t.Errorf("bloat resolved to snapshot %d, want none", got.ID)
+		}
+	})
+
+	t.Run("notAfter keeps historical analysis historical", func(t *testing.T) {
+		got, err := storage.GetLatestSnapshotWithCollector(ctx, instID, "query_stats", older)
+		if err != nil {
+			t.Fatalf("GetLatestSnapshotWithCollector failed: %v", err)
+		}
+		if got == nil || got.ID != oldSnap {
+			t.Errorf("bounded lookup resolved to %v, want snapshot %d", got, oldSnap)
+		}
+	})
+
+	t.Run("re-running a collector updates its row", func(t *testing.T) {
+		if err := storage.RecordCollectorRun(ctx, newSnap, "bloat", models.CollectorStatusSuccess, time.Now(), ""); err != nil {
+			t.Fatalf("RecordCollectorRun failed: %v", err)
+		}
+		rows, err := storage.GetSnapshotCollectors(ctx, newSnap)
+		if err != nil {
+			t.Fatalf("GetSnapshotCollectors failed: %v", err)
+		}
+		if len(rows) != 2 {
+			t.Fatalf("rows = %d, want 2 (query_stats and bloat)", len(rows))
+		}
+		for _, row := range rows {
+			if row.Collector == "bloat" && row.Status != models.CollectorStatusSuccess {
+				t.Errorf("bloat status = %q, want success after re-run", row.Status)
+			}
+		}
+	})
 }

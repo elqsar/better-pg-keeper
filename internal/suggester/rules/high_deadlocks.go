@@ -31,6 +31,12 @@ func (r *HighDeadlocksRule) Name() string {
 	return "Deadlock Detection"
 }
 
+// RequiredDomains returns the analysis domains this rule reads.
+// Deadlock counters come from pg_stat_database.
+func (r *HighDeadlocksRule) RequiredDomains() []string {
+	return []string{analyzer.DomainDatabaseStats}
+}
+
 // Evaluate analyzes deadlock counts and generates suggestions.
 func (r *HighDeadlocksRule) Evaluate(ctx context.Context, analysis *analyzer.AnalysisResult) ([]suggester.Suggestion, error) {
 	if analysis == nil || analysis.TransactionStats == nil {

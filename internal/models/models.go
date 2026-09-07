@@ -26,6 +26,23 @@ type Snapshot struct {
 	CreatedAt     time.Time  `json:"created_at"`
 }
 
+// Collector run statuses recorded in snapshot_collectors.
+const (
+	CollectorStatusSuccess = "success"
+	CollectorStatusError   = "error"
+)
+
+// SnapshotCollector records whether a given collector contributed to a snapshot.
+// Collectors run on intervals from 30s to 1h while snapshots are cut about once a
+// minute, so a snapshot only ever holds the domains that were due at that moment.
+type SnapshotCollector struct {
+	SnapshotID  int64     `json:"snapshot_id"`
+	Collector   string    `json:"collector"`
+	Status      string    `json:"status"`
+	CollectedAt time.Time `json:"collected_at"`
+	Error       string    `json:"error,omitempty"`
+}
+
 // QueryStat represents statistics for a single query from pg_stat_statements.
 type QueryStat struct {
 	ID             int64   `json:"id"`

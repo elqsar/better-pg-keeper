@@ -33,6 +33,12 @@ func (r *LongRunningQueryRule) Name() string {
 	return "Long Running Query Detection"
 }
 
+// RequiredDomains returns the analysis domains this rule reads.
+// Long-running queries come from pg_stat_activity.
+func (r *LongRunningQueryRule) RequiredDomains() []string {
+	return []string{analyzer.DomainActivity}
+}
+
 // Evaluate analyzes long-running queries and generates suggestions.
 func (r *LongRunningQueryRule) Evaluate(ctx context.Context, analysis *analyzer.AnalysisResult) ([]suggester.Suggestion, error) {
 	if analysis == nil || analysis.ActivityStats == nil {

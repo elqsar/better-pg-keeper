@@ -32,6 +32,11 @@ type Storage interface {
 	ListSnapshots(ctx context.Context, instanceID int64, limit int) ([]models.Snapshot, error)
 	UpdateSnapshotCacheHitRatio(ctx context.Context, snapshotID int64, ratio float64) error
 
+	// Snapshot coverage operations
+	RecordCollectorRun(ctx context.Context, snapshotID int64, collector, status string, at time.Time, errMsg string) error
+	GetLatestSnapshotWithCollector(ctx context.Context, instanceID int64, collector string, notAfter time.Time) (*models.Snapshot, error)
+	GetSnapshotCollectors(ctx context.Context, snapshotID int64) ([]models.SnapshotCollector, error)
+
 	// Query stats operations
 	SaveQueryStats(ctx context.Context, snapshotID int64, stats []models.QueryStat) error
 	GetQueryStats(ctx context.Context, snapshotID int64) ([]models.QueryStat, error)
@@ -409,6 +414,93 @@ func (s *SQLiteStorage) GetLatestSnapshot(ctx context.Context, instanceID int64)
 	}
 
 	return &snap, nil
+}
+
+// RecordCollectorRun records the outcome of a single collector for a snapshot.
+// This is what lets analysis tell "collected and clean" apart from "never collected":
+// collectors run on intervals from 30s to 1h while snapshots are cut roughly every
+// minute, so any given snapshot only carries the domains that were due at the time.
+func (s *SQLiteStorage) RecordCollectorRun(ctx context.Context, snapshotID int64, collector, status string, at time.Time, errMsg string) error {
+	var errValue any
+	if errMsg != "" {
+		errValue = errMsg
+	}
+
+	_, err := s.writeDB.ExecContext(ctx, `
+		INSERT INTO snapshot_collectors (snapshot_id, collector, status, collected_at, error)
+		VALUES (?, ?, ?, ?, ?)
+		ON CONFLICT(snapshot_id, collector) DO UPDATE SET
+			status = excluded.status,
+			collected_at = excluded.collected_at,
+			error = excluded.error
+	`, snapshotID, collector, status, at, errValue)
+	if err != nil {
+		return fmt.Errorf("recording collector run: %w", err)
+	}
+
+	return nil
+}
+
+// GetLatestSnapshotWithCollector returns the most recent snapshot for the instance
+// that the named collector successfully contributed to. A non-zero notAfter bounds
+// the search, so analysing a historical snapshot does not pull in newer data.
+// Returns nil (no error) when the collector has never succeeded for this instance.
+func (s *SQLiteStorage) GetLatestSnapshotWithCollector(ctx context.Context, instanceID int64, collector string, notAfter time.Time) (*models.Snapshot, error) {
+	query := `
+		SELECT s.id, s.instance_id, s.captured_at, s.pg_version, s.stats_reset, s.cache_hit_ratio, s.created_at
+		FROM snapshots s
+		JOIN snapshot_collectors sc ON sc.snapshot_id = s.id
+		WHERE s.instance_id = ? AND sc.collector = ? AND sc.status = ?
+	`
+	args := []any{instanceID, collector, models.CollectorStatusSuccess}
+	if !notAfter.IsZero() {
+		// Bind the time as-is: snapshots.captured_at is written from an unconverted
+		// time.Time (see CreateSnapshot and PurgeOldSnapshots), and normalising only
+		// one side of the comparison makes it compare different representations.
+		query += " AND s.captured_at <= ?"
+		args = append(args, notAfter)
+	}
+	query += " ORDER BY s.captured_at DESC LIMIT 1"
+
+	var snap models.Snapshot
+	err := s.readDB.QueryRowContext(ctx, query, args...).Scan(
+		&snap.ID, &snap.InstanceID, &snap.CapturedAt, &snap.PGVersion,
+		&snap.StatsReset, &snap.CacheHitRatio, &snap.CreatedAt,
+	)
+
+	if err == sql.ErrNoRows {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, fmt.Errorf("getting latest snapshot with collector %s: %w", collector, err)
+	}
+
+	return &snap, nil
+}
+
+// GetSnapshotCollectors returns the recorded collector outcomes for a snapshot.
+func (s *SQLiteStorage) GetSnapshotCollectors(ctx context.Context, snapshotID int64) ([]models.SnapshotCollector, error) {
+	rows, err := s.readDB.QueryContext(ctx, `
+		SELECT snapshot_id, collector, status, collected_at, COALESCE(error, '')
+		FROM snapshot_collectors
+		WHERE snapshot_id = ?
+		ORDER BY collector
+	`, snapshotID)
+	if err != nil {
+		return nil, fmt.Errorf("querying snapshot collectors: %w", err)
+	}
+	defer rows.Close()
+
+	var result []models.SnapshotCollector
+	for rows.Next() {
+		var sc models.SnapshotCollector
+		if err := rows.Scan(&sc.SnapshotID, &sc.Collector, &sc.Status, &sc.CollectedAt, &sc.Error); err != nil {
+			return nil, fmt.Errorf("scanning snapshot collector: %w", err)
+		}
+		result = append(result, sc)
+	}
+
+	return result, rows.Err()
 }
 
 // ListSnapshots returns snapshots for an instance, ordered by capture time descending.

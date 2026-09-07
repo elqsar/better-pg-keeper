@@ -31,6 +31,12 @@ func (r *UnusedIndexRule) Name() string {
 	return "Unused Index Detection"
 }
 
+// RequiredDomains returns the analysis domains this rule reads.
+// Scan counts come from index stats.
+func (r *UnusedIndexRule) RequiredDomains() []string {
+	return []string{analyzer.DomainIndexStats}
+}
+
 // Evaluate analyzes index issues and generates suggestions for unused indexes.
 func (r *UnusedIndexRule) Evaluate(ctx context.Context, analysis *analyzer.AnalysisResult) ([]suggester.Suggestion, error) {
 	if analysis == nil || len(analysis.IndexIssues) == 0 {

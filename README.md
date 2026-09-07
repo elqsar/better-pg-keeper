@@ -14,8 +14,14 @@ A PostgreSQL performance analyzer that collects query statistics, detects perfor
 
 ## Prerequisites
 
-- Go 1.22 or later
-- PostgreSQL 12+ with `pg_stat_statements` extension enabled
+- Go 1.25 or later (see `go.mod`)
+- PostgreSQL 13+ with `pg_stat_statements` extension enabled
+
+  Collection reads `total_exec_time`, `plans` and `total_plan_time` from
+  `pg_stat_statements`, which PostgreSQL 13 introduced; PGAnalyzer refuses to start
+  against anything older. On PostgreSQL 13 the `pg_stat_statements_info` view is not
+  available, so statistics-reset detection is skipped; everything else works. From
+  PostgreSQL 14 onwards all features are available.
 - [Task](https://taskfile.dev/) (optional, for build automation)
 
 ## Quick Start
@@ -36,7 +42,18 @@ Restart PostgreSQL and create the extension:
 CREATE EXTENSION IF NOT EXISTS pg_stat_statements;
 ```
 
-See [docs/postgresql-setup.md](docs/postgresql-setup.md) for detailed setup instructions.
+The monitoring role needs `pg_read_all_stats` (or superuser) so it can see query
+text and statistics for every role, not just its own:
+
+```sql
+CREATE ROLE pganalyzer LOGIN PASSWORD 'change-me';
+GRANT pg_read_all_stats TO pganalyzer;
+GRANT CONNECT ON DATABASE your_database TO pganalyzer;
+```
+
+`pg_stat_statements.track = all` also counts statements executed inside functions and
+procedures. PGAnalyzer aggregates the resulting rows by query ID, so a query is
+reported once regardless of how many roles run it or how it was invoked.
 
 ### 2. Configure PGAnalyzer
 
@@ -278,7 +295,6 @@ pganalyzer/
 │       └── tailwind/     # Tailwind CSS configuration
 ├── configs/              # Configuration files
 ├── scripts/              # Build scripts (CSS, etc.)
-├── docs/                 # Documentation
 └── tests/integration/    # Integration tests
 ```
 

@@ -33,6 +33,12 @@ func (r *IdleInTransactionRule) Name() string {
 	return "Idle In Transaction Detection"
 }
 
+// RequiredDomains returns the analysis domains this rule reads.
+// Idle-in-transaction sessions come from pg_stat_activity.
+func (r *IdleInTransactionRule) RequiredDomains() []string {
+	return []string{analyzer.DomainActivity}
+}
+
 // Evaluate analyzes idle-in-transaction connections and generates suggestions.
 func (r *IdleInTransactionRule) Evaluate(ctx context.Context, analysis *analyzer.AnalysisResult) ([]suggester.Suggestion, error) {
 	if analysis == nil || analysis.ActivityStats == nil {

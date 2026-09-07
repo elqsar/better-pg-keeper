@@ -6,6 +6,8 @@ import (
 
 	"github.com/elqsar/pganalyzer/internal/analyzer"
 	"github.com/elqsar/pganalyzer/internal/collector"
+	"github.com/elqsar/pganalyzer/internal/metrics"
+	"github.com/elqsar/pganalyzer/internal/models"
 	"github.com/elqsar/pganalyzer/internal/suggester"
 )
 
@@ -174,6 +176,7 @@ func (s *Scheduler) executeAnalysis(ctx context.Context) {
 	}
 
 	s.updateAnalysisHealth(success, duration, errMsg)
+	s.recordAnalysisMetrics(ctx, duration, success, result)
 
 	if success {
 		issueCount := 0
@@ -184,11 +187,47 @@ func (s *Scheduler) executeAnalysis(ctx context.Context) {
 		if suggestResult != nil {
 			suggestCount = suggestResult.TotalSuggestions
 		}
-		s.logger.Printf("[scheduler] analysis completed in %v (issues=%d, suggestions=%d)",
-			duration, issueCount, suggestCount)
+		skipped := 0
+		if suggestResult != nil {
+			skipped = len(suggestResult.SkippedRules)
+		}
+		s.logger.Printf("[scheduler] analysis completed in %v (issues=%d, suggestions=%d, skipped_rules=%d)",
+			duration, issueCount, suggestCount, skipped)
 	} else {
 		s.logger.Printf("[scheduler] analysis failed in %v: %s", duration, errMsg)
 	}
+}
+
+// recordAnalysisMetrics publishes the Prometheus gauges and counters describing an
+// analysis run. Failures here are non-fatal - metrics must never break analysis.
+func (s *Scheduler) recordAnalysisMetrics(ctx context.Context, duration time.Duration, success bool, result *analyzer.AnalysisResult) {
+	issues := map[string]int{}
+	if result != nil {
+		issues[models.SeverityCritical] = result.GetCriticalCount()
+		issues[models.SeverityWarning] = result.GetWarningCount()
+	}
+	metrics.RecordAnalysis(duration.Seconds(), success, issues)
+
+	if result != nil {
+		cacheRatio, queryCount := 0.0, 0
+		if result.CacheStats != nil {
+			// CacheStats reports 0-100; the gauge is documented as 0-1.
+			cacheRatio = result.CacheStats.OverallHitRatio / 100
+			queryCount = result.CacheStats.TrackedQueries
+		}
+		metrics.UpdateDatabaseMetrics(cacheRatio, queryCount, len(result.SlowQueries))
+	}
+
+	stats, err := s.suggester.GetSuggestionStats(ctx, s.instanceID)
+	if err != nil {
+		s.logger.Printf("[scheduler] failed to read suggestion stats for metrics: %v", err)
+		return
+	}
+	metrics.UpdateSuggestionMetrics(map[string]map[string]int{
+		models.SeverityCritical: {models.StatusActive: stats.Critical},
+		models.SeverityWarning:  {models.StatusActive: stats.Warning},
+		models.SeverityInfo:     {models.StatusActive: stats.Info},
+	})
 }
 
 // executeMaintenance runs a maintenance cycle.

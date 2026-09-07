@@ -81,6 +81,18 @@ func (m *mockStorage) GetLatestSnapshot(ctx context.Context, instanceID int64) (
 	return &m.snapshots[len(m.snapshots)-1], nil
 }
 
+func (m *mockStorage) GetLatestSnapshotWithCollector(ctx context.Context, instanceID int64, collector string, notAfter time.Time) (*models.Snapshot, error) {
+	return m.GetLatestSnapshot(ctx, instanceID)
+}
+
+func (m *mockStorage) RecordCollectorRun(ctx context.Context, snapshotID int64, collector, status string, at time.Time, errMsg string) error {
+	return nil
+}
+
+func (m *mockStorage) GetSnapshotCollectors(ctx context.Context, snapshotID int64) ([]models.SnapshotCollector, error) {
+	return nil, nil
+}
+
 func (m *mockStorage) ListSnapshots(ctx context.Context, instanceID int64, limit int) ([]models.Snapshot, error) {
 	return m.snapshots, nil
 }

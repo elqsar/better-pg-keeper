@@ -3,15 +3,18 @@ package handlers
 import (
 	"context"
 	"net/http"
+	"time"
 
 	"github.com/labstack/echo/v4"
 
+	"github.com/elqsar/pganalyzer/internal/analyzer"
 	"github.com/elqsar/pganalyzer/internal/models"
 )
 
 // SchemaStorage defines the storage interface needed by the schema handler.
 type SchemaStorage interface {
 	GetLatestSnapshot(ctx context.Context, instanceID int64) (*models.Snapshot, error)
+	GetLatestSnapshotWithCollector(ctx context.Context, instanceID int64, collector string, notAfter time.Time) (*models.Snapshot, error)
 	GetTableStats(ctx context.Context, snapshotID int64) ([]models.TableStat, error)
 	GetIndexStats(ctx context.Context, snapshotID int64) ([]models.IndexStat, error)
 	GetBloatStats(ctx context.Context, snapshotID int64) ([]models.BloatInfo, error)
@@ -94,8 +97,10 @@ func NewSchemaHandler(storage SchemaStorage, instanceID int64) *SchemaHandler {
 func (h *SchemaHandler) GetTables(c echo.Context) error {
 	ctx := c.Request().Context()
 
-	// Get latest snapshot
-	snapshot, err := h.storage.GetLatestSnapshot(ctx, h.instanceID)
+	// Resolve the latest snapshot that actually carries this domain. Collectors run
+	// on intervals from 30s to 1h while snapshots are cut about once a minute, so the
+	// newest snapshot usually has no table, index or bloat rows at all.
+	snapshot, err := h.storage.GetLatestSnapshotWithCollector(ctx, h.instanceID, analyzer.DomainTableStats, time.Time{})
 	if err != nil {
 		c.Logger().Errorf("failed to get latest snapshot: %v", err)
 		return c.JSON(http.StatusInternalServerError, map[string]string{
@@ -137,8 +142,10 @@ func (h *SchemaHandler) GetTables(c echo.Context) error {
 func (h *SchemaHandler) GetIndexes(c echo.Context) error {
 	ctx := c.Request().Context()
 
-	// Get latest snapshot
-	snapshot, err := h.storage.GetLatestSnapshot(ctx, h.instanceID)
+	// Resolve the latest snapshot that actually carries this domain. Collectors run
+	// on intervals from 30s to 1h while snapshots are cut about once a minute, so the
+	// newest snapshot usually has no table, index or bloat rows at all.
+	snapshot, err := h.storage.GetLatestSnapshotWithCollector(ctx, h.instanceID, analyzer.DomainIndexStats, time.Time{})
 	if err != nil {
 		c.Logger().Errorf("failed to get latest snapshot: %v", err)
 		return c.JSON(http.StatusInternalServerError, map[string]string{
@@ -180,8 +187,10 @@ func (h *SchemaHandler) GetIndexes(c echo.Context) error {
 func (h *SchemaHandler) GetBloat(c echo.Context) error {
 	ctx := c.Request().Context()
 
-	// Get latest snapshot
-	snapshot, err := h.storage.GetLatestSnapshot(ctx, h.instanceID)
+	// Resolve the latest snapshot that actually carries this domain. Collectors run
+	// on intervals from 30s to 1h while snapshots are cut about once a minute, so the
+	// newest snapshot usually has no table, index or bloat rows at all.
+	snapshot, err := h.storage.GetLatestSnapshotWithCollector(ctx, h.instanceID, analyzer.DomainBloat, time.Time{})
 	if err != nil {
 		c.Logger().Errorf("failed to get latest snapshot: %v", err)
 		return c.JSON(http.StatusInternalServerError, map[string]string{

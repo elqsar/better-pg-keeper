@@ -91,6 +91,12 @@ func NewServer(cfg ServerConfig) (*Server, error) {
 	e.Use(echomiddleware.Recover())
 	e.Use(echomiddleware.RequestID())
 
+	// Record request metrics only when the /metrics endpoint is actually served,
+	// so a deployment with metrics off pays nothing for them.
+	if cfg.MetricsConfig != nil && cfg.MetricsConfig.Enabled {
+		e.Use(middleware.Metrics())
+	}
+
 	// Use custom structured request logger if configured, otherwise use echo's logger
 	if cfg.LoggingConfig != nil && cfg.LoggingConfig.Requests {
 		e.Use(middleware.RequestLoggerWithConfig(true, "/health"))

@@ -34,6 +34,12 @@ func (r *SlowQueryRule) Name() string {
 	return "Slow Query Detection"
 }
 
+// RequiredDomains returns the analysis domains this rule reads.
+// Execution times come from pg_stat_statements.
+func (r *SlowQueryRule) RequiredDomains() []string {
+	return []string{analyzer.DomainQueryStats}
+}
+
 // Evaluate analyzes slow queries and generates suggestions.
 func (r *SlowQueryRule) Evaluate(ctx context.Context, analysis *analyzer.AnalysisResult) ([]suggester.Suggestion, error) {
 	if analysis == nil || len(analysis.SlowQueries) == 0 {

@@ -17,6 +17,58 @@ type Analyzer interface {
 	Analyze(ctx context.Context, snapshotID int64) (*AnalysisResult, error)
 }
 
+// Analysis data domains. These match the collector names recorded in
+// snapshot_collectors, so a domain can be traced back to the collector that fills it.
+const (
+	DomainQueryStats    = "query_stats"
+	DomainTableStats    = "table_stats"
+	DomainIndexStats    = "index_stats"
+	DomainBloat         = "bloat"
+	DomainActivity      = "activity"
+	DomainLocks         = "locks"
+	DomainDatabaseStats = "database_stats"
+)
+
+// AllDomains lists every domain analysis resolves.
+var AllDomains = []string{
+	DomainQueryStats, DomainTableStats, DomainIndexStats,
+	DomainBloat, DomainActivity, DomainLocks, DomainDatabaseStats,
+}
+
+// DomainCoverage records whether a data domain was actually observed, and how
+// recently. Collectors run on intervals from 30s to 1h while snapshots are cut about
+// once a minute, so any single snapshot carries only the domains that were due at the
+// time. Without this, an absent domain is indistinguishable from a clean one and
+// suggestions get resolved on missing data rather than on recovery.
+type DomainCoverage struct {
+	Present    bool          `json:"present"`
+	SnapshotID int64         `json:"snapshot_id,omitempty"`
+	CapturedAt time.Time     `json:"captured_at,omitempty"`
+	Age        time.Duration `json:"age_ns,omitempty"`
+	Stale      bool          `json:"stale"`
+}
+
+// Usable reports whether the domain was observed recently enough to draw
+// conclusions from - in particular, to conclude that an issue has gone away.
+func (c DomainCoverage) Usable() bool {
+	return c.Present && !c.Stale
+}
+
+// FullCoverage returns coverage marking every domain as present and fresh.
+//
+// Production results always come from MainAnalyzer, which resolves real coverage;
+// this exists for tests and for fixtures that would otherwise get a nil map, which
+// deliberately reads as "nothing was observed" so that a missing map can never be
+// mistaken for a clean bill of health.
+func FullCoverage() map[string]DomainCoverage {
+	now := time.Now()
+	coverage := make(map[string]DomainCoverage, len(AllDomains))
+	for _, d := range AllDomains {
+		coverage[d] = DomainCoverage{Present: true, CapturedAt: now}
+	}
+	return coverage
+}
+
 // AnalysisResult contains all analysis findings from a snapshot.
 type AnalysisResult struct {
 	SnapshotID  int64          `json:"snapshot_id"`
@@ -32,6 +84,28 @@ type AnalysisResult struct {
 	TransactionStats *TransactionAnalysis `json:"transaction_stats,omitempty"`
 	ErrorCount       int                  `json:"error_count"`
 	Errors           []string             `json:"errors,omitempty"`
+	// Coverage records which data domains this result actually observed, keyed by
+	// domain. Consumers must not read "no issues" as "no problems" for a domain
+	// whose coverage is missing or stale.
+	Coverage map[string]DomainCoverage `json:"coverage,omitempty"`
+}
+
+// DomainCoverage returns the coverage for a domain, zero-valued when unrecorded.
+func (r *AnalysisResult) DomainCoverage(domain string) DomainCoverage {
+	if r.Coverage == nil {
+		return DomainCoverage{}
+	}
+	return r.Coverage[domain]
+}
+
+// DomainsUsable reports whether every listed domain was observed and is fresh.
+func (r *AnalysisResult) DomainsUsable(domains ...string) bool {
+	for _, d := range domains {
+		if !r.DomainCoverage(d).Usable() {
+			return false
+		}
+	}
+	return true
 }
 
 // SlowQuery represents a query that exceeds the execution time threshold.
@@ -54,7 +128,8 @@ type SlowQuery struct {
 type CacheAnalysis struct {
 	OverallHitRatio  float64          `json:"overall_hit_ratio"` // 0-100 percentage
 	BelowThreshold   bool             `json:"below_threshold"`
-	Threshold        float64          `json:"threshold"` // configured threshold
+	Threshold        float64          `json:"threshold"`       // configured threshold
+	TrackedQueries   int              `json:"tracked_queries"` // distinct queries in pg_stat_statements
 	PoorCacheQueries []PoorCacheQuery `json:"poor_cache_queries,omitempty"`
 }
 
@@ -157,7 +232,33 @@ type Config struct {
 	MinTableSizeForIndex int64   // skip index suggestions for tiny tables
 	VacuumStaleDays      int     // days since last vacuum to consider stale
 	AnalyzeStaleDays     int     // days since last analyze to consider stale
+
+	// CollectorIntervals maps a domain (collector name) to how often it is collected.
+	// Used to decide when a domain's data is too old to conclude anything from.
+	CollectorIntervals map[string]time.Duration
+	// StalenessFactor multiplies a domain's collection interval to get its staleness
+	// budget. A domain with no known interval is never considered stale.
+	StalenessFactor float64
 }
+
+// StalenessBudget returns how old a domain's data may be before conclusions drawn
+// from its absence become unsafe. Returns 0 when the domain has no known interval.
+func (c *Config) StalenessBudget(domain string) time.Duration {
+	interval, ok := c.CollectorIntervals[domain]
+	if !ok || interval <= 0 {
+		return 0
+	}
+	factor := c.StalenessFactor
+	if factor <= 0 {
+		factor = DefaultStalenessFactor
+	}
+	return time.Duration(float64(interval) * factor)
+}
+
+// DefaultStalenessFactor is how many collection intervals a domain may lag before
+// its data is treated as too old to resolve issues from. Three intervals tolerates
+// a couple of missed cycles without letting genuinely stale data drive decisions.
+const DefaultStalenessFactor = 3.0
 
 // DefaultConfig returns the default analyzer configuration.
 func DefaultConfig() *Config {
@@ -170,6 +271,7 @@ func DefaultConfig() *Config {
 		MinTableSizeForIndex: 10000,
 		VacuumStaleDays:      7,
 		AnalyzeStaleDays:     7,
+		StalenessFactor:      DefaultStalenessFactor,
 	}
 }
 
@@ -184,6 +286,7 @@ func ConfigFromThresholds(t config.ThresholdsConfig) *Config {
 		MinTableSizeForIndex: int64(t.MinTableSizeForIndex),
 		VacuumStaleDays:      7, // Default, not in threshold config
 		AnalyzeStaleDays:     7, // Default, not in threshold config
+		StalenessFactor:      DefaultStalenessFactor,
 	}
 }
 
@@ -192,6 +295,7 @@ func ConfigFromThresholds(t config.ThresholdsConfig) *Config {
 type Storage interface {
 	GetSnapshotByID(ctx context.Context, id int64) (*models.Snapshot, error)
 	GetLatestSnapshot(ctx context.Context, instanceID int64) (*models.Snapshot, error)
+	GetLatestSnapshotWithCollector(ctx context.Context, instanceID int64, collector string, notAfter time.Time) (*models.Snapshot, error)
 	ListSnapshots(ctx context.Context, instanceID int64, limit int) ([]models.Snapshot, error)
 	GetQueryStats(ctx context.Context, snapshotID int64) ([]models.QueryStat, error)
 	GetQueryStatsDelta(ctx context.Context, fromSnapshotID, toSnapshotID int64) ([]models.QueryStatDelta, error)

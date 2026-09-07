@@ -35,6 +35,12 @@ func (r *MissingIndexRule) Name() string {
 	return "Missing Index Detection"
 }
 
+// RequiredDomains returns the analysis domains this rule reads.
+// Sequential-scan ratios come from table stats.
+func (r *MissingIndexRule) RequiredDomains() []string {
+	return []string{analyzer.DomainTableStats}
+}
+
 // Evaluate analyzes table issues and generates suggestions for missing indexes.
 func (r *MissingIndexRule) Evaluate(ctx context.Context, analysis *analyzer.AnalysisResult) ([]suggester.Suggestion, error) {
 	if analysis == nil || len(analysis.TableIssues) == 0 {

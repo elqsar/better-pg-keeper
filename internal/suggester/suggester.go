@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"log"
+	"strings"
 	"time"
 
 	"github.com/elqsar/pganalyzer/internal/analyzer"
@@ -68,6 +69,7 @@ type SuggestResult struct {
 	NewSuggestions   int      // Number of new suggestions
 	UpdatedCount     int      // Number of existing suggestions updated
 	ResolvedCount    int      // Number of issues that are now resolved
+	SkippedRules     []string // Rules skipped because their data was missing or stale
 	Errors           []string // Errors encountered during suggestion generation
 }
 
@@ -80,12 +82,28 @@ func (s *Suggester) Suggest(ctx context.Context, analysis *analyzer.AnalysisResu
 	result := &SuggestResult{}
 	instanceID := analysis.InstanceID
 
-	// Collect all suggestions from rules
+	// Collect all suggestions from rules whose data was actually observed.
+	//
+	// A rule whose backing domain is missing or stale must be skipped entirely, not
+	// evaluated against empty data: the analysis result cannot distinguish "the issue
+	// is gone" from "nothing was collected", and treating the second as the first
+	// resolves live issues on every collection gap.
 	var allSuggestions []Suggestion
+	resolvableRules := make(map[string]bool, len(s.rules))
 
 	for _, rule := range s.rules {
+		if !analysis.DomainsUsable(rule.RequiredDomains()...) {
+			result.SkippedRules = append(result.SkippedRules, rule.ID())
+			s.logger.Printf("Skipping rule %s: required data %v not usable (coverage: %s)",
+				rule.ID(), rule.RequiredDomains(), describeCoverage(analysis, rule.RequiredDomains()))
+			continue
+		}
+		resolvableRules[rule.ID()] = true
+
 		suggestions, err := rule.Evaluate(ctx, analysis)
 		if err != nil {
+			// The rule ran but failed, so its absence of suggestions proves nothing.
+			delete(resolvableRules, rule.ID())
 			result.Errors = append(result.Errors, fmt.Sprintf("rule %s: %v", rule.ID(), err))
 			s.logger.Printf("Error evaluating rule %s: %v", rule.ID(), err)
 			continue
@@ -136,9 +154,14 @@ func (s *Suggester) Suggest(ctx context.Context, analysis *analyzer.AnalysisResu
 		}
 	}
 
-	// Mark resolved suggestions (issues that are no longer detected)
+	// Mark resolved suggestions (issues that are no longer detected).
+	// Only suggestions from rules that actually ran this cycle are eligible: for a
+	// skipped or failed rule, "not detected" means "not looked for".
 	for key, sug := range existingMap {
 		if !stillActive[key] {
+			if !resolvableRules[sug.RuleID] {
+				continue
+			}
 			// This issue is no longer detected, mark as resolved
 			if err := s.storage.ResolveSuggestion(ctx, sug.ID); err != nil {
 				result.Errors = append(result.Errors, fmt.Sprintf("resolving suggestion %d: %v", sug.ID, err))
@@ -150,6 +173,23 @@ func (s *Suggester) Suggest(ctx context.Context, analysis *analyzer.AnalysisResu
 	}
 
 	return result, nil
+}
+
+// describeCoverage renders the coverage of the given domains for logging.
+func describeCoverage(analysis *analyzer.AnalysisResult, domains []string) string {
+	parts := make([]string, 0, len(domains))
+	for _, d := range domains {
+		c := analysis.DomainCoverage(d)
+		switch {
+		case !c.Present:
+			parts = append(parts, d+"=missing")
+		case c.Stale:
+			parts = append(parts, fmt.Sprintf("%s=stale(%s old)", d, c.Age.Truncate(time.Second)))
+		default:
+			parts = append(parts, fmt.Sprintf("%s=ok(%s old)", d, c.Age.Truncate(time.Second)))
+		}
+	}
+	return strings.Join(parts, ", ")
 }
 
 // suggestionKey creates a unique key for deduplication.

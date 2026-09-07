@@ -10,6 +10,7 @@ import (
 
 	"github.com/labstack/echo/v4"
 
+	"github.com/elqsar/pganalyzer/internal/analyzer"
 	"github.com/elqsar/pganalyzer/internal/models"
 	"github.com/elqsar/pganalyzer/internal/postgres"
 )
@@ -17,6 +18,7 @@ import (
 // QueriesStorage defines the storage interface needed by the queries handler.
 type QueriesStorage interface {
 	GetLatestSnapshot(ctx context.Context, instanceID int64) (*models.Snapshot, error)
+	GetLatestSnapshotWithCollector(ctx context.Context, instanceID int64, collector string, notAfter time.Time) (*models.Snapshot, error)
 	GetQueryStats(ctx context.Context, snapshotID int64) ([]models.QueryStat, error)
 	SaveExplainPlan(ctx context.Context, plan *models.ExplainPlan) (int64, error)
 	GetExplainPlan(ctx context.Context, queryID int64) (*models.ExplainPlan, error)
@@ -122,8 +124,10 @@ func (h *QueriesHandler) ListQueries(c echo.Context) error {
 		})
 	}
 
-	// Get latest snapshot
-	snapshot, err := h.storage.GetLatestSnapshot(ctx, h.instanceID)
+	// Resolve the latest snapshot that actually carries query stats. The newest
+	// snapshot is often a partial one cut for the 30s collectors, so reading it
+	// blindly returns an empty list while the dashboard still shows current data.
+	snapshot, err := h.storage.GetLatestSnapshotWithCollector(ctx, h.instanceID, analyzer.DomainQueryStats, time.Time{})
 	if err != nil {
 		c.Logger().Errorf("failed to get latest snapshot: %v", err)
 		return c.JSON(http.StatusInternalServerError, map[string]string{
@@ -213,8 +217,10 @@ func (h *QueriesHandler) GetTopQueries(c echo.Context) error {
 		})
 	}
 
-	// Get latest snapshot
-	snapshot, err := h.storage.GetLatestSnapshot(ctx, h.instanceID)
+	// Resolve the latest snapshot that actually carries query stats. The newest
+	// snapshot is often a partial one cut for the 30s collectors, so reading it
+	// blindly returns an empty list while the dashboard still shows current data.
+	snapshot, err := h.storage.GetLatestSnapshotWithCollector(ctx, h.instanceID, analyzer.DomainQueryStats, time.Time{})
 	if err != nil {
 		c.Logger().Errorf("failed to get latest snapshot: %v", err)
 		return c.JSON(http.StatusInternalServerError, map[string]string{
@@ -287,8 +293,8 @@ func (h *QueriesHandler) ExplainQuery(c echo.Context) error {
 		}
 	}
 
-	// Get latest snapshot to find the query
-	snapshot, err := h.storage.GetLatestSnapshot(ctx, h.instanceID)
+	// Resolve the latest snapshot that actually carries query stats (see above).
+	snapshot, err := h.storage.GetLatestSnapshotWithCollector(ctx, h.instanceID, analyzer.DomainQueryStats, time.Time{})
 	if err != nil {
 		c.Logger().Errorf("failed to get latest snapshot: %v", err)
 		return c.JSON(http.StatusInternalServerError, map[string]string{

@@ -4,6 +4,8 @@ import (
 	"context"
 	"fmt"
 	"time"
+
+	"github.com/elqsar/pganalyzer/internal/models"
 )
 
 // MainAnalyzer orchestrates all sub-analyzers to produce a complete analysis.
@@ -31,9 +33,62 @@ func NewMainAnalyzer(storage Storage, cfg *Config) *MainAnalyzer {
 	}
 }
 
+// resolveDomains determines, for each data domain, which snapshot last carried it
+// and how old that data is.
+//
+// Collectors run on intervals from 30s to 1h, but the coordinator cuts a new snapshot
+// roughly every minute, so the newest snapshot almost never holds table, index or
+// bloat data. Reading every domain from a single snapshot therefore reported those
+// domains as empty on nearly every run, which in turn made the suggester resolve
+// still-active issues. Each domain is instead resolved to the most recent snapshot
+// that actually contains it, bounded by the anchor snapshot so historical analysis
+// stays historical.
+func (a *MainAnalyzer) resolveDomains(ctx context.Context, anchor *models.Snapshot) (map[string]DomainCoverage, []string) {
+	coverage := make(map[string]DomainCoverage, len(AllDomains))
+	var errs []string
+	now := time.Now()
+
+	for _, domain := range AllDomains {
+		snap, err := a.storage.GetLatestSnapshotWithCollector(ctx, anchor.InstanceID, domain, anchor.CapturedAt)
+		if err != nil {
+			// Leave the domain uncovered: that is the safe reading, but record the
+			// error so a broken lookup is not mistaken for a quiet instance.
+			errs = append(errs, fmt.Sprintf("resolving %s coverage: %v", domain, err))
+			coverage[domain] = DomainCoverage{}
+			continue
+		}
+		if snap == nil {
+			coverage[domain] = DomainCoverage{}
+			continue
+		}
+
+		age := now.Sub(snap.CapturedAt)
+		budget := a.config.StalenessBudget(domain)
+		coverage[domain] = DomainCoverage{
+			Present:    true,
+			SnapshotID: snap.ID,
+			CapturedAt: snap.CapturedAt,
+			Age:        age,
+			Stale:      budget > 0 && age > budget,
+		}
+	}
+
+	return coverage, errs
+}
+
+// snapshotFor returns the snapshot id holding a domain's data, or 0 when the domain
+// has never been collected for this instance.
+func snapshotFor(coverage map[string]DomainCoverage, domain string) int64 {
+	return coverage[domain].SnapshotID
+}
+
 // Analyze runs all sub-analyzers and aggregates results.
 // It handles partial failures gracefully - if one analyzer fails,
 // others will still run and their results will be included.
+//
+// The passed snapshotID anchors the analysis in time and identifies the instance;
+// each domain is then read from the most recent snapshot at or before it that
+// actually holds that domain's data. See resolveDomains.
 func (a *MainAnalyzer) Analyze(ctx context.Context, snapshotID int64) (*AnalysisResult, error) {
 	// Get snapshot info
 	snapshot, err := a.storage.GetSnapshotByID(ctx, snapshotID)
@@ -44,71 +99,87 @@ func (a *MainAnalyzer) Analyze(ctx context.Context, snapshotID int64) (*Analysis
 		return nil, fmt.Errorf("snapshot %d not found", snapshotID)
 	}
 
+	coverage, coverageErrs := a.resolveDomains(ctx, snapshot)
+
 	result := &AnalysisResult{
 		SnapshotID: snapshotID,
 		InstanceID: snapshot.InstanceID,
 		AnalyzedAt: time.Now(),
+		Coverage:   coverage,
+		Errors:     coverageErrs,
+		ErrorCount: len(coverageErrs),
 	}
 
-	// Run slow query analysis
-	slowQueries, err := a.slowQueryAnalyzer.Analyze(ctx, snapshotID)
-	if err != nil {
-		result.Errors = append(result.Errors, fmt.Sprintf("slow query analysis: %v", err))
-		result.ErrorCount++
-	} else {
-		result.SlowQueries = slowQueries
+	// Run slow query and cache analysis
+	if id := snapshotFor(coverage, DomainQueryStats); id != 0 {
+		slowQueries, err := a.slowQueryAnalyzer.Analyze(ctx, id)
+		if err != nil {
+			result.Errors = append(result.Errors, fmt.Sprintf("slow query analysis: %v", err))
+			result.ErrorCount++
+		} else {
+			result.SlowQueries = slowQueries
+		}
+
+		cacheStats, err := a.cacheAnalyzer.Analyze(ctx, id)
+		if err != nil {
+			result.Errors = append(result.Errors, fmt.Sprintf("cache analysis: %v", err))
+			result.ErrorCount++
+		} else {
+			result.CacheStats = cacheStats
+		}
 	}
 
-	// Run cache analysis
-	cacheStats, err := a.cacheAnalyzer.Analyze(ctx, snapshotID)
-	if err != nil {
-		result.Errors = append(result.Errors, fmt.Sprintf("cache analysis: %v", err))
-		result.ErrorCount++
-	} else {
-		result.CacheStats = cacheStats
-	}
-
-	// Run table analysis
-	tableIssues, err := a.tableAnalyzer.Analyze(ctx, snapshotID)
-	if err != nil {
-		result.Errors = append(result.Errors, fmt.Sprintf("table analysis: %v", err))
-		result.ErrorCount++
-	} else {
-		result.TableIssues = tableIssues
+	// Run table analysis (bloat data usually lives in a different snapshot)
+	if id := snapshotFor(coverage, DomainTableStats); id != 0 {
+		tableIssues, err := a.tableAnalyzer.AnalyzeSnapshots(ctx, id, snapshotFor(coverage, DomainBloat))
+		if err != nil {
+			result.Errors = append(result.Errors, fmt.Sprintf("table analysis: %v", err))
+			result.ErrorCount++
+		} else {
+			result.TableIssues = tableIssues
+		}
 	}
 
 	// Run index analysis
-	indexIssues, err := a.indexAnalyzer.Analyze(ctx, snapshotID)
-	if err != nil {
-		result.Errors = append(result.Errors, fmt.Sprintf("index analysis: %v", err))
-		result.ErrorCount++
-	} else {
-		result.IndexIssues = indexIssues
+	if id := snapshotFor(coverage, DomainIndexStats); id != 0 {
+		indexIssues, err := a.indexAnalyzer.Analyze(ctx, id)
+		if err != nil {
+			result.Errors = append(result.Errors, fmt.Sprintf("index analysis: %v", err))
+			result.ErrorCount++
+		} else {
+			result.IndexIssues = indexIssues
+		}
 	}
 
 	// Run operational state analysis
-	activityStats, err := a.analyzeActivity(ctx, snapshotID)
-	if err != nil {
-		result.Errors = append(result.Errors, fmt.Sprintf("activity analysis: %v", err))
-		result.ErrorCount++
-	} else {
-		result.ActivityStats = activityStats
+	if id := snapshotFor(coverage, DomainActivity); id != 0 {
+		activityStats, err := a.analyzeActivity(ctx, id)
+		if err != nil {
+			result.Errors = append(result.Errors, fmt.Sprintf("activity analysis: %v", err))
+			result.ErrorCount++
+		} else {
+			result.ActivityStats = activityStats
+		}
 	}
 
-	lockStats, err := a.analyzeLocks(ctx, snapshotID)
-	if err != nil {
-		result.Errors = append(result.Errors, fmt.Sprintf("lock analysis: %v", err))
-		result.ErrorCount++
-	} else {
-		result.LockStats = lockStats
+	if id := snapshotFor(coverage, DomainLocks); id != 0 {
+		lockStats, err := a.analyzeLocks(ctx, id)
+		if err != nil {
+			result.Errors = append(result.Errors, fmt.Sprintf("lock analysis: %v", err))
+			result.ErrorCount++
+		} else {
+			result.LockStats = lockStats
+		}
 	}
 
-	txStats, err := a.analyzeTransactions(ctx, snapshotID)
-	if err != nil {
-		result.Errors = append(result.Errors, fmt.Sprintf("transaction analysis: %v", err))
-		result.ErrorCount++
-	} else {
-		result.TransactionStats = txStats
+	if id := snapshotFor(coverage, DomainDatabaseStats); id != 0 {
+		txStats, err := a.analyzeTransactions(ctx, id)
+		if err != nil {
+			result.Errors = append(result.Errors, fmt.Sprintf("transaction analysis: %v", err))
+			result.ErrorCount++
+		} else {
+			result.TransactionStats = txStats
+		}
 	}
 
 	return result, nil
@@ -126,10 +197,15 @@ func (a *MainAnalyzer) AnalyzeWithTimeRange(ctx context.Context, fromSnapshotID,
 		return nil, fmt.Errorf("snapshot %d not found", toSnapshotID)
 	}
 
+	coverage, coverageErrs := a.resolveDomains(ctx, snapshot)
+
 	result := &AnalysisResult{
 		SnapshotID: toSnapshotID,
 		InstanceID: snapshot.InstanceID,
 		AnalyzedAt: time.Now(),
+		Coverage:   coverage,
+		Errors:     coverageErrs,
+		ErrorCount: len(coverageErrs),
 	}
 
 	// Run slow query analysis with deltas
@@ -150,21 +226,26 @@ func (a *MainAnalyzer) AnalyzeWithTimeRange(ctx context.Context, fromSnapshotID,
 		result.CacheStats = cacheStats
 	}
 
-	// Table and index analysis use the latest snapshot (not deltas)
-	tableIssues, err := a.tableAnalyzer.Analyze(ctx, toSnapshotID)
-	if err != nil {
-		result.Errors = append(result.Errors, fmt.Sprintf("table analysis: %v", err))
-		result.ErrorCount++
-	} else {
-		result.TableIssues = tableIssues
+	// Table and index analysis are point-in-time, not deltas, and each reads from
+	// the most recent snapshot that actually carries its data.
+	if id := snapshotFor(coverage, DomainTableStats); id != 0 {
+		tableIssues, err := a.tableAnalyzer.AnalyzeSnapshots(ctx, id, snapshotFor(coverage, DomainBloat))
+		if err != nil {
+			result.Errors = append(result.Errors, fmt.Sprintf("table analysis: %v", err))
+			result.ErrorCount++
+		} else {
+			result.TableIssues = tableIssues
+		}
 	}
 
-	indexIssues, err := a.indexAnalyzer.Analyze(ctx, toSnapshotID)
-	if err != nil {
-		result.Errors = append(result.Errors, fmt.Sprintf("index analysis: %v", err))
-		result.ErrorCount++
-	} else {
-		result.IndexIssues = indexIssues
+	if id := snapshotFor(coverage, DomainIndexStats); id != 0 {
+		indexIssues, err := a.indexAnalyzer.Analyze(ctx, id)
+		if err != nil {
+			result.Errors = append(result.Errors, fmt.Sprintf("index analysis: %v", err))
+			result.ErrorCount++
+		} else {
+			result.IndexIssues = indexIssues
+		}
 	}
 
 	return result, nil

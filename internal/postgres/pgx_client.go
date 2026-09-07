@@ -4,6 +4,8 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"log"
+	"strconv"
 	"strings"
 	"time"
 
@@ -118,22 +120,28 @@ func (c *PgxClient) GetStatStatements(ctx context.Context) ([]models.QueryStat, 
 		return nil, fmt.Errorf("postgres: not connected")
 	}
 
+	// pg_stat_statements rows are keyed by (userid, dbid, queryid, toplevel), so the
+	// same normalized query executed by two roles - or counted both as a top-level
+	// statement and from inside a function - appears as several rows with one queryid.
+	// Aggregate them here so every downstream consumer gets exactly one row per
+	// queryid instead of an arbitrary one silently winning an upsert.
 	query := `
 		SELECT
 			queryid,
-			query,
-			calls,
-			total_exec_time,
-			mean_exec_time,
-			min_exec_time,
-			max_exec_time,
-			rows,
-			shared_blks_hit,
-			shared_blks_read,
-			COALESCE(plans, 0) as plans,
-			COALESCE(total_plan_time, 0) as total_plan_time
+			min(query) AS query,
+			sum(calls) AS calls,
+			sum(total_exec_time) AS total_exec_time,
+			COALESCE(sum(total_exec_time) / nullif(sum(calls), 0), 0) AS mean_exec_time,
+			min(min_exec_time) AS min_exec_time,
+			max(max_exec_time) AS max_exec_time,
+			sum(rows) AS rows,
+			sum(shared_blks_hit) AS shared_blks_hit,
+			sum(shared_blks_read) AS shared_blks_read,
+			sum(COALESCE(plans, 0)) AS plans,
+			sum(COALESCE(total_plan_time, 0)) AS total_plan_time
 		FROM pg_stat_statements
 		WHERE dbid = (SELECT oid FROM pg_database WHERE datname = current_database())
+		GROUP BY queryid
 	`
 
 	rows, err := c.pool.Query(ctx, query)
@@ -505,6 +513,33 @@ func (c *PgxClient) Explain(ctx context.Context, query string, analyze bool) (*m
 	return plan, nil
 }
 
+// readExplainRows runs an EXPLAIN query inside tx and returns its output rows.
+// It closes the result set before returning so the transaction can accept
+// further commands (notably DEALLOCATE) without a "conn busy" error.
+func readExplainRows(ctx context.Context, tx pgx.Tx, explainQuery string) ([]string, error) {
+	rows, err := tx.Query(ctx, explainQuery)
+	if err != nil {
+		return nil, fmt.Errorf("postgres: failed to explain query with params: %w", err)
+	}
+	defer rows.Close()
+
+	var planParts []string
+	for rows.Next() {
+		var part string
+		if err := rows.Scan(&part); err != nil {
+			return nil, fmt.Errorf("postgres: failed to scan explain result: %w", err)
+		}
+		planParts = append(planParts, part)
+	}
+
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("postgres: error iterating explain results: %w", err)
+	}
+
+	rows.Close()
+	return planParts, nil
+}
+
 // ExplainWithParams runs EXPLAIN on a query with actual parameter values.
 // It uses PREPARE/EXECUTE to provide parameters safely.
 func (c *PgxClient) ExplainWithParams(ctx context.Context, query string, params []any, analyze bool) (*models.ExplainPlan, error) {
@@ -539,12 +574,6 @@ func (c *PgxClient) ExplainWithParams(ctx context.Context, query string, params 
 		return nil, fmt.Errorf("postgres: failed to prepare statement: %w", err)
 	}
 
-	// Ensure cleanup happens
-	defer func() {
-		deallocQuery := fmt.Sprintf("DEALLOCATE %s", stmtName)
-		tx.Exec(ctx, deallocQuery) //nolint:errcheck // Best effort cleanup
-	}()
-
 	// Build EXPLAIN EXECUTE query with SQL literals
 	// Note: EXECUTE takes literal values, not parameter placeholders
 	var explainOpts string
@@ -563,27 +592,26 @@ func (c *PgxClient) ExplainWithParams(ctx context.Context, query string, params 
 		explainOpts, stmtName, strings.Join(paramLiterals, ", "))
 
 	// Execute EXPLAIN (no additional params needed - values are in the SQL)
-	rows, err := tx.Query(ctx, explainQuery)
+	// The rows are drained and closed before DEALLOCATE so the transaction is
+	// free to accept another command.
+	planParts, err := readExplainRows(ctx, tx, explainQuery)
 	if err != nil {
-		return nil, fmt.Errorf("postgres: failed to explain query with params: %w", err)
+		return nil, err
 	}
-	defer rows.Close()
 
-	var planParts []string
-	for rows.Next() {
-		var part string
-		if err := rows.Scan(&part); err != nil {
-			return nil, fmt.Errorf("postgres: failed to scan explain result: %w", err)
+	// DEALLOCATE before COMMIT. PREPARE inside a transaction that commits is
+	// session-scoped, so a statement left behind here would outlive this call on
+	// the pooled connection. Running the cleanup after Commit is not an option:
+	// the transaction is closed by then and the Exec would silently fail.
+	deallocQuery := fmt.Sprintf("DEALLOCATE %s", stmtName)
+	if _, err := tx.Exec(ctx, deallocQuery); err != nil {
+		// Roll back instead of committing so the PREPARE is undone regardless.
+		// The plan itself was already read, so the caller still gets a result.
+		log.Printf("[postgres] failed to deallocate %s, rolling back to avoid leaking it: %v", stmtName, err)
+		if rbErr := tx.Rollback(ctx); rbErr != nil {
+			return nil, fmt.Errorf("postgres: failed to deallocate prepared statement %s: %w", stmtName, err)
 		}
-		planParts = append(planParts, part)
-	}
-
-	if err := rows.Err(); err != nil {
-		return nil, fmt.Errorf("postgres: error iterating explain results: %w", err)
-	}
-
-	// Commit transaction (DEALLOCATE will still run in defer)
-	if err := tx.Commit(ctx); err != nil {
+	} else if err := tx.Commit(ctx); err != nil {
 		return nil, fmt.Errorf("postgres: failed to commit: %w", err)
 	}
 
@@ -661,6 +689,49 @@ func (c *PgxClient) GetVersion(ctx context.Context) (string, error) {
 	}
 
 	return version, nil
+}
+
+// MinServerVersionNum is the oldest PostgreSQL release PGAnalyzer supports, as
+// server_version_num. Collection reads total_exec_time, plans and total_plan_time
+// from pg_stat_statements; all three arrived in PostgreSQL 13, and on anything older
+// collection fails with a column-does-not-exist error on every cycle.
+const MinServerVersionNum = 130000
+
+// GetServerVersionNum returns the server version as an integer (e.g. 160002 for 16.2).
+func (c *PgxClient) GetServerVersionNum(ctx context.Context) (int, error) {
+	if c.pool == nil {
+		return 0, fmt.Errorf("postgres: not connected")
+	}
+
+	var raw string
+	if err := c.pool.QueryRow(ctx, "SHOW server_version_num").Scan(&raw); err != nil {
+		return 0, fmt.Errorf("postgres: failed to get server version: %w", err)
+	}
+
+	num, err := strconv.Atoi(strings.TrimSpace(raw))
+	if err != nil {
+		return 0, fmt.Errorf("postgres: unexpected server_version_num %q: %w", raw, err)
+	}
+
+	return num, nil
+}
+
+// CheckVersionSupported reports whether the server is new enough to collect from.
+func (c *PgxClient) CheckVersionSupported(ctx context.Context) error {
+	num, err := c.GetServerVersionNum(ctx)
+	if err != nil {
+		return err
+	}
+
+	if num < MinServerVersionNum {
+		return fmt.Errorf(
+			"postgres: server version %d.%d is not supported, PGAnalyzer requires PostgreSQL %d or later "+
+				"(pg_stat_statements.total_exec_time, plans and total_plan_time were added in 13)",
+			num/10000, (num/100)%100, MinServerVersionNum/10000,
+		)
+	}
+
+	return nil
 }
 
 // GetStatsResetTime returns the time when pg_stat_statements statistics were last reset.

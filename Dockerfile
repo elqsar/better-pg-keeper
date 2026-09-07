@@ -50,8 +50,11 @@ COPY --from=builder /build/pganalyzer /app/pganalyzer
 # COPY --from=builder /build/internal/web/templates /app/templates
 # COPY --from=builder /build/internal/web/static /app/static
 
-# Copy example config
-COPY --from=builder /build/configs/config.yaml /app/configs/config.yaml
+# Copy the example config as the default. configs/config.yaml is gitignored (it may
+# hold credentials), so it does not exist in a clean checkout - copying it directly
+# broke `docker build` on a fresh clone. Deployments override this path with a bind
+# mount; see docker-compose.yaml.
+COPY --from=builder /build/configs/config.example.yaml /app/configs/config.yaml
 
 # Set ownership
 RUN chown -R pganalyzer:pganalyzer /app

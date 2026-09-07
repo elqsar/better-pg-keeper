@@ -17,6 +17,9 @@ type mockStorage struct {
 	indexStats  map[int64][]models.IndexStat
 	bloatStats  map[int64][]models.BloatInfo
 	queryDeltas []models.QueryStatDelta
+	// coverage optionally overrides which snapshots a collector contributed to,
+	// keyed by domain. Nil means "derive it from the data maps above".
+	coverage map[string][]int64
 }
 
 func newMockStorage() *mockStorage {
@@ -47,6 +50,54 @@ func (m *mockStorage) GetLatestSnapshot(ctx context.Context, instanceID int64) (
 		}
 	}
 	return latest, nil
+}
+
+// GetLatestSnapshotWithCollector resolves the newest snapshot carrying a domain.
+func (m *mockStorage) GetLatestSnapshotWithCollector(ctx context.Context, instanceID int64, collector string, notAfter time.Time) (*models.Snapshot, error) {
+	var latest *models.Snapshot
+	for id, snap := range m.snapshots {
+		if snap.InstanceID != instanceID {
+			continue
+		}
+		if !notAfter.IsZero() && snap.CapturedAt.After(notAfter) {
+			continue
+		}
+		if !m.covers(id, collector) {
+			continue
+		}
+		if latest == nil || snap.CapturedAt.After(latest.CapturedAt) {
+			latest = snap
+		}
+	}
+	return latest, nil
+}
+
+// covers reports whether a snapshot carries data for a domain.
+func (m *mockStorage) covers(snapshotID int64, collector string) bool {
+	if m.coverage != nil {
+		for _, id := range m.coverage[collector] {
+			if id == snapshotID {
+				return true
+			}
+		}
+		return false
+	}
+
+	switch collector {
+	case DomainQueryStats:
+		return len(m.queryStats[snapshotID]) > 0
+	case DomainTableStats:
+		return len(m.tableStats[snapshotID]) > 0
+	case DomainIndexStats:
+		return len(m.indexStats[snapshotID]) > 0
+	case DomainBloat:
+		return len(m.bloatStats[snapshotID]) > 0
+	case DomainActivity, DomainLocks, DomainDatabaseStats:
+		// The mock returns nil for these and the analyzers treat nil as
+		// "not collected", so reporting them as covered costs nothing.
+		return true
+	}
+	return false
 }
 
 func (m *mockStorage) ListSnapshots(ctx context.Context, instanceID int64, limit int) ([]models.Snapshot, error) {
@@ -783,5 +834,105 @@ func TestArePotentialDuplicates(t *testing.T) {
 			t.Errorf("arePotentialDuplicates(%q, %q) = %v, expected %v",
 				tt.name1, tt.name2, result, tt.expected)
 		}
+	}
+}
+
+// TestMainAnalyzer_ResolvesDomainsAcrossSnapshots covers the core scheduling problem:
+// the newest snapshot is usually a partial one cut for the 30s collectors, so reading
+// every domain from it reported tables and indexes as empty on nearly every run.
+// Each domain must instead be read from the most recent snapshot that actually holds
+// it, and the result must say how fresh that data is.
+func TestMainAnalyzer_ResolvesDomainsAcrossSnapshots(t *testing.T) {
+	ctx := context.Background()
+	storage := newMockStorage()
+
+	now := time.Now()
+	// Snapshot 1: a full cycle, five minutes ago.
+	storage.snapshots[1] = &models.Snapshot{ID: 1, InstanceID: 1, CapturedAt: now.Add(-5 * time.Minute)}
+	// Snapshot 2: the newest one, holding only the fast-moving collectors.
+	storage.snapshots[2] = &models.Snapshot{ID: 2, InstanceID: 1, CapturedAt: now}
+
+	storage.tableStats[1] = []models.TableStat{
+		{SchemaName: "public", RelName: "orders", NLiveTup: 100000, SeqScan: 900, IdxScan: 100},
+	}
+	storage.indexStats[1] = []models.IndexStat{
+		{SchemaName: "public", RelName: "orders", IndexRelName: "orders_unused_idx", IdxScan: 0, IndexSize: 1 << 20},
+	}
+	storage.queryStats[2] = []models.QueryStat{
+		{QueryID: 100, Query: "SELECT * FROM orders", MeanExecTime: 2000, Calls: 100, TotalExecTime: 200000},
+	}
+
+	cfg := DefaultConfig()
+	cfg.CollectorIntervals = map[string]time.Duration{
+		DomainQueryStats: time.Minute,
+		DomainTableStats: 5 * time.Minute,
+		DomainIndexStats: 5 * time.Minute,
+	}
+
+	result, err := NewMainAnalyzer(storage, cfg).Analyze(ctx, 2)
+	if err != nil {
+		t.Fatalf("Analyze failed: %v", err)
+	}
+
+	// Table and index data live in the older snapshot and must still be analysed.
+	if len(result.TableIssues) == 0 {
+		t.Error("expected table issues from the older snapshot, got none")
+	}
+	if len(result.IndexIssues) == 0 {
+		t.Error("expected index issues from the older snapshot, got none")
+	}
+	if len(result.SlowQueries) != 1 {
+		t.Errorf("SlowQueries = %d, want 1", len(result.SlowQueries))
+	}
+
+	if got := result.DomainCoverage(DomainTableStats); !got.Present || got.SnapshotID != 1 {
+		t.Errorf("table_stats coverage = %+v, want present from snapshot 1", got)
+	}
+	if got := result.DomainCoverage(DomainQueryStats); !got.Present || got.SnapshotID != 2 {
+		t.Errorf("query_stats coverage = %+v, want present from snapshot 2", got)
+	}
+	// 5 minutes old against a 5 minute interval is within the 3-interval budget.
+	if !result.DomainsUsable(DomainTableStats, DomainIndexStats, DomainQueryStats) {
+		t.Error("expected all three domains to be usable")
+	}
+
+	// A domain that was never collected must read as absent, not as clean.
+	if got := result.DomainCoverage(DomainBloat); got.Present {
+		t.Errorf("bloat coverage = %+v, want absent", got)
+	}
+	if result.DomainsUsable(DomainBloat) {
+		t.Error("bloat must not be usable when it was never collected")
+	}
+}
+
+// TestMainAnalyzer_MarksStaleDomains verifies that data older than a domain's
+// staleness budget is reported as stale, so callers stop concluding "no issues" from
+// it even though the rows are present.
+func TestMainAnalyzer_MarksStaleDomains(t *testing.T) {
+	ctx := context.Background()
+	storage := newMockStorage()
+
+	now := time.Now()
+	storage.snapshots[1] = &models.Snapshot{ID: 1, InstanceID: 1, CapturedAt: now.Add(-2 * time.Hour)}
+	storage.snapshots[2] = &models.Snapshot{ID: 2, InstanceID: 1, CapturedAt: now}
+	storage.tableStats[1] = []models.TableStat{{SchemaName: "public", RelName: "orders", NLiveTup: 10}}
+
+	cfg := DefaultConfig()
+	cfg.CollectorIntervals = map[string]time.Duration{DomainTableStats: 5 * time.Minute}
+
+	result, err := NewMainAnalyzer(storage, cfg).Analyze(ctx, 2)
+	if err != nil {
+		t.Fatalf("Analyze failed: %v", err)
+	}
+
+	got := result.DomainCoverage(DomainTableStats)
+	if !got.Present {
+		t.Fatal("expected table_stats to be present")
+	}
+	if !got.Stale {
+		t.Errorf("table_stats coverage = %+v, want stale (2h old against a 15m budget)", got)
+	}
+	if result.DomainsUsable(DomainTableStats) {
+		t.Error("stale data must not be usable")
 	}
 }

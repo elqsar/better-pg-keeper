@@ -8,6 +8,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/elqsar/pganalyzer/internal/metrics"
 	"github.com/elqsar/pganalyzer/internal/models"
 	"github.com/elqsar/pganalyzer/internal/postgres"
 	"github.com/elqsar/pganalyzer/internal/storage/sqlite"
@@ -99,6 +100,50 @@ func (r *CollectionResult) Error() error {
 	return fmt.Errorf("collection errors: %v", errMsgs)
 }
 
+// runCollector runs one collector against a snapshot, recording both the outcome in
+// the result and the snapshot coverage row that analysis relies on.
+func (c *Coordinator) runCollector(ctx context.Context, collector Collector, snapshotID int64, result *CollectionResult, errorsMu *sync.Mutex) {
+	start := time.Now()
+	err := collector.Collect(ctx, snapshotID)
+	duration := time.Since(start)
+
+	metrics.RecordCollectionDuration(collector.Name(), duration.Seconds(), err == nil)
+	c.recordCollectorRun(ctx, snapshotID, collector.Name(), err)
+
+	if err != nil {
+		c.logger.Printf("[coordinator] collector %s failed: %v", collector.Name(), err)
+		errorsMu.Lock()
+		result.Errors[collector.Name()] = err
+		errorsMu.Unlock()
+		return
+	}
+
+	// Update last run time on success
+	c.mu.Lock()
+	c.lastRun[collector.Name()] = time.Now()
+	c.mu.Unlock()
+}
+
+// recordCollectorRun persists a collector's outcome for a snapshot. A bookkeeping
+// failure must not fail collection, so it is logged rather than propagated.
+func (c *Coordinator) recordCollectorRun(ctx context.Context, snapshotID int64, name string, collectErr error) {
+	status := models.CollectorStatusSuccess
+	errMsg := ""
+	if collectErr != nil {
+		status = models.CollectorStatusError
+		errMsg = collectErr.Error()
+	}
+
+	// Use a detached context: when collection was cancelled or timed out we still
+	// want the coverage row written, otherwise the gap looks like "never collected".
+	recordCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 5*time.Second)
+	defer cancel()
+
+	if err := c.storage.RecordCollectorRun(recordCtx, snapshotID, name, status, time.Now(), errMsg); err != nil {
+		c.logger.Printf("[coordinator] failed to record coverage for collector %s: %v", name, err)
+	}
+}
+
 // Collect runs due collectors and returns the result.
 // It reuses a recent snapshot or creates a new one, then passes it to all due collectors.
 // Collectors are run concurrently and partial failures are tracked but don't stop others.
@@ -153,21 +198,12 @@ func (c *Coordinator) Collect(ctx context.Context) (*CollectionResult, error) {
 				errorsMu.Lock()
 				result.Errors[collector.Name()] = ctx.Err()
 				errorsMu.Unlock()
+				c.recordCollectorRun(ctx, snapshotID, collector.Name(), ctx.Err())
 				return
 			default:
 			}
 
-			if err := collector.Collect(ctx, snapshotID); err != nil {
-				c.logger.Printf("[coordinator] collector %s failed: %v", collector.Name(), err)
-				errorsMu.Lock()
-				result.Errors[collector.Name()] = err
-				errorsMu.Unlock()
-			} else {
-				// Update last run time on success
-				c.mu.Lock()
-				c.lastRun[collector.Name()] = time.Now()
-				c.mu.Unlock()
-			}
+			c.runCollector(ctx, collector, snapshotID, result, &errorsMu)
 		}(coll)
 	}
 
@@ -252,8 +288,10 @@ func (c *Coordinator) CollectAll(ctx context.Context) (*CollectionResult, error)
 
 	snapshotID, err := c.storage.CreateSnapshot(ctx, snapshot)
 	if err != nil {
+		metrics.RecordSnapshot(false)
 		return nil, fmt.Errorf("creating snapshot: %w", err)
 	}
+	metrics.RecordSnapshot(true)
 	result.SnapshotID = snapshotID
 
 	c.logger.Printf("[coordinator] created snapshot %d for instance %d", snapshotID, c.instanceID)
@@ -272,21 +310,12 @@ func (c *Coordinator) CollectAll(ctx context.Context) (*CollectionResult, error)
 				errorsMu.Lock()
 				result.Errors[collector.Name()] = ctx.Err()
 				errorsMu.Unlock()
+				c.recordCollectorRun(ctx, snapshotID, collector.Name(), ctx.Err())
 				return
 			default:
 			}
 
-			if err := collector.Collect(ctx, snapshotID); err != nil {
-				c.logger.Printf("[coordinator] collector %s failed: %v", collector.Name(), err)
-				errorsMu.Lock()
-				result.Errors[collector.Name()] = err
-				errorsMu.Unlock()
-			} else {
-				// Update last run time on success
-				c.mu.Lock()
-				c.lastRun[collector.Name()] = time.Now()
-				c.mu.Unlock()
-			}
+			c.runCollector(ctx, collector, snapshotID, result, &errorsMu)
 		}(coll)
 	}
 
@@ -347,7 +376,9 @@ func (c *Coordinator) GetOrCreateSnapshot(ctx context.Context, maxAge time.Durat
 		StatsReset: statsReset,
 	}
 
-	return c.storage.CreateSnapshot(ctx, snapshot)
+	id, err := c.storage.CreateSnapshot(ctx, snapshot)
+	metrics.RecordSnapshot(err == nil)
+	return id, err
 }
 
 // CollectorIntervals returns a map of collector names to their intervals.

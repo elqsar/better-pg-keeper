@@ -96,6 +96,7 @@ func TestSlowQueryRule_Evaluate(t *testing.T) {
 		{
 			name: "no slow queries",
 			analysis: &analyzer.AnalysisResult{
+				Coverage:    analyzer.FullCoverage(),
 				SlowQueries: nil,
 			},
 			wantCount: 0,
@@ -103,6 +104,7 @@ func TestSlowQueryRule_Evaluate(t *testing.T) {
 		{
 			name: "warning level slow query",
 			analysis: &analyzer.AnalysisResult{
+				Coverage: analyzer.FullCoverage(),
 				SlowQueries: []analyzer.SlowQuery{
 					{
 						QueryID:       12345,
@@ -122,6 +124,7 @@ func TestSlowQueryRule_Evaluate(t *testing.T) {
 		{
 			name: "critical level slow query",
 			analysis: &analyzer.AnalysisResult{
+				Coverage: analyzer.FullCoverage(),
 				SlowQueries: []analyzer.SlowQuery{
 					{
 						QueryID:       12345,
@@ -141,6 +144,7 @@ func TestSlowQueryRule_Evaluate(t *testing.T) {
 		{
 			name: "multiple slow queries",
 			analysis: &analyzer.AnalysisResult{
+				Coverage: analyzer.FullCoverage(),
 				SlowQueries: []analyzer.SlowQuery{
 					{
 						QueryID:      1,
@@ -196,6 +200,7 @@ func TestUnusedIndexRule_Evaluate(t *testing.T) {
 		{
 			name: "no index issues",
 			analysis: &analyzer.AnalysisResult{
+				Coverage:    analyzer.FullCoverage(),
 				IndexIssues: nil,
 			},
 			wantCount: 0,
@@ -203,6 +208,7 @@ func TestUnusedIndexRule_Evaluate(t *testing.T) {
 		{
 			name: "unused index detected",
 			analysis: &analyzer.AnalysisResult{
+				Coverage: analyzer.FullCoverage(),
 				IndexIssues: []analyzer.IndexIssue{
 					{
 						SchemaName:   "public",
@@ -223,6 +229,7 @@ func TestUnusedIndexRule_Evaluate(t *testing.T) {
 		{
 			name: "skip primary key",
 			analysis: &analyzer.AnalysisResult{
+				Coverage: analyzer.FullCoverage(),
 				IndexIssues: []analyzer.IndexIssue{
 					{
 						SchemaName: "public",
@@ -239,6 +246,7 @@ func TestUnusedIndexRule_Evaluate(t *testing.T) {
 		{
 			name: "skip unique index",
 			analysis: &analyzer.AnalysisResult{
+				Coverage: analyzer.FullCoverage(),
 				IndexIssues: []analyzer.IndexIssue{
 					{
 						SchemaName: "public",
@@ -255,6 +263,7 @@ func TestUnusedIndexRule_Evaluate(t *testing.T) {
 		{
 			name: "skip duplicate issue type",
 			analysis: &analyzer.AnalysisResult{
+				Coverage: analyzer.FullCoverage(),
 				IndexIssues: []analyzer.IndexIssue{
 					{
 						SchemaName: "public",
@@ -298,6 +307,7 @@ func TestMissingIndexRule_Evaluate(t *testing.T) {
 		{
 			name: "missing index on large table",
 			analysis: &analyzer.AnalysisResult{
+				Coverage: analyzer.FullCoverage(),
 				TableIssues: []analyzer.TableIssue{
 					{
 						SchemaName:   "public",
@@ -314,6 +324,7 @@ func TestMissingIndexRule_Evaluate(t *testing.T) {
 		{
 			name: "skip small table",
 			analysis: &analyzer.AnalysisResult{
+				Coverage: analyzer.FullCoverage(),
 				TableIssues: []analyzer.TableIssue{
 					{
 						SchemaName:   "public",
@@ -330,6 +341,7 @@ func TestMissingIndexRule_Evaluate(t *testing.T) {
 		{
 			name: "skip other issue types",
 			analysis: &analyzer.AnalysisResult{
+				Coverage: analyzer.FullCoverage(),
 				TableIssues: []analyzer.TableIssue{
 					{
 						SchemaName: "public",
@@ -373,6 +385,7 @@ func TestDuplicateIndexRule_Evaluate(t *testing.T) {
 		{
 			name: "duplicate index issue",
 			analysis: &analyzer.AnalysisResult{
+				Coverage: analyzer.FullCoverage(),
 				IndexIssues: []analyzer.IndexIssue{
 					{
 						SchemaName:         "public",
@@ -392,6 +405,7 @@ func TestDuplicateIndexRule_Evaluate(t *testing.T) {
 		{
 			name: "skip unused issue type",
 			analysis: &analyzer.AnalysisResult{
+				Coverage: analyzer.FullCoverage(),
 				IndexIssues: []analyzer.IndexIssue{
 					{
 						SchemaName: "public",
@@ -459,6 +473,7 @@ func TestBloatRule_Evaluate(t *testing.T) {
 		{
 			name: "high bloat warning",
 			analysis: &analyzer.AnalysisResult{
+				Coverage: analyzer.FullCoverage(),
 				TableIssues: []analyzer.TableIssue{
 					{
 						SchemaName:   "public",
@@ -476,6 +491,7 @@ func TestBloatRule_Evaluate(t *testing.T) {
 		{
 			name: "critical bloat",
 			analysis: &analyzer.AnalysisResult{
+				Coverage: analyzer.FullCoverage(),
 				TableIssues: []analyzer.TableIssue{
 					{
 						SchemaName:   "public",
@@ -527,6 +543,7 @@ func TestVacuumRule_Evaluate(t *testing.T) {
 		{
 			name: "stale vacuum detected",
 			analysis: &analyzer.AnalysisResult{
+				Coverage: analyzer.FullCoverage(),
 				TableIssues: []analyzer.TableIssue{
 					{
 						SchemaName: "public",
@@ -543,6 +560,7 @@ func TestVacuumRule_Evaluate(t *testing.T) {
 		{
 			name: "never vacuumed",
 			analysis: &analyzer.AnalysisResult{
+				Coverage: analyzer.FullCoverage(),
 				TableIssues: []analyzer.TableIssue{
 					{
 						SchemaName: "public",
@@ -589,6 +607,7 @@ func TestCacheRule_Evaluate(t *testing.T) {
 		{
 			name: "good cache ratio",
 			analysis: &analyzer.AnalysisResult{
+				Coverage: analyzer.FullCoverage(),
 				CacheStats: &analyzer.CacheAnalysis{
 					OverallHitRatio: 99.5,
 					BelowThreshold:  false,
@@ -599,6 +618,7 @@ func TestCacheRule_Evaluate(t *testing.T) {
 		{
 			name: "warning level cache ratio",
 			analysis: &analyzer.AnalysisResult{
+				Coverage: analyzer.FullCoverage(),
 				CacheStats: &analyzer.CacheAnalysis{
 					OverallHitRatio: 93, // 93%
 					BelowThreshold:  true,
@@ -611,6 +631,7 @@ func TestCacheRule_Evaluate(t *testing.T) {
 		{
 			name: "critical cache ratio",
 			analysis: &analyzer.AnalysisResult{
+				Coverage: analyzer.FullCoverage(),
 				CacheStats: &analyzer.CacheAnalysis{
 					OverallHitRatio: 85, // 85%
 					BelowThreshold:  true,
@@ -665,6 +686,7 @@ func TestSuggester_Suggest(t *testing.T) {
 		{
 			name: "mixed issues",
 			analysis: &analyzer.AnalysisResult{
+				Coverage:   analyzer.FullCoverage(),
 				InstanceID: 1,
 				SlowQueries: []analyzer.SlowQuery{
 					{
@@ -706,6 +728,7 @@ func TestSuggester_Suggest(t *testing.T) {
 		{
 			name: "no issues",
 			analysis: &analyzer.AnalysisResult{
+				Coverage:   analyzer.FullCoverage(),
 				InstanceID: 2,
 			},
 			wantTotal: 0,
@@ -741,6 +764,7 @@ func TestSuggester_Deduplication(t *testing.T) {
 	s.RegisterRule(rules.NewSlowQueryRule(config))
 
 	analysis := &analyzer.AnalysisResult{
+		Coverage:   analyzer.FullCoverage(),
 		InstanceID: 1,
 		SlowQueries: []analyzer.SlowQuery{
 			{
@@ -789,6 +813,7 @@ func TestSuggester_ResolveGone(t *testing.T) {
 
 	// First run with slow query
 	analysis1 := &analyzer.AnalysisResult{
+		Coverage:   analyzer.FullCoverage(),
 		InstanceID: 1,
 		SlowQueries: []analyzer.SlowQuery{
 			{QueryID: 123, Query: "SELECT * FROM users", MeanExecTime: 2000},
@@ -801,6 +826,7 @@ func TestSuggester_ResolveGone(t *testing.T) {
 
 	// Second run without the slow query (issue resolved)
 	analysis2 := &analyzer.AnalysisResult{
+		Coverage:    analyzer.FullCoverage(),
 		InstanceID:  1,
 		SlowQueries: nil,
 	}
@@ -831,6 +857,7 @@ func TestSuggester_GetSuggestionStats(t *testing.T) {
 	)
 
 	analysis := &analyzer.AnalysisResult{
+		Coverage:   analyzer.FullCoverage(),
 		InstanceID: 1,
 		SlowQueries: []analyzer.SlowQuery{
 			{QueryID: 1, Query: "SELECT 1", MeanExecTime: 2000},  // warning
@@ -929,4 +956,113 @@ func TestSuggester_NilAnalysis(t *testing.T) {
 	if err == nil {
 		t.Error("Expected error for nil analysis")
 	}
+}
+
+// TestSuggester_SkipsRulesWithoutCoverage is the regression test for the central bug:
+// collectors run on intervals from 30s to 1h while snapshots are cut about once a
+// minute, so the analysed snapshot routinely carries no table, index or bloat rows.
+// A rule whose data was not collected must not run, and its existing suggestions must
+// not be resolved - otherwise every collection gap reads as recovery.
+func TestSuggester_SkipsRulesWithoutCoverage(t *testing.T) {
+	ctx := context.Background()
+
+	newBloatAnalysis := func(coverage map[string]analyzer.DomainCoverage, issues []analyzer.TableIssue) *analyzer.AnalysisResult {
+		return &analyzer.AnalysisResult{
+			SnapshotID:  1,
+			InstanceID:  1,
+			Coverage:    coverage,
+			TableIssues: issues,
+		}
+	}
+
+	bloatIssue := analyzer.TableIssue{
+		SchemaName:   "public",
+		TableName:    "orders",
+		IssueType:    analyzer.TableIssueHighBloat,
+		Severity:     models.SeverityWarning,
+		CurrentValue: 45,
+		Threshold:    20,
+		Description:  "table is bloated",
+	}
+
+	// Establish an active bloat suggestion from a cycle with full coverage.
+	config := suggester.DefaultConfig()
+	storage := newMockStorage()
+	s := suggester.NewSuggester(storage, config, log.New(os.Stdout, "", 0))
+	s.RegisterRule(rules.NewBloatRule(config))
+
+	result, err := s.Suggest(ctx, newBloatAnalysis(analyzer.FullCoverage(), []analyzer.TableIssue{bloatIssue}))
+	if err != nil {
+		t.Fatalf("Suggest failed: %v", err)
+	}
+	if result.NewSuggestions != 1 {
+		t.Fatalf("NewSuggestions = %d, want 1", result.NewSuggestions)
+	}
+
+	t.Run("missing coverage does not resolve", func(t *testing.T) {
+		// No table_stats at all: the analysis has no issues, but only because
+		// nothing was collected.
+		coverage := analyzer.FullCoverage()
+		delete(coverage, analyzer.DomainTableStats)
+
+		result, err := s.Suggest(ctx, newBloatAnalysis(coverage, nil))
+		if err != nil {
+			t.Fatalf("Suggest failed: %v", err)
+		}
+		if result.ResolvedCount != 0 {
+			t.Errorf("ResolvedCount = %d, want 0 - a collection gap is not recovery", result.ResolvedCount)
+		}
+		if len(result.SkippedRules) != 1 || result.SkippedRules[0] != "table_bloat" {
+			t.Errorf("SkippedRules = %v, want [table_bloat]", result.SkippedRules)
+		}
+
+		active, err := storage.GetSuggestionsByStatus(ctx, 1, models.StatusActive)
+		if err != nil {
+			t.Fatalf("GetSuggestionsByStatus failed: %v", err)
+		}
+		if len(active) != 1 {
+			t.Errorf("active suggestions = %d, want 1", len(active))
+		}
+	})
+
+	t.Run("stale coverage does not resolve", func(t *testing.T) {
+		coverage := analyzer.FullCoverage()
+		coverage[analyzer.DomainTableStats] = analyzer.DomainCoverage{
+			Present:    true,
+			SnapshotID: 1,
+			CapturedAt: time.Now().Add(-time.Hour),
+			Age:        time.Hour,
+			Stale:      true,
+		}
+
+		result, err := s.Suggest(ctx, newBloatAnalysis(coverage, nil))
+		if err != nil {
+			t.Fatalf("Suggest failed: %v", err)
+		}
+		if result.ResolvedCount != 0 {
+			t.Errorf("ResolvedCount = %d, want 0 - hour-old data cannot prove recovery", result.ResolvedCount)
+		}
+	})
+
+	t.Run("fresh coverage resolves", func(t *testing.T) {
+		// Data was collected, is fresh, and the issue is genuinely gone.
+		result, err := s.Suggest(ctx, newBloatAnalysis(analyzer.FullCoverage(), nil))
+		if err != nil {
+			t.Fatalf("Suggest failed: %v", err)
+		}
+		if result.ResolvedCount != 1 {
+			t.Errorf("ResolvedCount = %d, want 1", result.ResolvedCount)
+		}
+		if len(result.SkippedRules) != 0 {
+			t.Errorf("SkippedRules = %v, want none", result.SkippedRules)
+		}
+
+		active, err := storage.GetSuggestionsByStatus(ctx, 1, models.StatusActive)
+		if err != nil {
+			t.Fatalf("GetSuggestionsByStatus failed: %v", err)
+		}
+		if len(active) != 0 {
+			t.Errorf("active suggestions = %d, want 0", len(active))
+		}
+	})
 }

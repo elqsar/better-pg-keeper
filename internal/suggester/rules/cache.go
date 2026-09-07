@@ -33,6 +33,12 @@ func (r *CacheRule) Name() string {
 	return "Low Cache Hit Ratio Detection"
 }
 
+// RequiredDomains returns the analysis domains this rule reads.
+// Cache hit ratios are derived from pg_stat_statements block counters.
+func (r *CacheRule) RequiredDomains() []string {
+	return []string{analyzer.DomainQueryStats}
+}
+
 // Evaluate analyzes cache statistics and generates suggestions.
 func (r *CacheRule) Evaluate(ctx context.Context, analysis *analyzer.AnalysisResult) ([]suggester.Suggestion, error) {
 	if analysis == nil || analysis.CacheStats == nil {

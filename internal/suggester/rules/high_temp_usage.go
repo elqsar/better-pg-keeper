@@ -33,6 +33,12 @@ func (r *HighTempUsageRule) Name() string {
 	return "High Temp File Usage Detection"
 }
 
+// RequiredDomains returns the analysis domains this rule reads.
+// Temp file counters come from pg_stat_database.
+func (r *HighTempUsageRule) RequiredDomains() []string {
+	return []string{analyzer.DomainDatabaseStats}
+}
+
 // Evaluate analyzes temp file usage and generates suggestions.
 func (r *HighTempUsageRule) Evaluate(ctx context.Context, analysis *analyzer.AnalysisResult) ([]suggester.Suggestion, error) {
 	if analysis == nil || analysis.TransactionStats == nil {

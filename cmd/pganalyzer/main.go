@@ -130,6 +130,13 @@ func run(ctx context.Context, configPath string) error {
 		return fmt.Errorf("connecting to postgres: %w", err)
 	}
 	defer pgClient.Close()
+
+	// Fail fast on an unsupported server rather than letting every collection cycle
+	// die on a missing pg_stat_statements column.
+	if err := pgClient.CheckVersionSupported(ctx); err != nil {
+		return err
+	}
+
 	slog.Info("connected to PostgreSQL",
 		"host", cfg.Postgres.Host,
 		"database", cfg.Postgres.Database,
@@ -194,10 +201,12 @@ func run(ctx context.Context, configPath string) error {
 	)
 	slog.Info("collectors registered", "count", len(coordinator.Collectors()))
 
-	// Create analyzer
+	// Create analyzer. It needs the registered collectors' intervals to judge how
+	// old a domain's data may get before its absence stops meaning "clean".
 	analyzerCfg := analyzer.ConfigFromThresholds(cfg.Thresholds)
+	analyzerCfg.CollectorIntervals = coordinator.CollectorIntervals()
 	mainAnalyzer := analyzer.NewMainAnalyzer(storage, analyzerCfg)
-	slog.Info("analyzer initialized")
+	slog.Info("analyzer initialized", "staleness_factor", analyzerCfg.StalenessFactor)
 
 	// Create suggester and register rules
 	suggesterCfg := suggester.DefaultConfig()

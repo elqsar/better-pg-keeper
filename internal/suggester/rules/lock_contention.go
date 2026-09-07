@@ -33,6 +33,12 @@ func (r *LockContentionRule) Name() string {
 	return "Lock Contention Detection"
 }
 
+// RequiredDomains returns the analysis domains this rule reads.
+// Lock waits and blocked queries come from pg_locks.
+func (r *LockContentionRule) RequiredDomains() []string {
+	return []string{analyzer.DomainLocks}
+}
+
 // Evaluate analyzes blocked queries and generates suggestions.
 func (r *LockContentionRule) Evaluate(ctx context.Context, analysis *analyzer.AnalysisResult) ([]suggester.Suggestion, error) {
 	if analysis == nil || analysis.LockStats == nil {
