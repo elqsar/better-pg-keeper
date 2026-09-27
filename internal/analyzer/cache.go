@@ -2,6 +2,7 @@ package analyzer
 
 import (
 	"context"
+	"fmt"
 	"sort"
 )
 
@@ -26,6 +27,18 @@ func NewCacheAnalyzer(storage Storage, cfg *Config) *CacheAnalyzer {
 // Returns overall database-level cache hit ratio and identifies queries
 // with poor cache performance.
 func (a *CacheAnalyzer) Analyze(ctx context.Context, snapshotID int64) (*CacheAnalysis, error) {
+	result, err := a.AnalyzeOverall(ctx, snapshotID)
+	if err != nil || result == nil {
+		return result, err
+	}
+	if err := a.AddQueryStats(ctx, snapshotID, result); err != nil {
+		return nil, err
+	}
+	return result, nil
+}
+
+// AnalyzeOverall reads the database cache ratio from its own collector snapshot.
+func (a *CacheAnalyzer) AnalyzeOverall(ctx context.Context, snapshotID int64) (*CacheAnalysis, error) {
 	// Get snapshot to retrieve database-level cache hit ratio
 	snapshot, err := a.storage.GetSnapshotByID(ctx, snapshotID)
 	if err != nil {
@@ -40,16 +53,19 @@ func (a *CacheAnalyzer) Analyze(ctx context.Context, snapshotID int64) (*CacheAn
 	}
 
 	// Set overall hit ratio from snapshot (already stored as percentage 0-100)
-	if snapshot.CacheHitRatio != nil {
-		result.OverallHitRatio = *snapshot.CacheHitRatio
-		// Compare with threshold (config is 0-1, snapshot is 0-100)
-		result.BelowThreshold = *snapshot.CacheHitRatio < (a.config.CacheHitRatioWarning * 100)
+	if snapshot.CacheHitRatio == nil {
+		return nil, fmt.Errorf("snapshot %d has no database cache ratio", snapshotID)
 	}
+	result.OverallHitRatio = *snapshot.CacheHitRatio
+	result.BelowThreshold = *snapshot.CacheHitRatio < (a.config.CacheHitRatioWarning * 100)
+	return result, nil
+}
 
-	// Get query stats to find queries with poor cache performance
+// AddQueryStats enriches an overall cache result with query-level details.
+func (a *CacheAnalyzer) AddQueryStats(ctx context.Context, snapshotID int64, result *CacheAnalysis) error {
 	stats, err := a.storage.GetQueryStats(ctx, snapshotID)
 	if err != nil {
-		return nil, err
+		return err
 	}
 
 	result.TrackedQueries = len(stats)
@@ -88,34 +104,28 @@ func (a *CacheAnalyzer) Analyze(ctx context.Context, snapshotID int64) (*CacheAn
 		return result.PoorCacheQueries[i].CacheHitRatio < result.PoorCacheQueries[j].CacheHitRatio
 	})
 
-	return result, nil
+	return nil
 }
 
 // AnalyzeWithDeltas analyzes cache performance using delta values between snapshots.
 // This provides more accurate recent cache performance analysis.
 func (a *CacheAnalyzer) AnalyzeWithDeltas(ctx context.Context, fromSnapshotID, toSnapshotID int64) (*CacheAnalysis, error) {
-	// Get current snapshot for overall cache ratio
-	snapshot, err := a.storage.GetSnapshotByID(ctx, toSnapshotID)
-	if err != nil {
+	result, err := a.AnalyzeOverall(ctx, toSnapshotID)
+	if err != nil || result == nil {
+		return result, err
+	}
+	if err := a.AddQueryDeltas(ctx, fromSnapshotID, toSnapshotID, result); err != nil {
 		return nil, err
 	}
-	if snapshot == nil {
-		return nil, nil
-	}
+	return result, nil
+}
 
-	result := &CacheAnalysis{
-		Threshold: a.config.CacheHitRatioWarning * 100,
-	}
-
-	if snapshot.CacheHitRatio != nil {
-		result.OverallHitRatio = *snapshot.CacheHitRatio
-		result.BelowThreshold = *snapshot.CacheHitRatio < (a.config.CacheHitRatioWarning * 100)
-	}
-
+// AddQueryDeltas enriches an overall result with per-query interval statistics.
+func (a *CacheAnalyzer) AddQueryDeltas(ctx context.Context, fromSnapshotID, toSnapshotID int64, result *CacheAnalysis) error {
 	// Get delta stats for per-query analysis
 	deltas, err := a.storage.GetQueryStatsDelta(ctx, fromSnapshotID, toSnapshotID)
 	if err != nil {
-		return nil, err
+		return err
 	}
 
 	threshold := a.config.CacheHitRatioWarning
@@ -149,5 +159,5 @@ func (a *CacheAnalyzer) AnalyzeWithDeltas(ctx context.Context, fromSnapshotID, t
 		return result.PoorCacheQueries[i].CacheHitRatio < result.PoorCacheQueries[j].CacheHitRatio
 	})
 
-	return result, nil
+	return nil
 }

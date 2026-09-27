@@ -133,8 +133,10 @@ postgres:
 | postgres.host | - | localhost | PostgreSQL host |
 | postgres.port | - | 5432 | PostgreSQL port |
 | storage.path | - | ./data/pganalyzer.db | SQLite database path |
-| scheduler.snapshot_interval | - | 5m | Collection interval |
+| scheduler.snapshot_interval | - | 5m | Window for grouping collector runs into a snapshot |
 | scheduler.analysis_interval | - | 15m | Analysis interval |
+| storage.retention.snapshots | - | 168h | Snapshot retention (7 days) |
+| storage.retention.query_stats | - | 720h | Independent query history retention (30 days) |
 | server.port | - | 8080 | HTTP server port |
 | thresholds.slow_query_ms | - | 1000 | Slow query threshold (ms) |
 | thresholds.cache_hit_ratio | - | 95.0 | Cache hit ratio warning threshold (%) |
@@ -186,6 +188,7 @@ docker run -d \
 ### Queries
 - `GET /api/v1/queries` - List queries with pagination
 - `GET /api/v1/queries/top` - Top N queries by metric
+- `GET /api/v1/queries/:id/history` - Retained query samples; accepts RFC3339 `from`/`to`, `limit`, and `offset`
 - `POST /api/v1/queries/:id/explain` - Get EXPLAIN plan for a query
 
 ### Schema

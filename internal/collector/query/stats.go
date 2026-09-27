@@ -4,6 +4,7 @@ package query
 import (
 	"context"
 	"log"
+	"sync"
 	"time"
 
 	"github.com/elqsar/pganalyzer/internal/collector"
@@ -26,6 +27,7 @@ type StatsCollector struct {
 	// lastStatsReset tracks the last known stats_reset timestamp
 	// to detect when statistics have been reset.
 	lastStatsReset *time.Time
+	resetMu        sync.Mutex
 }
 
 // StatsCollectorConfig holds configuration for StatsCollector.
@@ -65,12 +67,14 @@ func (c *StatsCollector) Collect(ctx context.Context, snapshotID int64) error {
 	if err != nil {
 		c.Logf("warning: failed to get stats reset time: %v", err)
 	} else if resetTime != nil {
+		c.resetMu.Lock()
 		if c.lastStatsReset != nil && !resetTime.Equal(*c.lastStatsReset) {
 			c.Logf("WARNING: pg_stat_statements was reset at %s (previous: %s)",
 				resetTime.Format(time.RFC3339),
 				c.lastStatsReset.Format(time.RFC3339))
 		}
 		c.lastStatsReset = resetTime
+		c.resetMu.Unlock()
 	}
 
 	// Fetch query statistics from PostgreSQL

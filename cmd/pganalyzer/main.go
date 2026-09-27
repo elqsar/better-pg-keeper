@@ -157,9 +157,10 @@ func run(ctx context.Context, configPath string) error {
 
 	// Create coordinator and register collectors
 	coordinator := collector.NewCoordinator(collector.CoordinatorConfig{
-		PGClient:   pgClient,
-		Storage:    storage,
-		InstanceID: instanceID,
+		PGClient:       pgClient,
+		Storage:        storage,
+		InstanceID:     instanceID,
+		SnapshotWindow: cfg.Scheduler.SnapshotInterval.Duration(),
 	})
 
 	coordinator.RegisterCollectors(

@@ -179,6 +179,7 @@ func (s *Server) registerRoutes() {
 	// Queries
 	apiV1.GET("/queries", queriesHandler.ListQueries)
 	apiV1.GET("/queries/top", queriesHandler.GetTopQueries)
+	apiV1.GET("/queries/:id/history", queriesHandler.GetQueryHistory)
 	apiV1.POST("/queries/:id/explain", queriesHandler.ExplainQuery)
 
 	// Schema

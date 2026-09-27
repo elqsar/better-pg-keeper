@@ -3,6 +3,7 @@ package locks
 
 import (
 	"context"
+	"fmt"
 	"log"
 	"time"
 
@@ -61,6 +62,13 @@ func (c *LocksCollector) Collect(ctx context.Context, snapshotID int64) error {
 	if err != nil {
 		return err
 	}
+	if stats == nil {
+		return fmt.Errorf("lock statistics returned no data")
+	}
+	blocked, err := c.PGClient().GetBlockedQueries(ctx)
+	if err != nil {
+		return err
+	}
 
 	c.Logf("lock stats: %d total, %d granted, %d waiting",
 		stats.TotalLocks, stats.GrantedLocks, stats.WaitingLocks)
@@ -75,25 +83,18 @@ func (c *LocksCollector) Collect(ctx context.Context, snapshotID int64) error {
 	}
 
 	// Fetch and store blocked queries
-	blocked, err := c.PGClient().GetBlockedQueries(ctx)
-	if err != nil {
-		c.Logf("warning: failed to get blocked queries: %v", err)
-	} else {
-		if len(blocked) > 0 {
-			c.Logf("found %d blocked queries", len(blocked))
-			for _, b := range blocked {
-				c.Logf("  blocked PID %d waiting %.1fs for %s lock on %v (held by PID %d)",
-					b.BlockedPID, b.WaitDuration, b.LockMode, b.Relation, b.BlockingPID)
-			}
+	if len(blocked) > 0 {
+		c.Logf("found %d blocked queries", len(blocked))
+		for _, b := range blocked {
+			c.Logf("  blocked PID %d waiting %.1fs for %s lock on %v (held by PID %d)",
+				b.BlockedPID, b.WaitDuration, b.LockMode, b.Relation, b.BlockingPID)
 		}
-		// Historical
-		if err := c.Storage().SaveBlockedQueries(ctx, snapshotID, blocked); err != nil {
-			return err
-		}
-		// Current (for dashboard)
-		if err := c.Storage().SaveCurrentBlockedQueries(ctx, c.InstanceID(), blocked); err != nil {
-			c.Logf("warning: failed to save current blocked queries: %v", err)
-		}
+	}
+	if err := c.Storage().SaveBlockedQueries(ctx, snapshotID, blocked); err != nil {
+		return err
+	}
+	if err := c.Storage().SaveCurrentBlockedQueries(ctx, c.InstanceID(), blocked); err != nil {
+		c.Logf("warning: failed to save current blocked queries: %v", err)
 	}
 
 	return nil

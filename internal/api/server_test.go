@@ -133,6 +133,9 @@ func (m *mockStorage) GetQueryStats(ctx context.Context, snapshotID int64) ([]mo
 func (m *mockStorage) GetQueryStatsDelta(ctx context.Context, fromSnapshotID, toSnapshotID int64) ([]models.QueryStatDelta, error) {
 	return nil, nil
 }
+func (m *mockStorage) GetQueryHistory(ctx context.Context, instanceID, queryID int64, from, to time.Time, limit, offset int) ([]models.QueryHistorySample, error) {
+	return nil, nil
+}
 
 func (m *mockStorage) SaveTableStats(ctx context.Context, snapshotID int64, stats []models.TableStat) error {
 	m.tableStats[snapshotID] = stats
@@ -225,6 +228,9 @@ func (m *mockStorage) GetExplainPlan(ctx context.Context, queryID int64) (*model
 }
 
 func (m *mockStorage) PurgeOldSnapshots(ctx context.Context, retention time.Duration) (int64, error) {
+	return 0, nil
+}
+func (m *mockStorage) PurgeOldQueryHistory(ctx context.Context, retention time.Duration) (int64, error) {
 	return 0, nil
 }
 

@@ -16,12 +16,14 @@ import (
 
 // Coordinator manages the lifecycle of snapshots and coordinates collector execution.
 type Coordinator struct {
-	pgClient   postgres.Client
-	storage    sqlite.Storage
-	instanceID int64
-	collectors []Collector
-	logger     *log.Logger
-	mu         sync.RWMutex
+	pgClient       postgres.Client
+	storage        sqlite.Storage
+	instanceID     int64
+	collectors     []Collector
+	logger         *log.Logger
+	mu             sync.RWMutex
+	cycle          chan struct{} // Serializes complete collection cycles.
+	snapshotWindow time.Duration
 
 	// lastRun tracks the last execution time for each collector by name.
 	lastRun map[string]time.Time
@@ -29,11 +31,15 @@ type Coordinator struct {
 
 // CoordinatorConfig holds configuration for creating a Coordinator.
 type CoordinatorConfig struct {
-	PGClient   postgres.Client
-	Storage    sqlite.Storage
-	InstanceID int64
-	Logger     *log.Logger
+	PGClient       postgres.Client
+	Storage        sqlite.Storage
+	InstanceID     int64
+	Logger         *log.Logger
+	SnapshotWindow time.Duration
 }
+
+// ErrCollectionInProgress means a manual collection could not start immediately.
+var ErrCollectionInProgress = errors.New("collection already in progress")
 
 // NewCoordinator creates a new Coordinator.
 func NewCoordinator(cfg CoordinatorConfig) *Coordinator {
@@ -42,12 +48,20 @@ func NewCoordinator(cfg CoordinatorConfig) *Coordinator {
 		logger = log.Default()
 	}
 
+	window := cfg.SnapshotWindow
+	if window <= 0 {
+		window = 5 * time.Minute
+	}
+	cycle := make(chan struct{}, 1)
+	cycle <- struct{}{}
 	return &Coordinator{
-		pgClient:   cfg.PGClient,
-		storage:    cfg.Storage,
-		instanceID: cfg.InstanceID,
-		logger:     logger,
-		lastRun:    make(map[string]time.Time),
+		pgClient:       cfg.PGClient,
+		storage:        cfg.Storage,
+		instanceID:     cfg.InstanceID,
+		logger:         logger,
+		lastRun:        make(map[string]time.Time),
+		cycle:          cycle,
+		snapshotWindow: window,
 	}
 }
 
@@ -149,8 +163,14 @@ func (c *Coordinator) recordCollectorRun(ctx context.Context, snapshotID int64, 
 // Collectors are run concurrently and partial failures are tracked but don't stop others.
 // A collector is "due" if enough time has passed since its last run based on its Interval().
 func (c *Coordinator) Collect(ctx context.Context) (*CollectionResult, error) {
+	select {
+	case <-ctx.Done():
+		return nil, ctx.Err()
+	case <-c.cycle:
+	}
+	defer func() { c.cycle <- struct{}{} }()
 	c.mu.RLock()
-	collectors := c.collectors
+	collectors := append([]Collector(nil), c.collectors...)
 	c.mu.RUnlock()
 
 	result := &CollectionResult{
@@ -174,10 +194,10 @@ func (c *Coordinator) Collect(ctx context.Context) (*CollectionResult, error) {
 
 	c.logger.Printf("[coordinator] %d/%d collectors due to run", len(dueCollectors), len(collectors))
 
-	// Reuse a recent snapshot (within 1 minute) to avoid fragmented data
+	// Reuse a snapshot within the configured grouping window to avoid fragmented data
 	// This ensures all collectors contribute to the same snapshot instead of
 	// creating separate snapshots that only have partial data
-	snapshotID, err := c.GetOrCreateSnapshot(ctx, time.Minute)
+	snapshotID, err := c.GetOrCreateSnapshot(ctx, c.snapshotWindow)
 	if err != nil {
 		return nil, fmt.Errorf("getting or creating snapshot: %w", err)
 	}
@@ -253,8 +273,16 @@ func (c *Coordinator) CollectWithTimeout(ctx context.Context, timeout time.Durat
 // This is useful for manual triggers where the user explicitly wants a full snapshot.
 // Collectors are run concurrently and partial failures are tracked.
 func (c *Coordinator) CollectAll(ctx context.Context) (*CollectionResult, error) {
+	select {
+	case <-ctx.Done():
+		return nil, ctx.Err()
+	case <-c.cycle:
+		defer func() { c.cycle <- struct{}{} }()
+	default:
+		return nil, ErrCollectionInProgress
+	}
 	c.mu.RLock()
-	collectors := c.collectors
+	collectors := append([]Collector(nil), c.collectors...)
 	c.mu.RUnlock()
 
 	result := &CollectionResult{
@@ -335,16 +363,28 @@ func (c *Coordinator) CollectAll(ctx context.Context) (*CollectionResult, error)
 
 // RunCollector runs a specific collector by name.
 func (c *Coordinator) RunCollector(ctx context.Context, name string, snapshotID int64) error {
+	select {
+	case <-ctx.Done():
+		return ctx.Err()
+	case <-c.cycle:
+	}
+	defer func() { c.cycle <- struct{}{} }()
 	c.mu.RLock()
-	defer c.mu.RUnlock()
-
+	var target Collector
 	for _, collector := range c.collectors {
 		if collector.Name() == name {
-			return collector.Collect(ctx, snapshotID)
+			target = collector
+			break
 		}
 	}
-
-	return fmt.Errorf("collector not found: %s", name)
+	c.mu.RUnlock()
+	if target == nil {
+		return fmt.Errorf("collector not found: %s", name)
+	}
+	result := &CollectionResult{Errors: make(map[string]error)}
+	var errorsMu sync.Mutex
+	c.runCollector(ctx, target, snapshotID, result, &errorsMu)
+	return result.Errors[name]
 }
 
 // GetLatestSnapshot returns the most recent snapshot for the instance.

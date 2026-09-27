@@ -18,6 +18,7 @@ import (
 // Storage defines the storage interface needed by the scheduler.
 type Storage interface {
 	PurgeOldSnapshots(ctx context.Context, retention time.Duration) (int64, error)
+	PurgeOldQueryHistory(ctx context.Context, retention time.Duration) (int64, error)
 }
 
 // Scheduler coordinates data collection, analysis, and maintenance jobs.
@@ -125,7 +126,8 @@ func NewScheduler(cfg Config) (*Scheduler, error) {
 	retentionConfig := cfg.RetentionConfig
 	if retentionConfig == nil {
 		retentionConfig = &config.RetentionConfig{
-			Snapshots: config.Duration(168 * time.Hour), // 7 days
+			Snapshots:  config.Duration(168 * time.Hour), // 7 days
+			QueryStats: config.Duration(720 * time.Hour), // 30 days
 		}
 	}
 
@@ -214,7 +216,7 @@ func (s *Scheduler) IsRunning() bool {
 // Returns an error if a manual trigger is already in progress.
 func (s *Scheduler) TriggerSnapshot(ctx context.Context) (*TriggerResult, error) {
 	if !s.manualMu.TryLock() {
-		return nil, fmt.Errorf("manual trigger already in progress")
+		return nil, fmt.Errorf("%w: manual trigger already in progress", collector.ErrCollectionInProgress)
 	}
 	defer s.manualMu.Unlock()
 
@@ -229,6 +231,9 @@ func (s *Scheduler) TriggerSnapshot(ctx context.Context) (*TriggerResult, error)
 	collResult, err := s.coordinator.CollectAll(ctx)
 	collDuration := time.Since(collStart)
 	result.CollectionResult = collResult
+	if err == collector.ErrCollectionInProgress {
+		return nil, err
+	}
 
 	// Update collection health
 	collSuccess := err == nil && (collResult == nil || !collResult.HasErrors())

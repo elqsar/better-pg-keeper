@@ -61,6 +61,12 @@ type QueryStat struct {
 	TotalPlanTime  float64 `json:"total_plan_time"` // milliseconds
 }
 
+// QueryHistorySample is an independently retained pg_stat_statements sample.
+type QueryHistorySample struct {
+	SampledAt time.Time `json:"sampled_at"`
+	QueryStat
+}
+
 // QueryStatDelta represents the difference in query statistics between two snapshots.
 type QueryStatDelta struct {
 	QueryID        int64   `json:"queryid"`

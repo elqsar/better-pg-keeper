@@ -34,9 +34,9 @@ func (r *CacheRule) Name() string {
 }
 
 // RequiredDomains returns the analysis domains this rule reads.
-// Cache hit ratios are derived from pg_stat_statements block counters.
+// The overall cache ratio is measured by the database stats collector.
 func (r *CacheRule) RequiredDomains() []string {
-	return []string{analyzer.DomainQueryStats}
+	return []string{analyzer.DomainDatabaseStats}
 }
 
 // Evaluate analyzes cache statistics and generates suggestions.

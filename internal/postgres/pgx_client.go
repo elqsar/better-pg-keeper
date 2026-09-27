@@ -5,6 +5,8 @@ import (
 	"encoding/json"
 	"fmt"
 	"log"
+	"net"
+	"net/url"
 	"strconv"
 	"strings"
 	"time"
@@ -49,20 +51,22 @@ func (c *PgxClient) buildConnString() string {
 		sslMode = "prefer"
 	}
 
-	connStr := fmt.Sprintf(
-		"host=%s port=%d dbname=%s user=%s sslmode=%s",
-		c.config.Host, port, c.config.Database, c.config.User, sslMode,
-	)
-
+	user := url.User(c.config.User)
 	if c.config.Password != "" {
-		connStr += fmt.Sprintf(" password=%s", c.config.Password)
+		user = url.UserPassword(c.config.User, c.config.Password)
 	}
-
+	address := &url.URL{
+		Scheme: "postgres",
+		User:   user,
+		Host:   net.JoinHostPort(c.config.Host, strconv.Itoa(port)),
+		Path:   "/" + c.config.Database,
+	}
+	params := url.Values{"sslmode": {sslMode}}
 	if c.config.ConnectTimeout > 0 {
-		connStr += fmt.Sprintf(" connect_timeout=%d", int(c.config.ConnectTimeout.Seconds()))
+		params.Set("connect_timeout", strconv.Itoa(int(c.config.ConnectTimeout.Seconds())))
 	}
-
-	return connStr
+	address.RawQuery = params.Encode()
+	return address.String()
 }
 
 // Connect establishes a connection pool to the PostgreSQL database.

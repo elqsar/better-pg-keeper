@@ -2,6 +2,7 @@ package resource
 
 import (
 	"context"
+	"fmt"
 	"log"
 	"time"
 
@@ -60,6 +61,16 @@ func (c *DatabaseStatsCollector) Collect(ctx context.Context, snapshotID int64) 
 	if err != nil {
 		return err
 	}
+	if stats == nil {
+		return fmt.Errorf("database statistics returned no data")
+	}
+	extendedStats, err := c.PGClient().GetExtendedDatabaseStats(ctx)
+	if err != nil {
+		return err
+	}
+	if extendedStats == nil {
+		return fmt.Errorf("extended database statistics returned no data")
+	}
 
 	c.Logf("cache hit ratio: %.2f%%", stats.CacheHitRatio)
 
@@ -68,20 +79,12 @@ func (c *DatabaseStatsCollector) Collect(ctx context.Context, snapshotID int64) 
 		return err
 	}
 
-	// Fetch extended database stats
-	extendedStats, err := c.PGClient().GetExtendedDatabaseStats(ctx)
-	if err != nil {
-		c.Logf("warning: failed to get extended database stats: %v", err)
-	} else {
-		// Store extended stats (historical)
-		if err := c.Storage().SaveExtendedDatabaseStats(ctx, snapshotID, extendedStats); err != nil {
-			c.Logf("warning: failed to save extended database stats: %v", err)
-		}
-		// Store extended stats (current - for dashboard)
-		cacheHitRatio := stats.CacheHitRatio
-		if err := c.Storage().SaveCurrentDatabaseStats(ctx, c.InstanceID(), extendedStats, &cacheHitRatio); err != nil {
-			c.Logf("warning: failed to save current database stats: %v", err)
-		}
+	if err := c.Storage().SaveExtendedDatabaseStats(ctx, snapshotID, extendedStats); err != nil {
+		return err
+	}
+	cacheHitRatio := stats.CacheHitRatio
+	if err := c.Storage().SaveCurrentDatabaseStats(ctx, c.InstanceID(), extendedStats, &cacheHitRatio); err != nil {
+		c.Logf("warning: failed to save current database stats: %v", err)
 	}
 
 	return nil

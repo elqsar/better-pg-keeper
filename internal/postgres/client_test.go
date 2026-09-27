@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"github.com/elqsar/pganalyzer/internal/models"
+	"github.com/jackc/pgx/v5/pgxpool"
 )
 
 func TestDefaultClientConfig(t *testing.T) {
@@ -104,7 +105,7 @@ func TestPgxClient_BuildConnString(t *testing.T) {
 				Database: "testdb",
 				User:     "testuser",
 			},
-			expected: "host=localhost port=5432 dbname=testdb user=testuser sslmode=prefer",
+			expected: "postgres://testuser@localhost:5432/testdb?sslmode=prefer",
 		},
 		{
 			name: "with password",
@@ -116,7 +117,7 @@ func TestPgxClient_BuildConnString(t *testing.T) {
 				Password: "secret",
 				SSLMode:  "require",
 			},
-			expected: "host=localhost port=5432 dbname=testdb user=testuser sslmode=require password=secret",
+			expected: "postgres://testuser:secret@localhost:5432/testdb?sslmode=require",
 		},
 		{
 			name: "with connect timeout",
@@ -126,7 +127,7 @@ func TestPgxClient_BuildConnString(t *testing.T) {
 				User:           "testuser",
 				ConnectTimeout: 30 * time.Second,
 			},
-			expected: "host=localhost port=5432 dbname=testdb user=testuser sslmode=prefer connect_timeout=30",
+			expected: "postgres://testuser@localhost:5432/testdb?connect_timeout=30&sslmode=prefer",
 		},
 		{
 			name: "custom port",
@@ -137,7 +138,7 @@ func TestPgxClient_BuildConnString(t *testing.T) {
 				User:     "testuser",
 				SSLMode:  "disable",
 			},
-			expected: "host=localhost port=5433 dbname=testdb user=testuser sslmode=disable",
+			expected: "postgres://testuser@localhost:5433/testdb?sslmode=disable",
 		},
 	}
 
@@ -153,6 +154,24 @@ func TestPgxClient_BuildConnString(t *testing.T) {
 				t.Errorf("expected %q, got %q", tt.expected, connStr)
 			}
 		})
+	}
+}
+
+func TestPgxClient_BuildConnStringEscapesValues(t *testing.T) {
+	client, err := NewClient(ClientConfig{
+		Host: "::1", Port: 5432, Database: "sales db", User: "report user",
+		Password: "a b#?&='ü", SSLMode: "require",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	parsed, err := pgxpool.ParseConfig(client.buildConnString())
+	if err != nil {
+		t.Fatalf("parse escaped URI: %v", err)
+	}
+	if parsed.ConnConfig.Host != "::1" || parsed.ConnConfig.Database != "sales db" ||
+		parsed.ConnConfig.User != "report user" || parsed.ConnConfig.Password != "a b#?&='ü" {
+		t.Fatalf("connection values changed after parsing")
 	}
 }
 

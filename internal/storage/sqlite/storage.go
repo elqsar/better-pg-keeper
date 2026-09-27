@@ -41,6 +41,8 @@ type Storage interface {
 	SaveQueryStats(ctx context.Context, snapshotID int64, stats []models.QueryStat) error
 	GetQueryStats(ctx context.Context, snapshotID int64) ([]models.QueryStat, error)
 	GetQueryStatsDelta(ctx context.Context, fromSnapshotID, toSnapshotID int64) ([]models.QueryStatDelta, error)
+	GetQueryHistory(ctx context.Context, instanceID, queryID int64, from, to time.Time, limit, offset int) ([]models.QueryHistorySample, error)
+	PurgeOldQueryHistory(ctx context.Context, retention time.Duration) (int64, error)
 
 	// Table stats operations
 	SaveTableStats(ctx context.Context, snapshotID int64, stats []models.TableStat) error
@@ -365,10 +367,13 @@ func (s *SQLiteStorage) ListInstances(ctx context.Context) ([]models.Instance, e
 
 // CreateSnapshot creates a new snapshot and returns its ID.
 func (s *SQLiteStorage) CreateSnapshot(ctx context.Context, snap *models.Snapshot) (int64, error) {
+	// modernc SQLite serializes time.Time.String(), including its monotonic clock
+	// suffix. A scanned timestamp has no suffix, so equality bounds would miss it.
+	capturedAt := snap.CapturedAt.Round(0)
 	result, err := s.writeDB.ExecContext(ctx, `
 		INSERT INTO snapshots (instance_id, captured_at, pg_version, stats_reset, cache_hit_ratio)
 		VALUES (?, ?, ?, ?, ?)
-	`, snap.InstanceID, snap.CapturedAt, snap.PGVersion, snap.StatsReset, snap.CacheHitRatio)
+	`, snap.InstanceID, capturedAt, snap.PGVersion, snap.StatsReset, snap.CacheHitRatio)
 
 	if err != nil {
 		return 0, fmt.Errorf("creating snapshot: %w", err)
@@ -433,7 +438,7 @@ func (s *SQLiteStorage) RecordCollectorRun(ctx context.Context, snapshotID int64
 			status = excluded.status,
 			collected_at = excluded.collected_at,
 			error = excluded.error
-	`, snapshotID, collector, status, at, errValue)
+	`, snapshotID, collector, status, at.Round(0), errValue)
 	if err != nil {
 		return fmt.Errorf("recording collector run: %w", err)
 	}
@@ -454,11 +459,10 @@ func (s *SQLiteStorage) GetLatestSnapshotWithCollector(ctx context.Context, inst
 	`
 	args := []any{instanceID, collector, models.CollectorStatusSuccess}
 	if !notAfter.IsZero() {
-		// Bind the time as-is: snapshots.captured_at is written from an unconverted
-		// time.Time (see CreateSnapshot and PurgeOldSnapshots), and normalising only
-		// one side of the comparison makes it compare different representations.
+		// Strip the monotonic component just as CreateSnapshot does, so the
+		// anchor itself is included by the bound.
 		query += " AND s.captured_at <= ?"
-		args = append(args, notAfter)
+		args = append(args, notAfter.Round(0))
 	}
 	query += " ORDER BY s.captured_at DESC LIMIT 1"
 
@@ -552,15 +556,20 @@ func (s *SQLiteStorage) UpdateSnapshotCacheHitRatio(ctx context.Context, snapsho
 
 // SaveQueryStats saves query statistics for a snapshot.
 func (s *SQLiteStorage) SaveQueryStats(ctx context.Context, snapshotID int64, stats []models.QueryStat) error {
-	if len(stats) == 0 {
-		return nil
-	}
-
 	tx, err := s.writeDB.BeginTx(ctx, nil)
 	if err != nil {
 		return fmt.Errorf("beginning transaction: %w", err)
 	}
 	defer tx.Rollback()
+
+	var instanceID int64
+	if err := tx.QueryRowContext(ctx, `SELECT instance_id FROM snapshots WHERE id = ?`, snapshotID).Scan(&instanceID); err != nil {
+		return fmt.Errorf("getting query snapshot instance: %w", err)
+	}
+	if _, err := tx.ExecContext(ctx, `DELETE FROM query_stats WHERE snapshot_id = ?`, snapshotID); err != nil {
+		return fmt.Errorf("replacing query stats: %w", err)
+	}
+	sampledAt := time.Now().UTC()
 
 	stmt, err := tx.PrepareContext(ctx, `
 		INSERT INTO query_stats (
@@ -573,6 +582,17 @@ func (s *SQLiteStorage) SaveQueryStats(ctx context.Context, snapshotID int64, st
 		return fmt.Errorf("preparing statement: %w", err)
 	}
 	defer stmt.Close()
+	historyStmt, err := tx.PrepareContext(ctx, `
+		INSERT INTO query_history (
+			instance_id, sampled_at, sampled_at_unix_ns, queryid, query, calls, total_exec_time,
+			mean_exec_time, min_exec_time, max_exec_time, rows, shared_blks_hit,
+			shared_blks_read, plans, total_plan_time
+		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+	`)
+	if err != nil {
+		return fmt.Errorf("preparing query history: %w", err)
+	}
+	defer historyStmt.Close()
 
 	for _, stat := range stats {
 		_, err := stmt.ExecContext(ctx,
@@ -582,6 +602,14 @@ func (s *SQLiteStorage) SaveQueryStats(ctx context.Context, snapshotID int64, st
 		)
 		if err != nil {
 			return fmt.Errorf("inserting query stat: %w", err)
+		}
+		if _, err := historyStmt.ExecContext(ctx,
+			instanceID, sampledAt, sampledAt.UnixNano(), stat.QueryID, stat.Query, stat.Calls,
+			stat.TotalExecTime, stat.MeanExecTime, stat.MinExecTime,
+			stat.MaxExecTime, stat.Rows, stat.SharedBlksHit, stat.SharedBlksRead,
+			stat.Plans, stat.TotalPlanTime,
+		); err != nil {
+			return fmt.Errorf("inserting query history: %w", err)
 		}
 	}
 
@@ -682,15 +710,14 @@ func (s *SQLiteStorage) GetQueryStatsDelta(ctx context.Context, fromSnapshotID, 
 
 // SaveTableStats saves table statistics for a snapshot.
 func (s *SQLiteStorage) SaveTableStats(ctx context.Context, snapshotID int64, stats []models.TableStat) error {
-	if len(stats) == 0 {
-		return nil
-	}
-
 	tx, err := s.writeDB.BeginTx(ctx, nil)
 	if err != nil {
 		return fmt.Errorf("beginning transaction: %w", err)
 	}
 	defer tx.Rollback()
+	if _, err := tx.ExecContext(ctx, `DELETE FROM table_stats WHERE snapshot_id = ?`, snapshotID); err != nil {
+		return fmt.Errorf("replacing table stats: %w", err)
+	}
 
 	stmt, err := tx.PrepareContext(ctx, `
 		INSERT INTO table_stats (
@@ -758,15 +785,14 @@ func (s *SQLiteStorage) GetTableStats(ctx context.Context, snapshotID int64) ([]
 
 // SaveIndexStats saves index statistics for a snapshot.
 func (s *SQLiteStorage) SaveIndexStats(ctx context.Context, snapshotID int64, stats []models.IndexStat) error {
-	if len(stats) == 0 {
-		return nil
-	}
-
 	tx, err := s.writeDB.BeginTx(ctx, nil)
 	if err != nil {
 		return fmt.Errorf("beginning transaction: %w", err)
 	}
 	defer tx.Rollback()
+	if _, err := tx.ExecContext(ctx, `DELETE FROM index_stats WHERE snapshot_id = ?`, snapshotID); err != nil {
+		return fmt.Errorf("replacing index stats: %w", err)
+	}
 
 	stmt, err := tx.PrepareContext(ctx, `
 		INSERT INTO index_stats (
@@ -830,15 +856,14 @@ func (s *SQLiteStorage) GetIndexStats(ctx context.Context, snapshotID int64) ([]
 
 // SaveBloatStats saves bloat statistics for a snapshot.
 func (s *SQLiteStorage) SaveBloatStats(ctx context.Context, snapshotID int64, stats []models.BloatInfo) error {
-	if len(stats) == 0 {
-		return nil
-	}
-
 	tx, err := s.writeDB.BeginTx(ctx, nil)
 	if err != nil {
 		return fmt.Errorf("beginning transaction: %w", err)
 	}
 	defer tx.Rollback()
+	if _, err := tx.ExecContext(ctx, `DELETE FROM bloat_stats WHERE snapshot_id = ?`, snapshotID); err != nil {
+		return fmt.Errorf("replacing bloat stats: %w", err)
+	}
 
 	stmt, err := tx.PrepareContext(ctx, `
 		INSERT INTO bloat_stats (
@@ -902,7 +927,7 @@ func (s *SQLiteStorage) SaveConnectionActivity(ctx context.Context, snapshotID i
 		return nil
 	}
 
-	_, err := s.writeDB.ExecContext(ctx, `
+	err := s.replaceSnapshotRow(ctx, "connection_activity", snapshotID, `
 		INSERT INTO connection_activity (
 			snapshot_id, active_count, idle_count, idle_in_tx_count, idle_in_tx_aborted,
 			waiting_count, total_connections, max_connections
@@ -947,15 +972,14 @@ func (s *SQLiteStorage) GetConnectionActivity(ctx context.Context, snapshotID in
 
 // SaveLongRunningQueries saves long running queries for a snapshot.
 func (s *SQLiteStorage) SaveLongRunningQueries(ctx context.Context, snapshotID int64, queries []models.LongRunningQuery) error {
-	if len(queries) == 0 {
-		return nil
-	}
-
 	tx, err := s.writeDB.BeginTx(ctx, nil)
 	if err != nil {
 		return fmt.Errorf("beginning transaction: %w", err)
 	}
 	defer tx.Rollback()
+	if _, err := tx.ExecContext(ctx, `DELETE FROM long_running_queries WHERE snapshot_id = ?`, snapshotID); err != nil {
+		return fmt.Errorf("replacing long running queries: %w", err)
+	}
 
 	stmt, err := tx.PrepareContext(ctx, `
 		INSERT INTO long_running_queries (
@@ -1018,15 +1042,14 @@ func (s *SQLiteStorage) GetLongRunningQueries(ctx context.Context, snapshotID in
 
 // SaveIdleInTransaction saves idle in transaction connections for a snapshot.
 func (s *SQLiteStorage) SaveIdleInTransaction(ctx context.Context, snapshotID int64, idle []models.IdleInTransaction) error {
-	if len(idle) == 0 {
-		return nil
-	}
-
 	tx, err := s.writeDB.BeginTx(ctx, nil)
 	if err != nil {
 		return fmt.Errorf("beginning transaction: %w", err)
 	}
 	defer tx.Rollback()
+	if _, err := tx.ExecContext(ctx, `DELETE FROM idle_in_transaction WHERE snapshot_id = ?`, snapshotID); err != nil {
+		return fmt.Errorf("replacing idle transactions: %w", err)
+	}
 
 	stmt, err := tx.PrepareContext(ctx, `
 		INSERT INTO idle_in_transaction (
@@ -1092,7 +1115,7 @@ func (s *SQLiteStorage) SaveLockStats(ctx context.Context, snapshotID int64, sta
 		return nil
 	}
 
-	_, err := s.writeDB.ExecContext(ctx, `
+	err := s.replaceSnapshotRow(ctx, "lock_stats", snapshotID, `
 		INSERT INTO lock_stats (
 			snapshot_id, total_locks, granted_locks, waiting_locks,
 			access_share_locks, row_exclusive_locks, exclusive_locks
@@ -1137,15 +1160,14 @@ func (s *SQLiteStorage) GetLockStats(ctx context.Context, snapshotID int64) (*mo
 
 // SaveBlockedQueries saves blocked queries for a snapshot.
 func (s *SQLiteStorage) SaveBlockedQueries(ctx context.Context, snapshotID int64, queries []models.BlockedQuery) error {
-	if len(queries) == 0 {
-		return nil
-	}
-
 	tx, err := s.writeDB.BeginTx(ctx, nil)
 	if err != nil {
 		return fmt.Errorf("beginning transaction: %w", err)
 	}
 	defer tx.Rollback()
+	if _, err := tx.ExecContext(ctx, `DELETE FROM blocked_queries WHERE snapshot_id = ?`, snapshotID); err != nil {
+		return fmt.Errorf("replacing blocked queries: %w", err)
+	}
 
 	stmt, err := tx.PrepareContext(ctx, `
 		INSERT INTO blocked_queries (
@@ -1215,7 +1237,7 @@ func (s *SQLiteStorage) SaveExtendedDatabaseStats(ctx context.Context, snapshotI
 		return nil
 	}
 
-	_, err := s.writeDB.ExecContext(ctx, `
+	err := s.replaceSnapshotRow(ctx, "extended_database_stats", snapshotID, `
 		INSERT INTO extended_database_stats (
 			snapshot_id, database_name, xact_commit, xact_rollback,
 			temp_files, temp_bytes, deadlocks, confl_lock, confl_snapshot
@@ -1228,6 +1250,23 @@ func (s *SQLiteStorage) SaveExtendedDatabaseStats(ctx context.Context, snapshotI
 	}
 
 	return nil
+}
+
+// replaceSnapshotRow keeps singleton historical rows unique within a grouping window.
+// The table names are fixed constants at the call sites, never user input.
+func (s *SQLiteStorage) replaceSnapshotRow(ctx context.Context, table string, snapshotID int64, insert string, args ...any) error {
+	tx, err := s.writeDB.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+	if _, err := tx.ExecContext(ctx, "DELETE FROM "+table+" WHERE snapshot_id = ?", snapshotID); err != nil {
+		return err
+	}
+	if _, err := tx.ExecContext(ctx, insert, args...); err != nil {
+		return err
+	}
+	return tx.Commit()
 }
 
 // GetExtendedDatabaseStats retrieves extended database statistics for a snapshot.
@@ -1444,7 +1483,7 @@ func (s *SQLiteStorage) GetExplainPlan(ctx context.Context, queryID int64) (*mod
 // PurgeOldSnapshots deletes snapshots older than the retention period.
 // Related stats are cascade-deleted due to foreign key constraints.
 func (s *SQLiteStorage) PurgeOldSnapshots(ctx context.Context, retention time.Duration) (int64, error) {
-	cutoff := time.Now().Add(-retention)
+	cutoff := time.Now().Add(-retention).Round(0)
 
 	result, err := s.writeDB.ExecContext(ctx, `
 		DELETE FROM snapshots WHERE captured_at < ?

@@ -61,7 +61,7 @@ storage:
     # Default: 168h (7 days)
     snapshots: 168h
 
-    # How long to keep detailed query statistics
+    # How long to keep independent query history samples, even after snapshots expire
     # Default: 720h (30 days)
     query_stats: 720h
 
@@ -70,10 +70,10 @@ storage:
 # -----------------------------------------------------------------------------
 # Control how often data is collected and analyzed.
 scheduler:
-  # Interval for taking full snapshots
-  # Snapshots include: query stats, table stats, index stats, cache ratio
+  # Time window for grouping collector runs into a snapshot.
+  # Collectors still run on their own intervals (30 seconds to 1 hour).
   # Default: 5m (5 minutes)
-  # Recommended: 5m for active databases, 15m for less active ones
+  # A smaller value creates more snapshots without changing collector frequency.
   snapshot_interval: 5m
 
   # Interval for running analysis and generating suggestions

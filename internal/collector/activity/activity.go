@@ -3,6 +3,7 @@ package activity
 
 import (
 	"context"
+	"fmt"
 	"log"
 	"time"
 
@@ -83,6 +84,17 @@ func (c *ActivityCollector) Collect(ctx context.Context, snapshotID int64) error
 	if err != nil {
 		return err
 	}
+	if activity == nil {
+		return fmt.Errorf("connection activity returned no data")
+	}
+	longRunning, err := c.PGClient().GetLongRunningQueries(ctx, c.longRunningThreshold)
+	if err != nil {
+		return err
+	}
+	idleInTx, err := c.PGClient().GetIdleInTransaction(ctx, c.idleInTxThreshold)
+	if err != nil {
+		return err
+	}
 
 	c.Logf("connection activity: %d active, %d idle, %d idle-in-tx, %d waiting (total: %d/%d)",
 		activity.ActiveCount, activity.IdleCount, activity.IdleInTxCount,
@@ -98,39 +110,25 @@ func (c *ActivityCollector) Collect(ctx context.Context, snapshotID int64) error
 	}
 
 	// Fetch and store long-running queries
-	longRunning, err := c.PGClient().GetLongRunningQueries(ctx, c.longRunningThreshold)
-	if err != nil {
-		c.Logf("warning: failed to get long-running queries: %v", err)
-	} else {
-		if len(longRunning) > 0 {
-			c.Logf("found %d long-running queries (>%.0fs)", len(longRunning), c.longRunningThreshold)
-		}
-		// Historical
-		if err := c.Storage().SaveLongRunningQueries(ctx, snapshotID, longRunning); err != nil {
-			return err
-		}
-		// Current (for dashboard)
-		if err := c.Storage().SaveCurrentLongRunningQueries(ctx, c.InstanceID(), longRunning); err != nil {
-			c.Logf("warning: failed to save current long-running queries: %v", err)
-		}
+	if len(longRunning) > 0 {
+		c.Logf("found %d long-running queries (>%.0fs)", len(longRunning), c.longRunningThreshold)
+	}
+	if err := c.Storage().SaveLongRunningQueries(ctx, snapshotID, longRunning); err != nil {
+		return err
+	}
+	if err := c.Storage().SaveCurrentLongRunningQueries(ctx, c.InstanceID(), longRunning); err != nil {
+		c.Logf("warning: failed to save current long-running queries: %v", err)
 	}
 
 	// Fetch and store idle-in-transaction connections
-	idleInTx, err := c.PGClient().GetIdleInTransaction(ctx, c.idleInTxThreshold)
-	if err != nil {
-		c.Logf("warning: failed to get idle-in-transaction: %v", err)
-	} else {
-		if len(idleInTx) > 0 {
-			c.Logf("found %d idle-in-transaction connections (>%.0fs)", len(idleInTx), c.idleInTxThreshold)
-		}
-		// Historical
-		if err := c.Storage().SaveIdleInTransaction(ctx, snapshotID, idleInTx); err != nil {
-			return err
-		}
-		// Current (for dashboard)
-		if err := c.Storage().SaveCurrentIdleInTransaction(ctx, c.InstanceID(), idleInTx); err != nil {
-			c.Logf("warning: failed to save current idle-in-transaction: %v", err)
-		}
+	if len(idleInTx) > 0 {
+		c.Logf("found %d idle-in-transaction connections (>%.0fs)", len(idleInTx), c.idleInTxThreshold)
+	}
+	if err := c.Storage().SaveIdleInTransaction(ctx, snapshotID, idleInTx); err != nil {
+		return err
+	}
+	if err := c.Storage().SaveCurrentIdleInTransaction(ctx, c.InstanceID(), idleInTx); err != nil {
+		c.Logf("warning: failed to save current idle-in-transaction: %v", err)
 	}
 
 	return nil

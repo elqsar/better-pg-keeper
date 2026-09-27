@@ -5,6 +5,7 @@ import (
 	"errors"
 	"log"
 	"os"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -21,12 +22,19 @@ var errNotConnected = errors.New("not connected")
 
 // mockStorage implements all storage interfaces needed for testing.
 type mockStorage struct {
+	mu               sync.RWMutex
 	snapshots        []models.Snapshot
 	queryStats       map[int64][]models.QueryStat
 	suggestions      []models.Suggestion
 	purgedCount      int64
 	nextSnapshotID   int64
 	nextSuggestionID int64
+}
+
+func (m *mockStorage) snapshotCount() int {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	return len(m.snapshots)
 }
 
 func newMockStorage() *mockStorage {
@@ -59,6 +67,8 @@ func (m *mockStorage) ListInstances(ctx context.Context) ([]models.Instance, err
 
 // Snapshot operations
 func (m *mockStorage) CreateSnapshot(ctx context.Context, snap *models.Snapshot) (int64, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
 	snap.ID = m.nextSnapshotID
 	m.nextSnapshotID++
 	m.snapshots = append(m.snapshots, *snap)
@@ -66,19 +76,25 @@ func (m *mockStorage) CreateSnapshot(ctx context.Context, snap *models.Snapshot)
 }
 
 func (m *mockStorage) GetSnapshotByID(ctx context.Context, id int64) (*models.Snapshot, error) {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
 	for i := range m.snapshots {
 		if m.snapshots[i].ID == id {
-			return &m.snapshots[i], nil
+			copy := m.snapshots[i]
+			return &copy, nil
 		}
 	}
 	return nil, nil
 }
 
 func (m *mockStorage) GetLatestSnapshot(ctx context.Context, instanceID int64) (*models.Snapshot, error) {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
 	if len(m.snapshots) == 0 {
 		return nil, nil
 	}
-	return &m.snapshots[len(m.snapshots)-1], nil
+	copy := m.snapshots[len(m.snapshots)-1]
+	return &copy, nil
 }
 
 func (m *mockStorage) GetLatestSnapshotWithCollector(ctx context.Context, instanceID int64, collector string, notAfter time.Time) (*models.Snapshot, error) {
@@ -94,7 +110,9 @@ func (m *mockStorage) GetSnapshotCollectors(ctx context.Context, snapshotID int6
 }
 
 func (m *mockStorage) ListSnapshots(ctx context.Context, instanceID int64, limit int) ([]models.Snapshot, error) {
-	return m.snapshots, nil
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	return append([]models.Snapshot(nil), m.snapshots...), nil
 }
 
 func (m *mockStorage) UpdateSnapshotCacheHitRatio(ctx context.Context, snapshotID int64, ratio float64) error {
@@ -103,12 +121,16 @@ func (m *mockStorage) UpdateSnapshotCacheHitRatio(ctx context.Context, snapshotI
 
 // Query stats operations
 func (m *mockStorage) SaveQueryStats(ctx context.Context, snapshotID int64, stats []models.QueryStat) error {
-	m.queryStats[snapshotID] = stats
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.queryStats[snapshotID] = append([]models.QueryStat(nil), stats...)
 	return nil
 }
 
 func (m *mockStorage) GetQueryStats(ctx context.Context, snapshotID int64) ([]models.QueryStat, error) {
-	return m.queryStats[snapshotID], nil
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	return append([]models.QueryStat(nil), m.queryStats[snapshotID]...), nil
 }
 
 func (m *mockStorage) GetQueryStatsDelta(ctx context.Context, fromSnapshotID, toSnapshotID int64) ([]models.QueryStatDelta, error) {
@@ -144,6 +166,8 @@ func (m *mockStorage) GetBloatStats(ctx context.Context, snapshotID int64) ([]mo
 
 // Suggestion operations
 func (m *mockStorage) UpsertSuggestion(ctx context.Context, sug *models.Suggestion) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
 	sug.ID = m.nextSuggestionID
 	m.nextSuggestionID++
 	sug.Status = models.StatusActive
@@ -152,6 +176,8 @@ func (m *mockStorage) UpsertSuggestion(ctx context.Context, sug *models.Suggesti
 }
 
 func (m *mockStorage) GetSuggestionsByStatus(ctx context.Context, instanceID int64, status string) ([]models.Suggestion, error) {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
 	var filtered []models.Suggestion
 	for _, sug := range m.suggestions {
 		if sug.Status == status {
@@ -162,15 +188,20 @@ func (m *mockStorage) GetSuggestionsByStatus(ctx context.Context, instanceID int
 }
 
 func (m *mockStorage) GetSuggestionByID(ctx context.Context, id int64) (*models.Suggestion, error) {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
 	for i := range m.suggestions {
 		if m.suggestions[i].ID == id {
-			return &m.suggestions[i], nil
+			copy := m.suggestions[i]
+			return &copy, nil
 		}
 	}
 	return nil, nil
 }
 
 func (m *mockStorage) DismissSuggestion(ctx context.Context, id int64) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
 	for i := range m.suggestions {
 		if m.suggestions[i].ID == id {
 			m.suggestions[i].Status = models.StatusDismissed
@@ -180,6 +211,8 @@ func (m *mockStorage) DismissSuggestion(ctx context.Context, id int64) error {
 }
 
 func (m *mockStorage) ResolveSuggestion(ctx context.Context, id int64) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
 	for i := range m.suggestions {
 		if m.suggestions[i].ID == id {
 			m.suggestions[i].Status = models.StatusResolved
@@ -253,8 +286,16 @@ func (m *mockStorage) GetExtendedDatabaseStats(ctx context.Context, snapshotID i
 
 // Maintenance operations
 func (m *mockStorage) PurgeOldSnapshots(ctx context.Context, retention time.Duration) (int64, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
 	m.purgedCount++
 	return m.purgedCount, nil
+}
+func (m *mockStorage) PurgeOldQueryHistory(ctx context.Context, retention time.Duration) (int64, error) {
+	return 0, nil
+}
+func (m *mockStorage) GetQueryHistory(ctx context.Context, instanceID, queryID int64, from, to time.Time, limit, offset int) ([]models.QueryHistorySample, error) {
+	return nil, nil
 }
 
 // Current state operations (for dashboard)
@@ -612,8 +653,8 @@ func TestScheduler_CollectionLoop(t *testing.T) {
 	// Should have created at least 1 snapshot
 	// Note: Multiple collection cycles may reuse the same snapshot (within 1 minute window)
 	// which is the expected behavior to avoid fragmented data
-	if len(storage.snapshots) < 1 {
-		t.Errorf("Expected at least 1 snapshot, got %d", len(storage.snapshots))
+	if storage.snapshotCount() < 1 {
+		t.Errorf("Expected at least 1 snapshot, got %d", storage.snapshotCount())
 	}
 }
 
@@ -645,8 +686,8 @@ func TestScheduler_TriggerSnapshot(t *testing.T) {
 	}
 
 	// Verify snapshot was created
-	if len(storage.snapshots) != 1 {
-		t.Errorf("Expected 1 snapshot, got %d", len(storage.snapshots))
+	if storage.snapshotCount() != 1 {
+		t.Errorf("Expected 1 snapshot, got %d", storage.snapshotCount())
 	}
 }
 
@@ -674,8 +715,8 @@ func TestScheduler_TriggerSnapshot_SequentialCalls(t *testing.T) {
 	}
 
 	// Should have 2 snapshots
-	if len(storage.snapshots) != 2 {
-		t.Errorf("Expected 2 snapshots, got %d", len(storage.snapshots))
+	if storage.snapshotCount() != 2 {
+		t.Errorf("Expected 2 snapshots, got %d", storage.snapshotCount())
 	}
 }
 
@@ -863,8 +904,8 @@ func TestScheduler_RestartAfterStop(t *testing.T) {
 	}
 
 	// Should have at least 1 snapshot after first run
-	if len(storage.snapshots) < 1 {
-		t.Errorf("Expected at least 1 snapshot after first run, got %d", len(storage.snapshots))
+	if storage.snapshotCount() < 1 {
+		t.Errorf("Expected at least 1 snapshot after first run, got %d", storage.snapshotCount())
 	}
 
 	// Start again
@@ -881,7 +922,7 @@ func TestScheduler_RestartAfterStop(t *testing.T) {
 
 	// Should still have at least 1 snapshot
 	// Note: Snapshots may be reused within 1-minute window, so count might not increase
-	if len(storage.snapshots) < 1 {
-		t.Errorf("Expected at least 1 snapshot after restart, got %d", len(storage.snapshots))
+	if storage.snapshotCount() < 1 {
+		t.Errorf("Expected at least 1 snapshot after restart, got %d", storage.snapshotCount())
 	}
 }

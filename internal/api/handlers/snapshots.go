@@ -2,11 +2,13 @@ package handlers
 
 import (
 	"context"
+	"errors"
 	"net/http"
 	"strconv"
 
 	"github.com/labstack/echo/v4"
 
+	"github.com/elqsar/pganalyzer/internal/collector"
 	"github.com/elqsar/pganalyzer/internal/models"
 	"github.com/elqsar/pganalyzer/internal/scheduler"
 )
@@ -96,7 +98,7 @@ func (h *SnapshotsHandler) TriggerSnapshot(c echo.Context) error {
 	result, err := h.scheduler.TriggerSnapshot(ctx)
 	if err != nil {
 		// Check if it's a "busy" error
-		if err.Error() == "manual trigger already in progress" {
+		if errors.Is(err, collector.ErrCollectionInProgress) {
 			return c.JSON(http.StatusConflict, map[string]string{
 				"error": "collection already in progress",
 				"code":  "COLLECTION_BUSY",

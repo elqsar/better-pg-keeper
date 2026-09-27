@@ -247,6 +247,15 @@ func (s *Scheduler) executeMaintenance(ctx context.Context) {
 		s.logger.Printf("[scheduler] purged %d old snapshots (retention=%v)", purged, retention)
 	}
 
+	queryRetention := s.retention.QueryStats.Duration()
+	queryPurged, err := s.storage.PurgeOldQueryHistory(ctx, queryRetention)
+	if err != nil {
+		s.logger.Printf("[scheduler] failed to purge query history: %v", err)
+		success = false
+	} else if queryPurged > 0 {
+		s.logger.Printf("[scheduler] purged %d query samples (retention=%v)", queryPurged, queryRetention)
+	}
+
 	s.updateMaintenanceHealth(success)
 	s.logger.Printf("[scheduler] maintenance completed in %v", time.Since(start))
 }

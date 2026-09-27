@@ -169,6 +169,12 @@ func Migrate(ctx context.Context, db *sql.DB) error {
 			tx.Rollback()
 			return fmt.Errorf("applying migration %d (%s): %w", m.Version, m.Name, err)
 		}
+		if m.Version == 14 {
+			if err := backfillQueryHistory(ctx, tx); err != nil {
+				tx.Rollback()
+				return fmt.Errorf("backfilling query history: %w", err)
+			}
+		}
 
 		if _, err := tx.ExecContext(ctx, `INSERT INTO _migrations (version, name) VALUES (?, ?)`,
 			m.Version, m.Name); err != nil {
@@ -182,6 +188,53 @@ func Migrate(ctx context.Context, db *sql.DB) error {
 	}
 
 	return nil
+}
+
+// backfillQueryHistory converts existing snapshot timestamps in Go. SQLite
+// cannot reliably parse time.Time values serialized with local zone names or a
+// monotonic clock suffix, so SQL date functions would silently lose samples.
+func backfillQueryHistory(ctx context.Context, tx *sql.Tx) error {
+	rows, err := tx.QueryContext(ctx, `
+		SELECT s.instance_id, s.captured_at, q.queryid, q.query, q.calls,
+		       q.total_exec_time, q.mean_exec_time, COALESCE(q.min_exec_time, 0),
+		       COALESCE(q.max_exec_time, 0), COALESCE(q.rows, 0),
+		       COALESCE(q.shared_blks_hit, 0), COALESCE(q.shared_blks_read, 0),
+		       COALESCE(q.plans, 0), COALESCE(q.total_plan_time, 0)
+		FROM query_stats q JOIN snapshots s ON s.id = q.snapshot_id
+	`)
+	if err != nil {
+		return err
+	}
+	defer rows.Close()
+	stmt, err := tx.PrepareContext(ctx, `
+		INSERT INTO query_history (
+			instance_id, sampled_at, sampled_at_unix_ns, queryid, query, calls,
+			total_exec_time, mean_exec_time, min_exec_time, max_exec_time, rows,
+			shared_blks_hit, shared_blks_read, plans, total_plan_time
+		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+	`)
+	if err != nil {
+		return err
+	}
+	defer stmt.Close()
+	for rows.Next() {
+		var instanceID, queryID, calls, resultRows, blksHit, blksRead, plans int64
+		var capturedAt time.Time
+		var query string
+		var totalTime, meanTime, minTime, maxTime, totalPlanTime float64
+		if err := rows.Scan(&instanceID, &capturedAt, &queryID, &query, &calls,
+			&totalTime, &meanTime, &minTime, &maxTime, &resultRows,
+			&blksHit, &blksRead, &plans, &totalPlanTime); err != nil {
+			return err
+		}
+		sampledAt := capturedAt.UTC()
+		if _, err := stmt.ExecContext(ctx, instanceID, sampledAt, sampledAt.UnixNano(),
+			queryID, query, calls, totalTime, meanTime, minTime, maxTime,
+			resultRows, blksHit, blksRead, plans, totalPlanTime); err != nil {
+			return err
+		}
+	}
+	return rows.Err()
 }
 
 // Rollback rolls back the last applied migration.

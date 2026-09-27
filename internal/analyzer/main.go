@@ -62,12 +62,29 @@ func (a *MainAnalyzer) resolveDomains(ctx context.Context, anchor *models.Snapsh
 			continue
 		}
 
-		age := now.Sub(snap.CapturedAt)
+		runs, err := a.storage.GetSnapshotCollectors(ctx, snap.ID)
+		if err != nil {
+			errs = append(errs, fmt.Sprintf("resolving %s collection time: %v", domain, err))
+			coverage[domain] = DomainCoverage{}
+			continue
+		}
+		observedAt := time.Time{}
+		for _, run := range runs {
+			if run.Collector == domain && run.Status == models.CollectorStatusSuccess {
+				observedAt = run.CollectedAt
+				break
+			}
+		}
+		if observedAt.IsZero() {
+			coverage[domain] = DomainCoverage{}
+			continue
+		}
+		age := now.Sub(observedAt)
 		budget := a.config.StalenessBudget(domain)
 		coverage[domain] = DomainCoverage{
 			Present:    true,
 			SnapshotID: snap.ID,
-			CapturedAt: snap.CapturedAt,
+			CapturedAt: observedAt,
 			Age:        age,
 			Stale:      budget > 0 && age > budget,
 		}
@@ -80,6 +97,12 @@ func (a *MainAnalyzer) resolveDomains(ctx context.Context, anchor *models.Snapsh
 // has never been collected for this instance.
 func snapshotFor(coverage map[string]DomainCoverage, domain string) int64 {
 	return coverage[domain].SnapshotID
+}
+
+func invalidateDomain(coverage map[string]DomainCoverage, domain string) {
+	entry := coverage[domain]
+	entry.Stale = true
+	coverage[domain] = entry
 }
 
 // Analyze runs all sub-analyzers and aggregates results.
@@ -114,17 +137,29 @@ func (a *MainAnalyzer) Analyze(ctx context.Context, snapshotID int64) (*Analysis
 	if id := snapshotFor(coverage, DomainQueryStats); id != 0 {
 		slowQueries, err := a.slowQueryAnalyzer.Analyze(ctx, id)
 		if err != nil {
+			invalidateDomain(coverage, DomainQueryStats)
 			result.Errors = append(result.Errors, fmt.Sprintf("slow query analysis: %v", err))
 			result.ErrorCount++
 		} else {
 			result.SlowQueries = slowQueries
 		}
 
-		cacheStats, err := a.cacheAnalyzer.Analyze(ctx, id)
+	}
+
+	if id := snapshotFor(coverage, DomainDatabaseStats); id != 0 {
+		cacheStats, err := a.cacheAnalyzer.AnalyzeOverall(ctx, id)
 		if err != nil {
+			invalidateDomain(coverage, DomainDatabaseStats)
 			result.Errors = append(result.Errors, fmt.Sprintf("cache analysis: %v", err))
 			result.ErrorCount++
 		} else {
+			if queryID := snapshotFor(coverage, DomainQueryStats); queryID != 0 && coverage[DomainQueryStats].Usable() {
+				if err := a.cacheAnalyzer.AddQueryStats(ctx, queryID, cacheStats); err != nil {
+					invalidateDomain(coverage, DomainQueryStats)
+					result.Errors = append(result.Errors, fmt.Sprintf("query cache analysis: %v", err))
+					result.ErrorCount++
+				}
+			}
 			result.CacheStats = cacheStats
 		}
 	}
@@ -133,8 +168,18 @@ func (a *MainAnalyzer) Analyze(ctx context.Context, snapshotID int64) (*Analysis
 	if id := snapshotFor(coverage, DomainTableStats); id != 0 {
 		tableIssues, err := a.tableAnalyzer.AnalyzeSnapshots(ctx, id, snapshotFor(coverage, DomainBloat))
 		if err != nil {
+			invalidateDomain(coverage, DomainBloat)
 			result.Errors = append(result.Errors, fmt.Sprintf("table analysis: %v", err))
 			result.ErrorCount++
+			// A bloat read can fail while table statistics remain usable.
+			tableIssues, err = a.tableAnalyzer.AnalyzeSnapshots(ctx, id, 0)
+			if err != nil {
+				invalidateDomain(coverage, DomainTableStats)
+				result.Errors = append(result.Errors, fmt.Sprintf("table-only analysis: %v", err))
+				result.ErrorCount++
+			} else {
+				result.TableIssues = tableIssues
+			}
 		} else {
 			result.TableIssues = tableIssues
 		}
@@ -144,6 +189,7 @@ func (a *MainAnalyzer) Analyze(ctx context.Context, snapshotID int64) (*Analysis
 	if id := snapshotFor(coverage, DomainIndexStats); id != 0 {
 		indexIssues, err := a.indexAnalyzer.Analyze(ctx, id)
 		if err != nil {
+			invalidateDomain(coverage, DomainIndexStats)
 			result.Errors = append(result.Errors, fmt.Sprintf("index analysis: %v", err))
 			result.ErrorCount++
 		} else {
@@ -151,38 +197,56 @@ func (a *MainAnalyzer) Analyze(ctx context.Context, snapshotID int64) (*Analysis
 		}
 	}
 
-	// Run operational state analysis
+	a.analyzeOperational(ctx, coverage, result)
+
+	return result, nil
+}
+
+// analyzeOperational reads the latest covered operational samples and makes a
+// failed or missing read ineligible to resolve existing suggestions.
+func (a *MainAnalyzer) analyzeOperational(ctx context.Context, coverage map[string]DomainCoverage, result *AnalysisResult) {
 	if id := snapshotFor(coverage, DomainActivity); id != 0 {
 		activityStats, err := a.analyzeActivity(ctx, id)
 		if err != nil {
+			invalidateDomain(coverage, DomainActivity)
 			result.Errors = append(result.Errors, fmt.Sprintf("activity analysis: %v", err))
 			result.ErrorCount++
 		} else {
 			result.ActivityStats = activityStats
+			if activityStats == nil {
+				invalidateDomain(coverage, DomainActivity)
+			}
 		}
 	}
 
 	if id := snapshotFor(coverage, DomainLocks); id != 0 {
 		lockStats, err := a.analyzeLocks(ctx, id)
 		if err != nil {
+			invalidateDomain(coverage, DomainLocks)
 			result.Errors = append(result.Errors, fmt.Sprintf("lock analysis: %v", err))
 			result.ErrorCount++
 		} else {
 			result.LockStats = lockStats
+			if lockStats == nil {
+				invalidateDomain(coverage, DomainLocks)
+			}
 		}
 	}
 
 	if id := snapshotFor(coverage, DomainDatabaseStats); id != 0 {
 		txStats, err := a.analyzeTransactions(ctx, id)
 		if err != nil {
+			invalidateDomain(coverage, DomainDatabaseStats)
 			result.Errors = append(result.Errors, fmt.Sprintf("transaction analysis: %v", err))
 			result.ErrorCount++
 		} else {
 			result.TransactionStats = txStats
+			if txStats == nil {
+				invalidateDomain(coverage, DomainDatabaseStats)
+			}
 		}
 	}
 
-	return result, nil
 }
 
 // AnalyzeWithTimeRange runs analysis using delta values between two snapshots.
@@ -211,19 +275,31 @@ func (a *MainAnalyzer) AnalyzeWithTimeRange(ctx context.Context, fromSnapshotID,
 	// Run slow query analysis with deltas
 	slowQueries, err := a.slowQueryAnalyzer.AnalyzeWithDeltas(ctx, fromSnapshotID, toSnapshotID)
 	if err != nil {
+		invalidateDomain(coverage, DomainQueryStats)
 		result.Errors = append(result.Errors, fmt.Sprintf("slow query analysis: %v", err))
 		result.ErrorCount++
 	} else {
 		result.SlowQueries = slowQueries
 	}
 
-	// Run cache analysis with deltas
-	cacheStats, err := a.cacheAnalyzer.AnalyzeWithDeltas(ctx, fromSnapshotID, toSnapshotID)
-	if err != nil {
-		result.Errors = append(result.Errors, fmt.Sprintf("cache analysis: %v", err))
-		result.ErrorCount++
-	} else {
-		result.CacheStats = cacheStats
+	// The overall cache ratio is observed by the database collector, independently
+	// of the query snapshots used for interval details.
+	if id := snapshotFor(coverage, DomainDatabaseStats); id != 0 {
+		cacheStats, err := a.cacheAnalyzer.AnalyzeOverall(ctx, id)
+		if err != nil {
+			invalidateDomain(coverage, DomainDatabaseStats)
+			result.Errors = append(result.Errors, fmt.Sprintf("cache analysis: %v", err))
+			result.ErrorCount++
+		} else {
+			if coverage[DomainQueryStats].Usable() {
+				if err := a.cacheAnalyzer.AddQueryDeltas(ctx, fromSnapshotID, toSnapshotID, cacheStats); err != nil {
+					invalidateDomain(coverage, DomainQueryStats)
+					result.Errors = append(result.Errors, fmt.Sprintf("query cache analysis: %v", err))
+					result.ErrorCount++
+				}
+			}
+			result.CacheStats = cacheStats
+		}
 	}
 
 	// Table and index analysis are point-in-time, not deltas, and each reads from
@@ -231,8 +307,17 @@ func (a *MainAnalyzer) AnalyzeWithTimeRange(ctx context.Context, fromSnapshotID,
 	if id := snapshotFor(coverage, DomainTableStats); id != 0 {
 		tableIssues, err := a.tableAnalyzer.AnalyzeSnapshots(ctx, id, snapshotFor(coverage, DomainBloat))
 		if err != nil {
+			invalidateDomain(coverage, DomainBloat)
 			result.Errors = append(result.Errors, fmt.Sprintf("table analysis: %v", err))
 			result.ErrorCount++
+			tableIssues, err = a.tableAnalyzer.AnalyzeSnapshots(ctx, id, 0)
+			if err != nil {
+				invalidateDomain(coverage, DomainTableStats)
+				result.Errors = append(result.Errors, fmt.Sprintf("table-only analysis: %v", err))
+				result.ErrorCount++
+			} else {
+				result.TableIssues = tableIssues
+			}
 		} else {
 			result.TableIssues = tableIssues
 		}
@@ -241,12 +326,14 @@ func (a *MainAnalyzer) AnalyzeWithTimeRange(ctx context.Context, fromSnapshotID,
 	if id := snapshotFor(coverage, DomainIndexStats); id != 0 {
 		indexIssues, err := a.indexAnalyzer.Analyze(ctx, id)
 		if err != nil {
+			invalidateDomain(coverage, DomainIndexStats)
 			result.Errors = append(result.Errors, fmt.Sprintf("index analysis: %v", err))
 			result.ErrorCount++
 		} else {
 			result.IndexIssues = indexIssues
 		}
 	}
+	a.analyzeOperational(ctx, coverage, result)
 
 	return result, nil
 }

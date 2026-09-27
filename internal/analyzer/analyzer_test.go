@@ -2,6 +2,7 @@ package analyzer
 
 import (
 	"context"
+	"errors"
 	"testing"
 	"time"
 
@@ -11,12 +12,14 @@ import (
 
 // mockStorage implements the Storage interface for testing.
 type mockStorage struct {
-	snapshots   map[int64]*models.Snapshot
-	queryStats  map[int64][]models.QueryStat
-	tableStats  map[int64][]models.TableStat
-	indexStats  map[int64][]models.IndexStat
-	bloatStats  map[int64][]models.BloatInfo
-	queryDeltas []models.QueryStatDelta
+	snapshots     map[int64]*models.Snapshot
+	queryStats    map[int64][]models.QueryStat
+	tableStats    map[int64][]models.TableStat
+	indexStats    map[int64][]models.IndexStat
+	bloatStats    map[int64][]models.BloatInfo
+	extendedStats map[int64]*models.ExtendedDatabaseStats
+	queryDeltas   []models.QueryStatDelta
+	queryStatsErr error
 	// coverage optionally overrides which snapshots a collector contributed to,
 	// keyed by domain. Nil means "derive it from the data maps above".
 	coverage map[string][]int64
@@ -24,11 +27,12 @@ type mockStorage struct {
 
 func newMockStorage() *mockStorage {
 	return &mockStorage{
-		snapshots:  make(map[int64]*models.Snapshot),
-		queryStats: make(map[int64][]models.QueryStat),
-		tableStats: make(map[int64][]models.TableStat),
-		indexStats: make(map[int64][]models.IndexStat),
-		bloatStats: make(map[int64][]models.BloatInfo),
+		snapshots:     make(map[int64]*models.Snapshot),
+		queryStats:    make(map[int64][]models.QueryStat),
+		tableStats:    make(map[int64][]models.TableStat),
+		indexStats:    make(map[int64][]models.IndexStat),
+		bloatStats:    make(map[int64][]models.BloatInfo),
+		extendedStats: make(map[int64]*models.ExtendedDatabaseStats),
 	}
 }
 
@@ -70,6 +74,20 @@ func (m *mockStorage) GetLatestSnapshotWithCollector(ctx context.Context, instan
 		}
 	}
 	return latest, nil
+}
+
+func (m *mockStorage) GetSnapshotCollectors(ctx context.Context, snapshotID int64) ([]models.SnapshotCollector, error) {
+	var runs []models.SnapshotCollector
+	for _, domain := range AllDomains {
+		if m.covers(snapshotID, domain) {
+			runs = append(runs, models.SnapshotCollector{
+				SnapshotID: snapshotID, Collector: domain,
+				Status:      models.CollectorStatusSuccess,
+				CollectedAt: m.snapshots[snapshotID].CapturedAt,
+			})
+		}
+	}
+	return runs, nil
 }
 
 // covers reports whether a snapshot carries data for a domain.
@@ -115,6 +133,9 @@ func (m *mockStorage) ListSnapshots(ctx context.Context, instanceID int64, limit
 }
 
 func (m *mockStorage) GetQueryStats(ctx context.Context, snapshotID int64) ([]models.QueryStat, error) {
+	if m.queryStatsErr != nil {
+		return nil, m.queryStatsErr
+	}
 	return m.queryStats[snapshotID], nil
 }
 
@@ -156,7 +177,7 @@ func (m *mockStorage) GetBlockedQueries(ctx context.Context, snapshotID int64) (
 }
 
 func (m *mockStorage) GetExtendedDatabaseStats(ctx context.Context, snapshotID int64) (*models.ExtendedDatabaseStats, error) {
-	return nil, nil
+	return m.extendedStats[snapshotID], nil
 }
 
 func TestSlowQueryAnalyzer_Analyze(t *testing.T) {
@@ -934,5 +955,41 @@ func TestMainAnalyzer_MarksStaleDomains(t *testing.T) {
 	}
 	if result.DomainsUsable(DomainTableStats) {
 		t.Error("stale data must not be usable")
+	}
+}
+
+func TestMainAnalyzer_UsesDatabaseCollectorCacheRatio(t *testing.T) {
+	storage := newMockStorage()
+	now := time.Now()
+	ratio := 82.0
+	storage.snapshots[1] = &models.Snapshot{ID: 1, InstanceID: 1, CapturedAt: now.Add(-time.Minute), CacheHitRatio: &ratio}
+	storage.snapshots[2] = &models.Snapshot{ID: 2, InstanceID: 1, CapturedAt: now}
+	storage.queryStats[2] = []models.QueryStat{{QueryID: 7, Query: "SELECT 1", Calls: 5}}
+	storage.extendedStats[1] = &models.ExtendedDatabaseStats{}
+	storage.coverage = map[string][]int64{DomainDatabaseStats: {1}, DomainQueryStats: {2}}
+
+	result, err := NewMainAnalyzer(storage, nil).Analyze(context.Background(), 2)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.CacheStats == nil || result.CacheStats.OverallHitRatio != ratio || !result.CacheStats.BelowThreshold {
+		t.Fatalf("expected overall cache ratio from database snapshot, got %+v", result.CacheStats)
+	}
+	if result.CacheStats.TrackedQueries != 1 || !result.DomainsUsable(DomainDatabaseStats, DomainQueryStats) {
+		t.Fatalf("expected query details and usable domains, got cache=%+v coverage=%+v", result.CacheStats, result.Coverage)
+	}
+}
+
+func TestMainAnalyzer_DoesNotResolveOnQueryReadFailure(t *testing.T) {
+	storage := newMockStorage()
+	storage.snapshots[1] = &models.Snapshot{ID: 1, InstanceID: 1, CapturedAt: time.Now()}
+	storage.queryStats[1] = []models.QueryStat{{QueryID: 7, Query: "SELECT 1", Calls: 5}}
+	storage.queryStatsErr = errors.New("disk read failed")
+	result, err := NewMainAnalyzer(storage, nil).Analyze(context.Background(), 1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.ErrorCount == 0 || result.DomainsUsable(DomainQueryStats) || !result.DomainCoverage(DomainQueryStats).Stale {
+		t.Fatalf("query read failure must invalidate coverage, got %+v", result)
 	}
 }

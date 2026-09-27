@@ -20,6 +20,7 @@ type QueriesStorage interface {
 	GetLatestSnapshot(ctx context.Context, instanceID int64) (*models.Snapshot, error)
 	GetLatestSnapshotWithCollector(ctx context.Context, instanceID int64, collector string, notAfter time.Time) (*models.Snapshot, error)
 	GetQueryStats(ctx context.Context, snapshotID int64) ([]models.QueryStat, error)
+	GetQueryHistory(ctx context.Context, instanceID, queryID int64, from, to time.Time, limit, offset int) ([]models.QueryHistorySample, error)
 	SaveExplainPlan(ctx context.Context, plan *models.ExplainPlan) (int64, error)
 	GetExplainPlan(ctx context.Context, queryID int64) (*models.ExplainPlan, error)
 }
@@ -57,6 +58,84 @@ type TopQueriesResponse struct {
 	Queries []QueryDetail `json:"queries"`
 	Metric  string        `json:"metric"`
 	Limit   int           `json:"limit"`
+}
+
+// QueryHistoryResponse contains independently retained query samples.
+type QueryHistoryResponse struct {
+	QueryID int64                `json:"queryid"`
+	Samples []QueryHistorySample `json:"samples"`
+	Limit   int                  `json:"limit"`
+	Offset  int                  `json:"offset"`
+}
+
+type QueryHistorySample struct {
+	SampledAt       time.Time `json:"sampled_at"`
+	Query           string    `json:"query"`
+	Calls           int64     `json:"calls"`
+	TotalExecTimeMs float64   `json:"total_exec_time_ms"`
+	MeanExecTimeMs  float64   `json:"mean_exec_time_ms"`
+	MinExecTimeMs   float64   `json:"min_exec_time_ms"`
+	MaxExecTimeMs   float64   `json:"max_exec_time_ms"`
+	Rows            int64     `json:"rows"`
+	SharedBlksHit   int64     `json:"shared_blks_hit"`
+	SharedBlksRead  int64     `json:"shared_blks_read"`
+	Plans           int64     `json:"plans"`
+	TotalPlanTimeMs float64   `json:"total_plan_time_ms"`
+}
+
+// GetQueryHistory handles GET /api/v1/queries/:id/history.
+func (h *QueriesHandler) GetQueryHistory(c echo.Context) error {
+	queryID, err := strconv.ParseInt(c.Param("id"), 10, 64)
+	if err != nil {
+		return c.JSON(http.StatusBadRequest, map[string]string{"error": "invalid query ID", "code": "VALIDATION_ERROR"})
+	}
+	var from, to time.Time
+	if raw := c.QueryParam("from"); raw != "" {
+		from, err = time.Parse(time.RFC3339, raw)
+		if err != nil {
+			return c.JSON(http.StatusBadRequest, map[string]string{"error": "invalid from time", "code": "VALIDATION_ERROR"})
+		}
+	}
+	if raw := c.QueryParam("to"); raw != "" {
+		to, err = time.Parse(time.RFC3339, raw)
+		if err != nil {
+			return c.JSON(http.StatusBadRequest, map[string]string{"error": "invalid to time", "code": "VALIDATION_ERROR"})
+		}
+	}
+	if !from.IsZero() && !to.IsZero() && from.After(to) {
+		return c.JSON(http.StatusBadRequest, map[string]string{"error": "from must precede to", "code": "VALIDATION_ERROR"})
+	}
+	limit := 100
+	if raw := c.QueryParam("limit"); raw != "" {
+		limit, err = strconv.Atoi(raw)
+		if err != nil || limit < 1 || limit > 1000 {
+			return c.JSON(http.StatusBadRequest, map[string]string{"error": "limit must be between 1 and 1000", "code": "VALIDATION_ERROR"})
+		}
+	}
+	offset := 0
+	if raw := c.QueryParam("offset"); raw != "" {
+		offset, err = strconv.Atoi(raw)
+		if err != nil || offset < 0 {
+			return c.JSON(http.StatusBadRequest, map[string]string{"error": "offset must be nonnegative", "code": "VALIDATION_ERROR"})
+		}
+	}
+	samples, err := h.storage.GetQueryHistory(c.Request().Context(), h.instanceID, queryID, from, to, limit, offset)
+	if err != nil {
+		c.Logger().Errorf("failed to get query history: %v", err)
+		return c.JSON(http.StatusInternalServerError, map[string]string{"error": "failed to get query history", "code": "DATABASE_ERROR"})
+	}
+	response := QueryHistoryResponse{QueryID: queryID, Samples: make([]QueryHistorySample, 0, len(samples)), Limit: limit, Offset: offset}
+	for _, sample := range samples {
+		response.Samples = append(response.Samples, QueryHistorySample{
+			SampledAt: sample.SampledAt, Query: sample.Query, Calls: sample.Calls,
+			TotalExecTimeMs: sample.TotalExecTime, MeanExecTimeMs: sample.MeanExecTime,
+			MinExecTimeMs: sample.MinExecTime, MaxExecTimeMs: sample.MaxExecTime,
+			Rows: sample.Rows, SharedBlksHit: sample.SharedBlksHit,
+			SharedBlksRead: sample.SharedBlksRead, Plans: sample.Plans,
+			TotalPlanTimeMs: sample.TotalPlanTime,
+		})
+	}
+	return c.JSON(http.StatusOK, response)
 }
 
 // ExplainResponse represents the explain plan response.

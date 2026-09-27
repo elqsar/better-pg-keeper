@@ -296,6 +296,7 @@ type Storage interface {
 	GetSnapshotByID(ctx context.Context, id int64) (*models.Snapshot, error)
 	GetLatestSnapshot(ctx context.Context, instanceID int64) (*models.Snapshot, error)
 	GetLatestSnapshotWithCollector(ctx context.Context, instanceID int64, collector string, notAfter time.Time) (*models.Snapshot, error)
+	GetSnapshotCollectors(ctx context.Context, snapshotID int64) ([]models.SnapshotCollector, error)
 	ListSnapshots(ctx context.Context, instanceID int64, limit int) ([]models.Snapshot, error)
 	GetQueryStats(ctx context.Context, snapshotID int64) ([]models.QueryStat, error)
 	GetQueryStatsDelta(ctx context.Context, fromSnapshotID, toSnapshotID int64) ([]models.QueryStatDelta, error)

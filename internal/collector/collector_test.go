@@ -33,6 +33,80 @@ type mockPGClient struct {
 	getBloatErr      error
 }
 
+type blockingCollector struct {
+	started chan struct{}
+	release chan struct{}
+}
+
+func (b *blockingCollector) Name() string            { return "blocking" }
+func (b *blockingCollector) Interval() time.Duration { return time.Nanosecond }
+func (b *blockingCollector) Collect(ctx context.Context, snapshotID int64) error {
+	select {
+	case b.started <- struct{}{}:
+	default:
+	}
+	select {
+	case <-b.release:
+		return nil
+	case <-ctx.Done():
+		return ctx.Err()
+	}
+}
+
+func TestCoordinatorSerializesCollectionCycles(t *testing.T) {
+	storage := setupTestStorage(t)
+	instanceID := setupTestInstance(t, storage)
+	coord := collector.NewCoordinator(collector.CoordinatorConfig{
+		PGClient: &mockPGClient{version: "16"}, Storage: storage,
+		InstanceID: instanceID, SnapshotWindow: time.Minute,
+	})
+	blocker := &blockingCollector{started: make(chan struct{}, 1), release: make(chan struct{})}
+	coord.RegisterCollector(blocker)
+	done := make(chan error, 1)
+	go func() {
+		_, err := coord.Collect(context.Background())
+		done <- err
+	}()
+	select {
+	case <-blocker.started:
+	case <-time.After(5 * time.Second):
+		t.Fatal("first collection did not start")
+	}
+	if _, err := coord.CollectAll(context.Background()); !errors.Is(err, collector.ErrCollectionInProgress) {
+		t.Fatalf("manual collection during scheduled cycle: got %v", err)
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Millisecond)
+	defer cancel()
+	if _, err := coord.Collect(ctx); !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("second scheduled cycle must wait for first: got %v", err)
+	}
+	close(blocker.release)
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Fatal(err)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("first collection did not finish")
+	}
+}
+
+func TestRunCollectorRecordsCoverage(t *testing.T) {
+	storage := setupTestStorage(t)
+	instanceID := setupTestInstance(t, storage)
+	snapshotID := setupTestSnapshot(t, storage, instanceID)
+	pg := &mockPGClient{statStatements: []models.QueryStat{{QueryID: 5, Query: "SELECT 1", Calls: 1}}}
+	coord := collector.NewCoordinator(collector.CoordinatorConfig{PGClient: pg, Storage: storage, InstanceID: instanceID})
+	coord.RegisterCollector(query.NewStatsCollector(query.StatsCollectorConfig{PGClient: pg, Storage: storage, InstanceID: instanceID}))
+	if err := coord.RunCollector(context.Background(), "query_stats", snapshotID); err != nil {
+		t.Fatal(err)
+	}
+	runs, err := storage.GetSnapshotCollectors(context.Background(), snapshotID)
+	if err != nil || len(runs) != 1 || runs[0].Status != models.CollectorStatusSuccess {
+		t.Fatalf("individual collector run did not record coverage: %+v: %v", runs, err)
+	}
+}
+
 func (m *mockPGClient) Connect(ctx context.Context) error {
 	return m.connectErr
 }
@@ -122,7 +196,7 @@ func (m *mockPGClient) GetBlockedQueries(ctx context.Context) ([]models.BlockedQ
 }
 
 func (m *mockPGClient) GetExtendedDatabaseStats(ctx context.Context) (*models.ExtendedDatabaseStats, error) {
-	return nil, nil
+	return &models.ExtendedDatabaseStats{}, nil
 }
 
 // setupTestStorage creates a temporary SQLite storage for testing.

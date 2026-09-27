@@ -48,8 +48,7 @@ func (a *TableAnalyzer) AnalyzeSnapshots(ctx context.Context, tableSnapshotID, b
 	if bloatSnapshotID != 0 {
 		bloatStats, err = a.storage.GetBloatStats(ctx, bloatSnapshotID)
 		if err != nil {
-			// Bloat stats might not be available; continue with other checks
-			bloatStats = nil
+			return nil, fmt.Errorf("getting bloat stats: %w", err)
 		}
 	}
 
