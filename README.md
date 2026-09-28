@@ -17,13 +17,12 @@ A PostgreSQL performance analyzer that collects query statistics, detects perfor
 ## Prerequisites
 
 - Go 1.25 or later (see `go.mod`)
-- PostgreSQL 13+ with `pg_stat_statements` extension enabled
+- PostgreSQL 14+ with `pg_stat_statements` extension enabled
 
-  Collection reads `total_exec_time`, `plans` and `total_plan_time` from
-  `pg_stat_statements`, which PostgreSQL 13 introduced; PGAnalyzer refuses to start
-  against anything older. On PostgreSQL 13 the `pg_stat_statements_info` view is not
-  available, so statistics-reset detection is skipped; everything else works. From
-  PostgreSQL 14 onwards all features are available.
+  PGAnalyzer refuses to start against anything older. If the cluster was upgraded
+  from an older major version, run `ALTER EXTENSION pg_stat_statements UPDATE;` so
+  the `pg_stat_statements_info` view exists; without it, statistics-reset
+  detection is skipped.
 - [Task](https://taskfile.dev/) (optional, for build automation)
 
 ## Quick Start
@@ -54,7 +53,7 @@ GRANT CONNECT ON DATABASE your_database TO pganalyzer;
 ```
 
 To check sequences for exhaustion the role must also be able to read them. Grant
-`pg_read_all_data` (PostgreSQL 14+) or, per schema:
+`pg_read_all_data` or, per schema:
 
 ```sql
 GRANT SELECT ON ALL SEQUENCES IN SCHEMA public TO pganalyzer;

@@ -741,10 +741,9 @@ func (c *PgxClient) GetVersion(ctx context.Context) (string, error) {
 }
 
 // MinServerVersionNum is the oldest PostgreSQL release PGAnalyzer supports, as
-// server_version_num. Collection reads total_exec_time, plans and total_plan_time
-// from pg_stat_statements; all three arrived in PostgreSQL 13, and on anything older
-// collection fails with a column-does-not-exist error on every cycle.
-const MinServerVersionNum = 130000
+// server_version_num. PostgreSQL 13 is end of life, and 14 is the first release
+// with pg_stat_statements_info, which statistics-reset detection relies on.
+const MinServerVersionNum = 140000
 
 // GetServerVersionNum returns the server version as an integer (e.g. 160002 for 16.2).
 func (c *PgxClient) GetServerVersionNum(ctx context.Context) (int, error) {
@@ -766,6 +765,7 @@ func (c *PgxClient) GetServerVersionNum(ctx context.Context) (int, error) {
 }
 
 // CheckVersionSupported reports whether the server is new enough to collect from.
+// Since PostgreSQL 10, server_version_num is major*10000 + minor.
 func (c *PgxClient) CheckVersionSupported(ctx context.Context) error {
 	num, err := c.GetServerVersionNum(ctx)
 	if err != nil {
@@ -774,9 +774,8 @@ func (c *PgxClient) CheckVersionSupported(ctx context.Context) error {
 
 	if num < MinServerVersionNum {
 		return fmt.Errorf(
-			"postgres: server version %d.%d is not supported, PGAnalyzer requires PostgreSQL %d or later "+
-				"(pg_stat_statements.total_exec_time, plans and total_plan_time were added in 13)",
-			num/10000, (num/100)%100, MinServerVersionNum/10000,
+			"postgres: server version %d.%d is not supported, PGAnalyzer requires PostgreSQL %d or later",
+			num/10000, num%10000, MinServerVersionNum/10000,
 		)
 	}
 
@@ -789,11 +788,12 @@ func (c *PgxClient) GetStatsResetTime(ctx context.Context) (*time.Time, error) {
 		return nil, fmt.Errorf("postgres: not connected")
 	}
 
-	// pg_stat_statements_info is available in PG14+
+	// pg_stat_statements_info comes with pg_stat_statements 1.9 (PostgreSQL 14).
 	var resetTime *time.Time
 	err := c.pool.QueryRow(ctx, "SELECT stats_reset FROM pg_stat_statements_info").Scan(&resetTime)
 	if err != nil {
-		// If the view doesn't exist (PG < 14), return nil without error
+		// The view is missing when the extension was never updated to 1.9 after a
+		// major upgrade (ALTER EXTENSION pg_stat_statements UPDATE); skip detection.
 		if strings.Contains(err.Error(), "does not exist") {
 			return nil, nil
 		}

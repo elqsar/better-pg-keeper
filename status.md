@@ -158,5 +158,6 @@ Last updated: 2026-09-28. Everything below is committed on `main`.
   POSTGRES_HOST=localhost POSTGRES_PORT=15417 POSTGRES_USER=postgres POSTGRES_PASSWORD=postgres \
     POSTGRES_DATABASE=testdb go test -count=1 -tags=integration ./tests/integration/...
   ```
-- Minimum supported server is PostgreSQL 13, so catalog SQL must work there
-  (e.g. `indnkeyatts` is fine; `last_idx_scan` from PG16 is not).
+- Minimum supported server is PostgreSQL 14 (raised from 13 on 2026-09-28), so
+  catalog SQL must work there (e.g. `indnkeyatts` is fine; `last_idx_scan` from
+  PG16 is not). Run integration tests on PG14 and the newest release.
