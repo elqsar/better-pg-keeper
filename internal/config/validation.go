@@ -257,6 +257,13 @@ func validateThresholds(cfg *ThresholdsConfig) ValidationErrors {
 		})
 	}
 
+	if cfg.ServerMemoryGB < 0 {
+		errs = append(errs, ValidationError{
+			Field:   "thresholds.server_memory_gb",
+			Message: "server_memory_gb must not be negative (0 means unknown)",
+		})
+	}
+
 	return errs
 }
 

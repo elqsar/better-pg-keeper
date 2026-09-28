@@ -157,6 +157,7 @@ postgres:
 | thresholds.unused_index_days | - | 30 | Minimum days of scan statistics before flagging an unused index |
 | thresholds.cache_hit_ratio | - | 95.0 | Cache hit ratio warning threshold (%) |
 | thresholds.disk_capacity_gb | - | 0 | Size of the data volume; enables the "disk full in N days" forecast |
+| thresholds.server_memory_gb | - | 0 | RAM of the PostgreSQL server; enables memory-setting checks |
 
 ## Index Advisor
 
@@ -421,6 +422,8 @@ PGAnalyzer detects the following issues:
 | prepared_transaction | Prepared transaction left open for over 1h (critical after 24h) | Warning/Critical |
 | disk_growth | Disk forecast to fill within 30 days (critical within 7) given `disk_capacity_gb`; otherwise size doubling within 90 days | Info/Warning/Critical |
 | connection_saturation | Peak connections over the last 24h above 80% of `max_connections` (critical at 95%) | Warning/Critical |
+| configuration | Server settings review: autovacuum or `track_counts` off (critical), tables with `autovacuum_enabled=false` (critical over 1GB), no idle-in-transaction or statement timeout, slow-query/lock-wait logging off, untuned `shared_buffers`, `work_mem` x `max_connections` over RAM (given `server_memory_gb`), `random_page_cost` for spinning disks, settings waiting for a restart | Info/Warning/Critical |
+| stat_statements_capacity | pg_stat_statements at 90% of `pg_stat_statements.max` or evicting statements in the last 24h, so query history is incomplete; `pg_stat_statements.track = none` | Warning |
 
 Scans on read replicas are not visible to PGAnalyzer, which monitors a single
 server. Check replicas before acting on `unused_index`.

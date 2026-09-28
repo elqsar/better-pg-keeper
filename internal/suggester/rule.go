@@ -107,6 +107,10 @@ type Config struct {
 	DiskCapacityBytes         int64         // data volume size; 0 means unknown
 	DiskFullWarningDays       float64       // forecast days to full, warning
 	DiskFullCriticalDays      float64       // forecast days to full, critical
+
+	// Configuration review thresholds
+	ServerMemoryBytes          int64   // server RAM; 0 means unknown
+	StatStatementsFullFraction float64 // pg_stat_statements entries / max that counts as full
 }
 
 // DefaultConfig returns the default suggester configuration.
@@ -153,6 +157,10 @@ func DefaultConfig() *Config {
 		PreparedXactCritical:      24 * time.Hour,
 		DiskFullWarningDays:       30,
 		DiskFullCriticalDays:      7,
+
+		// pg_stat_statements evicts 5% of entries when it fills, so a table this
+		// full is either about to evict or already evicting.
+		StatStatementsFullFraction: 0.9,
 	}
 }
 
@@ -187,5 +195,6 @@ func ConfigFromThresholds(t config.ThresholdsConfig) *Config {
 		c.MinTableSizeForIndex = int64(t.MinTableSizeForIndex)
 	}
 	c.DiskCapacityBytes = int64(t.DiskCapacityGB * (1 << 30))
+	c.ServerMemoryBytes = int64(t.ServerMemoryGB * (1 << 30))
 	return c
 }

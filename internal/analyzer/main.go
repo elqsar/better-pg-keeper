@@ -281,6 +281,20 @@ func (a *MainAnalyzer) analyzeOperational(ctx context.Context, coverage map[stri
 		}
 	}
 
+	if id := snapshotFor(coverage, DomainSettings); id != 0 {
+		settings, err := a.analyzeSettings(ctx, result.InstanceID, id, coverage)
+		if err != nil {
+			invalidateDomain(coverage, DomainSettings)
+			result.Errors = append(result.Errors, fmt.Sprintf("settings analysis: %v", err))
+			result.ErrorCount++
+		} else {
+			result.Settings = settings
+			if settings == nil {
+				invalidateDomain(coverage, DomainSettings)
+			}
+		}
+	}
+
 }
 
 // AnalyzeWithTimeRange runs analysis using delta values between two snapshots.

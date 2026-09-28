@@ -183,6 +183,10 @@ func (m *mockPGClient) GetOutageRisk(ctx context.Context) (*models.OutageRisk, e
 	return &models.OutageRisk{}, nil
 }
 
+func (m *mockPGClient) GetServerSettings(ctx context.Context) (*models.ServerSettings, error) {
+	return &models.ServerSettings{}, nil
+}
+
 func (m *mockPGClient) GetConnectionActivity(ctx context.Context) (*models.ConnectionActivity, error) {
 	return nil, nil
 }

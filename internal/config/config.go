@@ -95,6 +95,10 @@ type ThresholdsConfig struct {
 	// cannot see free disk space, so without it disk growth is reported but no
 	// "full in N days" forecast is made. 0 means unknown.
 	DiskCapacityGB float64 `yaml:"disk_capacity_gb"`
+	// ServerMemoryGB is the RAM of the PostgreSQL server. SQL cannot see it, so
+	// without it memory settings are only checked against obvious defaults.
+	// 0 means unknown.
+	ServerMemoryGB float64 `yaml:"server_memory_gb"`
 }
 
 // Duration is a wrapper around time.Duration that supports YAML unmarshaling.

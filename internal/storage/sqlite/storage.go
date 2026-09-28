@@ -93,6 +93,10 @@ type Storage interface {
 	PurgeOldSizeHistory(ctx context.Context, retention time.Duration) (int64, error)
 	GetConnectionPeak(ctx context.Context, instanceID int64, since, until time.Time) (*models.ConnectionPeak, error)
 
+	// Server settings operations
+	SaveServerSettings(ctx context.Context, snapshotID int64, settings *models.ServerSettings) error
+	GetServerSettings(ctx context.Context, snapshotID int64) (*models.ServerSettings, error)
+
 	// Suggestion operations
 	UpsertSuggestion(ctx context.Context, sug *models.Suggestion) error
 	GetSuggestionsByStatus(ctx context.Context, instanceID int64, status string) ([]models.Suggestion, error)

@@ -4,7 +4,7 @@ Goal: make PGAnalyzer useful for teams without a dedicated DBA. It should diagno
 problems, tell people when something breaks, and warn before an outage, rather
 than show numbers that need an expert to read.
 
-Last updated: 2026-09-28. Everything below is committed on `main`.
+Last updated: 2026-09-28. Everything below is committed.
 
 ## Done
 
@@ -149,6 +149,57 @@ Last updated: 2026-09-28. Everything below is committed on `main`.
   - End to end on PG17: a recommendation with hypopg "5k → 213" appeared 41s after
     start, and both pages rendered.
 
+### 5. Configuration review (2026-09-28)
+
+- `postgres.GetServerSettings` (`internal/postgres/settings.go`) uses the same
+  independent-check pattern as outage risk:
+  - `settings`: about 20 reviewed `pg_settings` rows, plus any row with
+    `pending_restart`
+  - `stat_statements`: entries, `pg_stat_statements.max`, and `dealloc` and
+    `stats_reset` from `pg_stat_statements_info`
+  - `autovacuum_disabled`: tables with `autovacuum_enabled=false`, largest 20
+  - All three work for a role without extra privileges.
+- `server_settings` collector, every 1h (`internal/collector/settings/`). Stored
+  as one JSON document per snapshot (migration `020_server_settings.sql`) and
+  purged with snapshot retention.
+- Analyzer: new `server_settings` domain. It counts pg_stat_statements evictions
+  over 24h against a baseline snapshot and ignores a reset in between.
+- `models.Setting` parses units (`8kB`, `ms`, ...) into bytes or a duration and
+  renders values as PostgreSQL does.
+- 2 new rules, 22 in total:
+  - `configuration`: one finding per target, so each resolves on its own.
+    - autovacuum or `track_counts` off (critical)
+    - tables with autovacuum disabled (critical over 1GB)
+    - `idle_in_transaction_session_timeout` = 0 (warning while idle sessions
+      exist, otherwise info)
+    - `statement_timeout` = 0 (info, recommends setting it per role)
+    - one grouped "diagnostics off" finding for `log_min_duration_statement`,
+      `log_lock_waits`, `log_temp_files` and `track_io_timing`
+    - `shared_buffers` still at 128MB on a database over 2GB; with
+      `thresholds.server_memory_gb`, anything outside 15–40% of RAM
+    - `work_mem` × `max_connections` + `shared_buffers` over RAM
+    - `random_page_cost` ≥ 4
+    - settings waiting for a restart
+    - Each finding gives `ALTER SYSTEM` + reload, or says a restart is needed,
+      with a note for managed Postgres.
+  - `stat_statements_capacity`: warning at 90% full, on evictions in the last
+    24h, or when `track = none`.
+  - Both return an error when a check they depend on is unavailable, so a failed
+    check never resolves existing findings.
+  - `high_temp_usage` now shows the current `work_mem`.
+- New optional `thresholds.server_memory_gb`.
+- Tests:
+  - unit tests for unit parsing, storage round trip and purge, eviction
+    baseline, and the rules
+  - `tests/integration/settings_test.go` passed on PG14 and PG17 (started with
+    `-c pg_stat_statements.max=100`). It covers evictions, a table with
+    autovacuum off, `ALTER SYSTEM shared_buffers` showing as pending restart,
+    and an unprivileged role with no failed checks.
+  - Full integration suite still passes on both versions.
+  - End to end on PG17 with `ALTER SYSTEM SET autovacuum = off`: a critical
+    "Autovacuum is disabled" webhook alert arrived about 60s after start, and the
+    suggestion page rendered.
+
 ## Known gaps in what's done
 
 - The dashboard and query pages still use lifetime means and a hard-coded 1000 ms
@@ -176,30 +227,46 @@ Last updated: 2026-09-28. Everything below is committed on `main`.
     prepared statements, which drivers use, are fine.
   - Suggestion descriptions are markdown shown as preformatted text; a renderer
     would make code blocks and links clickable.
+- Configuration review:
+  - RAM isn't visible from SQL. Without `server_memory_gb`, only the untuned
+    128MB `shared_buffers` default is flagged, and `work_mem` isn't checked.
+  - Autovacuum tuning (scale factors, cost limits, worker count) is collected but
+    not judged yet. Per-table bloat and vacuum rules cover the effects.
+  - A default install gets about 4 info findings (timeouts, diagnostics,
+    `random_page_cost`). This is intended but can look noisy.
+  - Existing outage-risk rules don't look at `Unavailable` yet, so a failed
+    sub-check can resolve their findings. The new rules guard against this.
+- The repo-root `migrations/sqlite/` is a stale 001–007 copy. The real
+  migrations are in `internal/storage/sqlite/migrations/`, and only old
+  `tasks/*.md` files reference the copy.
 
 ## Next steps (in order)
 
-1. **Configuration review.** Check `pg_settings`: `shared_buffers`, `work_mem`,
-   `random_page_cost`, autovacuum settings, `statement_timeout`,
-   `idle_in_transaction_session_timeout`, `log_min_duration_statement`, and a
-   too-small `pg_stat_statements.max`.
-2. **Fix verification.** After a suggestion resolves or an index is added,
-   compare query history before and after.
-3. **Multi-database support.** Accept a list of targets in config instead of one
-   instance per process (`cmd/pganalyzer/main.go:157`).
-4. **Setup and onboarding.**
+1. **Fix verification.**
+   - Store `resolved_at` on suggestions (migration 021). This also fixes the
+     digest's approximation.
+   - For resolved `slow_query` or `index_recommendation` issues, compare the
+     windowed mean from `query_history` before and after the resolution or the
+     index's creation.
+   - Show the result on the suggestion page and in the digest.
+2. **Multi-database support.** Accept a list of targets in config instead of one
+   instance per process (`cmd/pganalyzer/main.go:157`). Storage is already keyed
+   by `instance_id`. Label notifications with the target.
+3. **Setup and onboarding.**
    - Refuse to start with the default `admin/admin` unless auth is explicitly off.
    - Add a first-run check for `pg_stat_statements`, grants, and how much
      history has been collected.
    - Write setup docs for managed Postgres (RDS/Aurora, Cloud SQL, Supabase).
    - Publish releases, a container image, and a Helm chart.
-5. **Housekeeping.**
+4. **Housekeeping.**
    - Switch the dashboard to windowed query stats (see gaps).
-   - Store `resolved_at` on suggestions.
    - Add tests for the collector subpackages.
    - `configs/config.example.yaml` references a missing `docs/postgresql-setup.md`.
-   - Add a dashboard panel for outage risk: wraparound %, slots, sequences, disk forecast.
+   - Add a dashboard panel for outage risk: wraparound %, slots, sequences,
+     `SequencesUnreadable`, disk forecast.
    - Render suggestion markdown (code blocks, links) on the suggestion page.
+   - Make the outage-risk rules treat `Unavailable` checks as "not looked at".
+   - Delete the stale root `migrations/sqlite/`.
 
 ## Dev notes
 

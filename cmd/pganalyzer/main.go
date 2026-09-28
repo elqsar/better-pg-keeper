@@ -21,6 +21,7 @@ import (
 	"github.com/elqsar/pganalyzer/internal/collector/resource"
 	"github.com/elqsar/pganalyzer/internal/collector/risk"
 	"github.com/elqsar/pganalyzer/internal/collector/schema"
+	"github.com/elqsar/pganalyzer/internal/collector/settings"
 	"github.com/elqsar/pganalyzer/internal/config"
 	"github.com/elqsar/pganalyzer/internal/logging"
 	"github.com/elqsar/pganalyzer/internal/metrics"
@@ -217,6 +218,11 @@ func run(ctx context.Context, configPath string) error {
 			Storage:    storage,
 			InstanceID: instanceID,
 		}),
+		settings.NewCollector(settings.Config{
+			PGClient:   pgClient,
+			Storage:    storage,
+			InstanceID: instanceID,
+		}),
 	)
 	if cfg.IndexAdvisor.Enabled {
 		coordinator.RegisterCollector(plans.NewCollector(plans.Config{
@@ -263,6 +269,9 @@ func run(ctx context.Context, configPath string) error {
 		rules.NewPreparedTransactionRule(suggesterCfg),
 		rules.NewDiskGrowthRule(suggesterCfg),
 		rules.NewConnectionSaturationRule(suggesterCfg),
+		// Configuration review rules
+		rules.NewConfigurationRule(suggesterCfg),
+		rules.NewStatStatementsCapacityRule(suggesterCfg),
 	)
 	slog.Info("suggester initialized", "rules", len(mainSuggester.Rules()))
 

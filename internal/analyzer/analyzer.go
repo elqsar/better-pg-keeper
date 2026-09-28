@@ -29,13 +29,14 @@ const (
 	DomainDatabaseStats = "database_stats"
 	DomainOutageRisk    = "outage_risk"
 	DomainQueryPlans    = "query_plans"
+	DomainSettings      = "server_settings"
 )
 
 // AllDomains lists every domain analysis resolves.
 var AllDomains = []string{
 	DomainQueryStats, DomainTableStats, DomainIndexStats,
 	DomainBloat, DomainActivity, DomainLocks, DomainDatabaseStats,
-	DomainOutageRisk, DomainQueryPlans,
+	DomainOutageRisk, DomainQueryPlans, DomainSettings,
 }
 
 // DomainCoverage records whether a data domain was actually observed, and how
@@ -87,6 +88,7 @@ type AnalysisResult struct {
 	TransactionStats *TransactionAnalysis `json:"transaction_stats,omitempty"`
 	Risk             *RiskAnalysis        `json:"risk,omitempty"`
 	QueryPlans       *QueryPlanAnalysis   `json:"query_plans,omitempty"`
+	Settings         *SettingsAnalysis    `json:"settings,omitempty"`
 	ErrorCount       int                  `json:"error_count"`
 	Errors           []string             `json:"errors,omitempty"`
 	// Coverage records which data domains this result actually observed, keyed by
@@ -345,6 +347,8 @@ type Storage interface {
 	GetQueryPlans(ctx context.Context, snapshotID int64) (*models.QueryPlanReport, error)
 	// Outage risk
 	GetOutageRisk(ctx context.Context, snapshotID int64) (*models.OutageRisk, error)
+	// Server settings
+	GetServerSettings(ctx context.Context, snapshotID int64) (*models.ServerSettings, error)
 	GetSizeHistory(ctx context.Context, instanceID int64, since time.Time) ([]models.SizeSample, error)
 	GetConnectionPeak(ctx context.Context, instanceID int64, since, until time.Time) (*models.ConnectionPeak, error)
 }
