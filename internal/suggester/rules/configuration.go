@@ -59,14 +59,9 @@ func (r *ConfigurationRule) Evaluate(ctx context.Context, analysis *analyzer.Ana
 	if analysis == nil || analysis.Settings == nil || analysis.Settings.ServerSettings == nil {
 		return nil, nil
 	}
+	// Checks that failed leave their parts empty; UnobservedTargets keeps
+	// those findings from resolving.
 	settings := analysis.Settings.ServerSettings
-	// Without these checks a missing finding means "not looked at", which must
-	// not resolve the existing ones.
-	for _, check := range []string{"settings", "autovacuum_disabled"} {
-		if msg, failed := settings.Unavailable[check]; failed {
-			return nil, fmt.Errorf("settings check %s unavailable: %s", check, msg)
-		}
-	}
 
 	var out []suggester.Suggestion
 	add := func(s *suggester.Suggestion) {
@@ -458,6 +453,20 @@ func applySetting(st models.Setting, value string) string {
 
 func roundToMB(b int64) int64 {
 	return b / (1 << 20) * (1 << 20)
+}
+
+// UnobservedTargets reports findings whose data was not observed: failed
+// settings checks, and the shared_buffers default check, which needs the
+// cluster size from fresh outage-risk data when server memory is unknown.
+func (r *ConfigurationRule) UnobservedTargets(analysis *analyzer.AnalysisResult) []string {
+	out := unobservedTargets(settingsUnavailable(analysis), map[string]string{
+		"settings":            "setting:",
+		"autovacuum_disabled": "autovacuum_disabled:",
+	})
+	if r.memoryBytes <= 0 && (analysis == nil || analysis.Risk == nil || !analysis.DomainsUsable(analyzer.DomainOutageRisk)) {
+		out = append(out, "setting:shared_buffers")
+	}
+	return out
 }
 
 // Ensure ConfigurationRule implements Rule interface.

@@ -167,13 +167,22 @@ func TestConfigurationRule_SharedBuffers(t *testing.T) {
 	}
 }
 
-func TestConfigurationRule_UnavailableIsNotResolution(t *testing.T) {
+func TestConfigurationRule_UnobservedTargets(t *testing.T) {
 	settings := &models.ServerSettings{
 		Settings:    tunedSettings(),
 		Unavailable: map[string]string{"autovacuum_disabled": "permission denied"},
 	}
-	if _, err := rules.NewConfigurationRule(suggester.DefaultConfig()).Evaluate(context.Background(), settingsAnalysis(settings)); err == nil {
-		t.Error("a failed check must be an error so existing findings are not resolved")
+	rule := rules.NewConfigurationRule(suggester.DefaultConfig())
+	a := settingsAnalysis(settings)
+	a.Risk = &analyzer.RiskAnalysis{OutageRisk: &models.OutageRisk{}}
+	if got := rule.UnobservedTargets(a); len(got) != 1 || got[0] != "autovacuum_disabled:" {
+		t.Errorf("unobserved = %v, want [autovacuum_disabled:]", got)
+	}
+	// Without memory or outage-risk data, the shared_buffers check is blind.
+	a.Risk = nil
+	settings.Unavailable = nil
+	if got := rule.UnobservedTargets(a); len(got) != 1 || got[0] != "setting:shared_buffers" {
+		t.Errorf("unobserved = %v, want [setting:shared_buffers]", got)
 	}
 }
 
@@ -222,8 +231,8 @@ func TestStatStatementsCapacityRule(t *testing.T) {
 		Settings:    tunedSettings(),
 		Unavailable: map[string]string{"stat_statements": "relation does not exist"},
 	})
-	if _, err := rule.Evaluate(context.Background(), failed); err == nil {
-		t.Error("a failed stat_statements check must be an error")
+	if got := rule.UnobservedTargets(failed); len(got) != 1 || got[0] != "setting:pg_stat_statements.max" {
+		t.Errorf("unobserved = %v", got)
 	}
 }
 

@@ -231,5 +231,10 @@ func formatCount(n int64) string {
 	return fmt.Sprintf("%d", n)
 }
 
+// UnobservedTargets reports databases left unresolved when their ages could not be read.
+func (r *WraparoundRule) UnobservedTargets(analysis *analyzer.AnalysisResult) []string {
+	return unobservedTargets(riskUnavailable(analysis), map[string]string{"wraparound": "database:"})
+}
+
 // Ensure WraparoundRule implements Rule interface.
 var _ suggester.Rule = (*WraparoundRule)(nil)

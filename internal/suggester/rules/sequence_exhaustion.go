@@ -113,5 +113,10 @@ func describeSequence(seq models.SequenceUsage, name string) string {
 	return desc.String()
 }
 
+// UnobservedTargets reports sequences when their check failed.
+func (r *SequenceExhaustionRule) UnobservedTargets(analysis *analyzer.AnalysisResult) []string {
+	return unobservedTargets(riskUnavailable(analysis), map[string]string{"sequences": "sequence:"})
+}
+
 // Ensure SequenceExhaustionRule implements Rule interface.
 var _ suggester.Rule = (*SequenceExhaustionRule)(nil)

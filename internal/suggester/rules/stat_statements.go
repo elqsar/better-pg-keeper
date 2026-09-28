@@ -41,12 +41,9 @@ func (r *StatStatementsCapacityRule) Evaluate(ctx context.Context, analysis *ana
 	if analysis == nil || analysis.Settings == nil || analysis.Settings.ServerSettings == nil {
 		return nil, nil
 	}
+	// Failed checks leave their parts empty; UnobservedTargets keeps those
+	// findings from resolving.
 	settings := analysis.Settings
-	for _, check := range []string{"settings", "stat_statements"} {
-		if msg, failed := settings.Unavailable[check]; failed {
-			return nil, fmt.Errorf("settings check %s unavailable: %s", check, msg)
-		}
-	}
 
 	var out []suggester.Suggestion
 	if st, ok := settings.Get("pg_stat_statements.track"); ok && st.Setting == "none" {
@@ -122,6 +119,14 @@ func (r *StatStatementsCapacityRule) Evaluate(ctx context.Context, analysis *ana
 		Metadata:     meta,
 	})
 	return out, nil
+}
+
+// UnobservedTargets reports findings whose settings check failed.
+func (r *StatStatementsCapacityRule) UnobservedTargets(analysis *analyzer.AnalysisResult) []string {
+	return unobservedTargets(settingsUnavailable(analysis), map[string]string{
+		"settings":        "setting:",
+		"stat_statements": "setting:pg_stat_statements.max",
+	})
 }
 
 // Ensure StatStatementsCapacityRule implements Rule interface.

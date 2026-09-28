@@ -184,8 +184,7 @@ Last updated: 2026-09-28. Everything below is committed.
       with a note for managed Postgres.
   - `stat_statements_capacity`: warning at 90% full, on evictions in the last
     24h, or when `track = none`.
-  - Both return an error when a check they depend on is unavailable, so a failed
-    check never resolves existing findings.
+  - A failed check never resolves the findings built from it (see section 7).
   - `high_temp_usage` now shows the current `work_mem`.
 - New optional `thresholds.server_memory_gb`.
 - Tests:
@@ -238,6 +237,31 @@ Last updated: 2026-09-28. Everything below is committed.
 - Also fixed: the suggestions API labelled local times with `Z`; it now
   converts to UTC first.
 
+### 7. Failed checks no longer resolve findings (2026-09-28)
+
+- Bug: when one outage-risk check failed (for example, `replication_slots`
+  after the role lost `pg_monitor`), its rule saw empty data and resolved live
+  findings, sending "resolved" alerts.
+- Fix: new optional `suggester.PartiallyObserved` interface. A rule returns the
+  target prefixes it couldn't observe, and the suggester leaves those existing
+  suggestions unresolved. Findings from checks that succeeded still resolve
+  normally.
+- Implemented by:
+  - wraparound (`database:`)
+  - replication_slot (`slot:`, `replica:`)
+  - sequence_exhaustion (`sequence:`)
+  - prepared_transaction (`prepared:`)
+  - disk_growth (`instance:disk`)
+  - configuration: `setting:`, `autovacuum_disabled:`, and
+    `setting:shared_buffers` when outage-risk data is stale and RAM is unknown
+  - stat_statements_capacity
+- This replaces the configuration rules' "return an error" guard, which
+  dropped every finding of the rule for the cycle and logged an error each
+  time.
+- Tests: rule prefix mapping, and a suggester test where a failed slot check
+  keeps `slot:old` active while a fixed sequence resolves. The suggester test
+  fails with the guard removed.
+
 ## Known gaps in what's done
 
 - The dashboard and query pages still use lifetime means and a hard-coded 1000 ms
@@ -281,32 +305,39 @@ Last updated: 2026-09-28. Everything below is committed.
     not judged yet. Per-table bloat and vacuum rules cover the effects.
   - A default install gets about 4 info findings (timeouts, diagnostics,
     `random_page_cost`). This is intended but can look noisy.
-  - Existing outage-risk rules don't look at `Unavailable` yet, so a failed
-    sub-check can resolve their findings. The new rules guard against this.
 - The repo-root `migrations/sqlite/` is a stale 001–007 copy. The real
   migrations are in `internal/storage/sqlite/migrations/`, and only old
   `tasks/*.md` files reference the copy.
 
 ## Next steps (in order)
 
-1. **Multi-database support.** Accept a list of targets in config instead of one
-   instance per process (`cmd/pganalyzer/main.go:157`). Storage is already keyed
-   by `instance_id`. Label notifications with the target.
-2. **Setup and onboarding.**
-   - Refuse to start with the default `admin/admin` unless auth is explicitly off.
-   - Add a first-run check for `pg_stat_statements`, grants, and how much
-     history has been collected.
-   - Write setup docs for managed Postgres (RDS/Aurora, Cloud SQL, Supabase).
-   - Publish releases, a container image, and a Helm chart.
-3. **Housekeeping.**
-   - Switch the dashboard to windowed query stats (see gaps).
-   - Add tests for the collector subpackages.
-   - `configs/config.example.yaml` references a missing `docs/postgresql-setup.md`.
-   - Add a dashboard panel for outage risk: wraparound %, slots, sequences,
-     `SequencesUnreadable`, disk forecast.
-   - Render suggestion markdown (code blocks, links) on the suggestion page.
-   - Make the outage-risk rules treat `Unavailable` checks as "not looked at".
+1. **Setup checks and safe defaults.**
+   - Refuse to start with `admin/admin` while auth is enabled (breaking, `feat!:`).
+   - Add `postgres.CheckSetup`: version, `pg_stat_statements` preloaded and
+     created, `pg_monitor` or equivalent grants, `track_io_timing`, hypopg
+     (optional). Each check comes with its fix.
+   - History readiness ("windowed advice ready in ~N hours").
+   - Show it all through `pganalyzer -check` / `task check`, startup logs, a
+     `/setup` page with a dashboard banner, and a `setup` field on `/health`.
+2. **Setup docs**: `docs/postgresql-setup.md` (fixes the broken link in
+   `configs/config.example.yaml`), with RDS/Aurora, Cloud SQL and Supabase
+   sections.
+3. **Dashboard catches up with the analyzer.**
+   - Windowed slow-query stats and the configured threshold (see gaps).
+   - An outage-risk panel, including `SequencesUnreadable`.
+   - Rendered suggestion markdown.
+4. **Housekeeping.**
    - Delete the stale root `migrations/sqlite/`.
+   - Run golangci-lint.
+   - Add collector subpackage tests.
+   - Merge `feat/config-review` into `main`.
+5. **Releases.**
+   - CI: unit, lint, and integration tests on PG14/PG17.
+   - Goreleaser and a multi-arch image (the Dockerfile hard-codes amd64).
+   - A Helm chart.
+
+Deferred: **multi-database support** (a list of targets in config instead of
+one instance per process, `cmd/pganalyzer/main.go:157`).
 
 ## Dev notes
 

@@ -184,5 +184,13 @@ func quoteLiteral(s string) string {
 	return "'" + strings.ReplaceAll(s, "'", "''") + "'"
 }
 
+// UnobservedTargets reports slots and replicas whose check failed.
+func (r *ReplicationSlotRule) UnobservedTargets(analysis *analyzer.AnalysisResult) []string {
+	return unobservedTargets(riskUnavailable(analysis), map[string]string{
+		"replication_slots": "slot:",
+		"replication":       "replica:",
+	})
+}
+
 // Ensure ReplicationSlotRule implements Rule interface.
 var _ suggester.Rule = (*ReplicationSlotRule)(nil)
