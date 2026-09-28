@@ -54,6 +54,8 @@ func Validate(cfg *Config) error {
 	// Validate Thresholds config
 	errs = append(errs, validateThresholds(&cfg.Thresholds)...)
 
+	errs = append(errs, validateNotifications(&cfg.Notifications)...)
+
 	if len(errs) > 0 {
 		return errs
 	}

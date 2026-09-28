@@ -12,6 +12,8 @@ type Config struct {
 	Thresholds ThresholdsConfig `yaml:"thresholds"`
 	Logging    LoggingConfig    `yaml:"logging"`
 	Metrics    MetricsConfig    `yaml:"metrics"`
+
+	Notifications NotificationsConfig `yaml:"notifications"`
 }
 
 // LoggingConfig contains logging settings.
@@ -155,5 +157,6 @@ func Default() Config {
 			Enabled: false,
 			Path:    "/metrics",
 		},
+		Notifications: defaultNotifications(),
 	}
 }

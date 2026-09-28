@@ -23,6 +23,7 @@ import (
 	"github.com/elqsar/pganalyzer/internal/logging"
 	"github.com/elqsar/pganalyzer/internal/metrics"
 	"github.com/elqsar/pganalyzer/internal/models"
+	"github.com/elqsar/pganalyzer/internal/notifier"
 	"github.com/elqsar/pganalyzer/internal/postgres"
 	"github.com/elqsar/pganalyzer/internal/scheduler"
 	"github.com/elqsar/pganalyzer/internal/storage/sqlite"
@@ -42,6 +43,7 @@ func main() {
 	var (
 		showVersion = flag.Bool("version", false, "Print version information and exit")
 		configPath  = flag.String("config", "configs/config.yaml", "Path to configuration file")
+		notifyTest  = flag.Bool("notify-test", false, "Send a test message to the configured notification channels and exit")
 	)
 	flag.Parse()
 
@@ -76,6 +78,15 @@ func main() {
 		slog.Info("received shutdown signal", "signal", sig.String())
 		cancel()
 	}()
+
+	if *notifyTest {
+		if err := sendTestNotification(ctx, *configPath); err != nil {
+			slog.Error("test notification failed", "error", err)
+			os.Exit(1)
+		}
+		slog.Info("test notification sent")
+		return
+	}
 
 	// Run the application
 	if err := run(ctx, *configPath); err != nil {
@@ -251,6 +262,30 @@ func run(ctx context.Context, configPath string) error {
 		"analysis_interval", cfg.Scheduler.AnalysisInterval,
 	)
 
+	if cfg.Notifications.Enabled {
+		channels, err := notifier.NewChannels(cfg.Notifications.Channels, nil)
+		if err != nil {
+			return fmt.Errorf("creating notification channels: %w", err)
+		}
+		n, err := notifier.New(notifier.Options{
+			Config:     cfg.Notifications,
+			Storage:    storage,
+			Collection: sched,
+			Channels:   channels,
+			InstanceID: instanceID,
+			Instance:   instanceName,
+		})
+		if err != nil {
+			return fmt.Errorf("creating notifier: %w", err)
+		}
+		go n.Run(ctx)
+		slog.Info("notifications enabled",
+			"channels", len(channels),
+			"min_severity", cfg.Notifications.MinSeverity,
+			"digest", cfg.Notifications.Digest.Enabled,
+		)
+	}
+
 	// Create API server
 	server, err := api.NewServer(api.ServerConfig{
 		Config:        &cfg.Server,
@@ -296,4 +331,22 @@ func run(ctx context.Context, configPath string) error {
 	}
 
 	return nil
+}
+
+// sendTestNotification checks the notification setup without connecting to
+// PostgreSQL, so channels can be verified before deploying.
+func sendTestNotification(ctx context.Context, configPath string) error {
+	cfg, err := config.Load(configPath)
+	if err != nil {
+		return fmt.Errorf("loading config: %w", err)
+	}
+	if !cfg.Notifications.Enabled {
+		return fmt.Errorf("notifications.enabled is false in %s", configPath)
+	}
+	channels, err := notifier.NewChannels(cfg.Notifications.Channels, nil)
+	if err != nil {
+		return err
+	}
+	instance := fmt.Sprintf("%s:%d/%s", cfg.Postgres.Host, cfg.Postgres.Port, cfg.Postgres.Database)
+	return notifier.SendTest(ctx, channels, instance, cfg.Notifications.DashboardURL)
 }

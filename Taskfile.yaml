@@ -67,6 +67,12 @@ tasks:
     cmds:
       - "{{.BUILD_DIR}}/{{.BINARY_NAME}} {{.CLI_ARGS}}"
 
+  notify:test:
+    desc: Send a test notification to the configured channels (task notify:test -- -config path)
+    deps: [build]
+    cmds:
+      - "{{.BUILD_DIR}}/{{.BINARY_NAME}} -notify-test {{.CLI_ARGS}}"
+
   test:
     desc: Run tests
     cmds:

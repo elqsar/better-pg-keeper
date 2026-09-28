@@ -199,6 +199,56 @@ thresholds:
   # stale_analyze_days: 7
 
 # -----------------------------------------------------------------------------
+# Notifications (optional)
+# -----------------------------------------------------------------------------
+# Alerts in Slack or any webhook when issues appear, plus a periodic digest.
+# Check the setup without starting monitoring: pganalyzer -config <file> -notify-test
+notifications:
+  enabled: ${NOTIFICATIONS_ENABLED:-false}
+
+  # Lowest suggestion severity that alerts: critical, warning or info.
+  # Default: critical. The digest always covers every severity.
+  min_severity: critical
+
+  # Repeat an alert for an issue still active after this long (0 = never).
+  # Default: 24h
+  renotify_after: 24h
+
+  # Announce when an alerted issue goes away. It must stay gone for resolve_grace
+  # first; if it comes back sooner nothing is sent, so a value hovering around a
+  # threshold does not produce a stream of alerts.
+  notify_resolved: true
+  resolve_grace: 1h
+
+  # Alert when no collection has succeeded for this long, e.g. PostgreSQL is
+  # unreachable or the monitoring role lost a permission (0 = off).
+  # Default: 15m
+  collection_stale_after: 15m
+
+  # Public URL of this dashboard, used to link alerts to suggestion pages.
+  # dashboard_url: https://pganalyzer.example.com
+
+  # Summary of active, new and resolved issues and the queries using the most
+  # database time. Sent at the given hour in server local time.
+  digest:
+    enabled: true
+    schedule: weekly    # daily or weekly
+    weekday: monday     # for weekly
+    hour: 9             # 0-23
+
+  channels:
+    # Slack incoming webhook (https://api.slack.com/messaging/webhooks).
+    # Discord and Mattermost accept this on their Slack-compatible endpoints.
+    - type: slack
+      url: ${SLACK_WEBHOOK_URL}
+
+    # Generic JSON POST: {kind, instance, title, items, digest, text, ...}.
+    # - type: webhook
+    #   url: https://alerts.example.com/pganalyzer
+    #   headers:
+    #     Authorization: Bearer ${WEBHOOK_TOKEN}
+
+# -----------------------------------------------------------------------------
 # Logging (optional)
 # -----------------------------------------------------------------------------
 # Configure application logging behavior.

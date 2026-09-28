@@ -64,16 +64,18 @@ type HealthStatus struct {
 	LastCollectionSuccess  bool
 	LastCollectionError    string
 	LastCollectionDuration time.Duration
-	LastAnalysisTime       time.Time
-	LastAnalysisSuccess    bool
-	LastAnalysisError      string
-	LastAnalysisDuration   time.Duration
-	LastMaintenanceTime    time.Time
-	LastMaintenanceSuccess bool
-	TotalCollections       int64
-	TotalAnalyses          int64
-	FailedCollections      int64
-	FailedAnalyses         int64
+	// LastSuccessfulCollection is when every collector last succeeded.
+	LastSuccessfulCollection time.Time
+	LastAnalysisTime         time.Time
+	LastAnalysisSuccess      bool
+	LastAnalysisError        string
+	LastAnalysisDuration     time.Duration
+	LastMaintenanceTime      time.Time
+	LastMaintenanceSuccess   bool
+	TotalCollections         int64
+	TotalAnalyses            int64
+	FailedCollections        int64
+	FailedAnalyses           int64
 }
 
 // HealthSnapshot returns a snapshot of the current health status.
@@ -307,12 +309,26 @@ func (s *Scheduler) GetHealth() *HealthSnapshot {
 	}
 }
 
+// CollectionStatus reports when a collection last fully succeeded (zero if never)
+// and the error from the most recent collection, if it failed.
+func (s *Scheduler) CollectionStatus() (lastSuccess time.Time, lastError string) {
+	s.health.mu.RLock()
+	defer s.health.mu.RUnlock()
+	if !s.health.LastCollectionSuccess {
+		lastError = s.health.LastCollectionError
+	}
+	return s.health.LastSuccessfulCollection, lastError
+}
+
 // updateCollectionHealth updates health status after a collection.
 func (s *Scheduler) updateCollectionHealth(success bool, duration time.Duration, errMsg string) {
 	s.health.mu.Lock()
 	defer s.health.mu.Unlock()
 
 	s.health.LastCollectionTime = time.Now()
+	if success {
+		s.health.LastSuccessfulCollection = s.health.LastCollectionTime
+	}
 	s.health.LastCollectionSuccess = success
 	s.health.LastCollectionError = errMsg
 	s.health.LastCollectionDuration = duration

@@ -143,6 +143,36 @@ postgres:
 | thresholds.unused_index_days | - | 30 | Minimum days of scan statistics before flagging an unused index |
 | thresholds.cache_hit_ratio | - | 95.0 | Cache hit ratio warning threshold (%) |
 
+## Notifications
+
+PGAnalyzer can post to Slack or any webhook, so nobody has to watch the dashboard:
+
+- **Alerts** when an issue reaches `min_severity` (default: critical) or gets worse,
+  a reminder every `renotify_after` while it stays active, and a resolved message
+  once it has stayed gone for `resolve_grace`. Everything found in one analysis
+  cycle arrives as a single message.
+- **Collection failures**: an alert when no collection has succeeded for
+  `collection_stale_after`, and a message when it recovers.
+- **Digest** (weekly by default): active issues by severity, issues that
+  appeared or were resolved in the period, and the queries that used the most
+  database time.
+
+```yaml
+notifications:
+  enabled: true
+  dashboard_url: https://pganalyzer.example.com
+  channels:
+    - type: slack
+      url: ${SLACK_WEBHOOK_URL}
+```
+
+Check the setup with `pganalyzer -config configs/config.yaml -notify-test` (or
+`task notify:test -- -config configs/config.yaml`). See
+[configs/config.example.yaml](configs/config.example.yaml) for every option.
+
+Alerts come from PGAnalyzer itself, so they stop if PGAnalyzer stops. Point an
+uptime monitor at `/health` to cover that.
+
 ## Docker Deployment
 
 ### Using Docker Compose

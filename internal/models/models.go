@@ -289,3 +289,13 @@ type ExtendedDatabaseStats struct {
 	ConflLock     int64  `json:"confl_lock"`
 	ConflSnapshot int64  `json:"confl_snapshot"`
 }
+
+// NotificationState records how an issue was last alerted on.
+type NotificationState struct {
+	InstanceID   int64      `json:"instance_id"`
+	RuleID       string     `json:"rule_id"`
+	TargetObject string     `json:"target_object"`
+	Severity     string     `json:"severity"`
+	NotifiedAt   time.Time  `json:"notified_at"`
+	ClearedAt    *time.Time `json:"cleared_at,omitempty"`
+}
