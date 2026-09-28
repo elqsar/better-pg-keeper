@@ -3,7 +3,6 @@ package handlers
 import (
 	"context"
 	"net/http"
-	"sort"
 	"time"
 
 	"github.com/labstack/echo/v4"
@@ -22,16 +21,28 @@ type DashboardStorage interface {
 type DashboardHandler struct {
 	storage    DashboardStorage
 	instanceID int64
+	queries    *QueryWindowConfig
+}
+
+// WithQueryWindow makes query figures cover the slow-query window and use the
+// configured slow-query threshold.
+func (h *DashboardHandler) WithQueryWindow(cfg QueryWindowConfig) *DashboardHandler {
+	h.queries = &cfg
+	return h
 }
 
 // DashboardResponse represents the dashboard API response.
 type DashboardResponse struct {
-	CacheHitRatio     *float64            `json:"cache_hit_ratio"`
-	TotalQueries      int                 `json:"total_queries"`
-	SlowQueriesCount  int                 `json:"slow_queries_count"`
-	ActiveSuggestions int                 `json:"active_suggestions"`
-	TopQueries        []TopQuerySummary   `json:"top_queries"`
-	RecentSuggestions []SuggestionSummary `json:"recent_suggestions"`
+	CacheHitRatio    *float64 `json:"cache_hit_ratio"`
+	TotalQueries     int      `json:"total_queries"`
+	SlowQueriesCount int      `json:"slow_queries_count"`
+	// QueryWindowSeconds is the span the query figures cover; 0 means lifetime
+	// statistics, before a slow-query window of history exists.
+	QueryWindowSeconds float64             `json:"query_window_seconds"`
+	SlowQueryMs        float64             `json:"slow_query_ms"`
+	ActiveSuggestions  int                 `json:"active_suggestions"`
+	TopQueries         []TopQuerySummary   `json:"top_queries"`
+	RecentSuggestions  []SuggestionSummary `json:"recent_suggestions"`
 }
 
 // TopQuerySummary represents a summarized query for the dashboard.
@@ -87,35 +98,27 @@ func (h *DashboardHandler) GetDashboard(c echo.Context) error {
 		if err != nil {
 			c.Logger().Errorf("failed to get query stats: %v", err)
 		} else {
-			response.TotalQueries = len(stats)
-
-			// Count slow queries (mean_exec_time > 1000ms)
-			slowQueryThreshold := 1000.0 // 1 second
-			for _, stat := range stats {
-				if stat.MeanExecTime > slowQueryThreshold {
-					response.SlowQueriesCount++
-				}
+			summary, err := summarizeQueries(ctx, h.queries, h.instanceID, stats, 5)
+			if err != nil {
+				c.Logger().Errorf("failed to get recent query stats: %v", err)
 			}
-
-			// Top 5 queries by total time
-			sort.SliceStable(stats, func(i, j int) bool {
-				return stats[i].TotalExecTime > stats[j].TotalExecTime
-			})
-			limit := 5
-			if len(stats) < limit {
-				limit = len(stats)
-			}
-			for i := 0; i < limit; i++ {
-				stat := stats[i]
+			response.TotalQueries = summary.Total
+			response.SlowQueriesCount = summary.Slow
+			response.QueryWindowSeconds = summary.Window.Seconds()
+			for _, q := range summary.Top {
 				response.TopQueries = append(response.TopQueries, TopQuerySummary{
-					QueryID:         stat.QueryID,
-					QueryPreview:    truncateQuery(stat.Query, 80),
-					Calls:           stat.Calls,
-					MeanExecTimeMs:  stat.MeanExecTime,
-					TotalExecTimeMs: stat.TotalExecTime,
+					QueryID:         q.QueryID,
+					QueryPreview:    truncateQuery(q.QueryPreview, 80),
+					Calls:           q.Calls,
+					MeanExecTimeMs:  q.MeanExecTimeMs,
+					TotalExecTimeMs: q.TotalExecTimeMs,
 				})
 			}
 		}
+	}
+	response.SlowQueryMs = defaultSlowQueryMs
+	if h.queries != nil && h.queries.SlowQueryMs > 0 {
+		response.SlowQueryMs = h.queries.SlowQueryMs
 	}
 
 	// Get active suggestions

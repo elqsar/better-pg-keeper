@@ -49,6 +49,7 @@ func NewTemplateRenderer() (*TemplateRenderer, error) {
 		"eq":                  eq,
 		"formatDurationSec":   formatDurationSec,
 		"formatMs":            verify.FormatMs,
+		"formatSpan":          formatSpan,
 	}
 
 	tmpl, err := template.New("").Funcs(funcMap).ParseFS(templatesFS, "templates/*.html")
@@ -289,4 +290,13 @@ func dict(values ...interface{}) map[string]interface{} {
 // eq compares two values for equality.
 func eq(a, b interface{}) bool {
 	return a == b
+}
+
+// formatSpan renders a window length in whole hours or days, e.g. "24h" or "7 days".
+func formatSpan(d time.Duration) string {
+	d = d.Round(time.Hour)
+	if d >= 48*time.Hour {
+		return fmt.Sprintf("%d days", int(d.Hours()/24))
+	}
+	return fmt.Sprintf("%dh", int(d.Hours()))
 }

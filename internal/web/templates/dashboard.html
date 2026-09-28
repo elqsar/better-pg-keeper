@@ -63,12 +63,12 @@
                 <div class="stat-card">
                     <div class="stat-label">Total Queries</div>
                     <div class="stat-value text-gray-900">{{formatNumber .TotalQueries}}</div>
-                    <div class="stat-hint">Tracked in pg_stat_statements</div>
+                    <div class="stat-hint">{{if .QueryWindow}}Ran in the last {{formatSpan .QueryWindow}}{{else}}Tracked since statistics reset{{end}}</div>
                 </div>
                 <div class="stat-card">
                     <div class="stat-label">Slow Queries</div>
                     <div class="stat-value {{if gt .SlowQueriesCount 0}}text-severity-warning{{else}}text-gray-900{{end}}">{{.SlowQueriesCount}}</div>
-                    <div class="stat-hint">Mean exec time &gt;1s · <a href="/queries?filter=slow&sort=mean_time&order=desc" class="text-primary hover:text-primary-hover">View all</a></div>
+                    <div class="stat-hint">Mean &ge; {{formatMs .SlowQueryMs}} {{if .QueryWindow}}over the last {{formatSpan .QueryWindow}}{{else}}since statistics reset{{end}} · <a href="/queries?filter=slow&sort=mean_time&order=desc" class="text-primary hover:text-primary-hover">View all</a></div>
                 </div>
                 <div class="stat-card">
                     <div class="stat-label">Active Suggestions</div>
@@ -115,7 +115,7 @@
                 <!-- Top Queries -->
                 <div class="card overflow-hidden">
                     <div class="px-6 py-4 border-b border-gray-200 flex items-center justify-between">
-                        <h2 class="font-semibold text-gray-900">Top Queries by Total Time</h2>
+                        <h2 class="font-semibold text-gray-900">Top Queries by Total Time <span class="text-sm font-medium text-gray-500">{{if .QueryWindow}}last {{formatSpan .QueryWindow}}{{else}}since statistics reset{{end}}</span></h2>
                         <a href="/queries?sort=total_time" class="text-sm text-primary hover:text-primary-hover font-medium">
                             View All
                         </a>

@@ -363,6 +363,9 @@ func run(ctx context.Context, configPath string) error {
 		Version:       version,
 		Verifier:      verifier,
 		Setup:         setupChecker,
+
+		SlowQueryWindow: time.Duration(cfg.Thresholds.SlowQueryWindow),
+		SlowQueryMs:     float64(cfg.Thresholds.SlowQueryMs),
 	})
 	if err != nil {
 		return fmt.Errorf("creating api server: %w", err)

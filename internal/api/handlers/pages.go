@@ -41,6 +41,14 @@ type PageHandler struct {
 	version    string
 	verifier   *verify.Verifier
 	setup      *setup.Checker
+	queries    *QueryWindowConfig
+}
+
+// WithQueryWindow makes the dashboard's query figures cover the slow-query
+// window and use the configured slow-query threshold.
+func (h *PageHandler) WithQueryWindow(cfg QueryWindowConfig) *PageHandler {
+	h.queries = &cfg
+	return h
 }
 
 // WithSetup enables the /setup page and the dashboard setup banner.
@@ -77,10 +85,14 @@ type DashboardPageData struct {
 	BasePageData
 	// Setup is the setup checklist, shown as a banner when something needs
 	// attention or history is still being collected.
-	Setup             *SetupBanner
-	CacheHitRatio     float64
-	TotalQueries      int64
-	SlowQueriesCount  int
+	Setup            *SetupBanner
+	CacheHitRatio    float64
+	TotalQueries     int64
+	SlowQueriesCount int
+	// QueryWindow is the span the query figures cover; 0 means lifetime
+	// statistics, before a slow-query window of history exists.
+	QueryWindow       time.Duration
+	SlowQueryMs       float64
 	ActiveSuggestions int
 	TopQueries        []DashboardQuery
 	RecentSuggestions []DashboardSuggestion
@@ -150,33 +162,18 @@ func (h *PageHandler) Dashboard(c echo.Context) error {
 	if err != nil {
 		c.Logger().Errorf("failed to get current query stats: %v", err)
 	} else {
-		data.TotalQueries = int64(len(stats))
-
-		// Count slow queries (mean_exec_time > 1000ms)
-		for _, stat := range stats {
-			if stat.MeanExecTime > 1000 {
-				data.SlowQueriesCount++
-			}
+		summary, err := summarizeQueries(ctx, h.queries, h.instanceID, stats, 5)
+		if err != nil {
+			c.Logger().Errorf("failed to get recent query stats: %v", err)
 		}
-
-		// Sort by total time and get top 5
-		sort.Slice(stats, func(i, j int) bool {
-			return stats[i].TotalExecTime > stats[j].TotalExecTime
-		})
-		limit := 5
-		if len(stats) < limit {
-			limit = len(stats)
-		}
-		for i := 0; i < limit; i++ {
-			stat := stats[i]
-			data.TopQueries = append(data.TopQueries, DashboardQuery{
-				QueryID:         stat.QueryID,
-				QueryPreview:    truncateString(stat.Query, 80),
-				Calls:           stat.Calls,
-				MeanExecTimeMs:  stat.MeanExecTime,
-				TotalExecTimeMs: stat.TotalExecTime,
-			})
-		}
+		data.TotalQueries = int64(summary.Total)
+		data.SlowQueriesCount = summary.Slow
+		data.QueryWindow = summary.Window
+		data.TopQueries = append(data.TopQueries, summary.Top...)
+	}
+	data.SlowQueryMs = defaultSlowQueryMs
+	if h.queries != nil && h.queries.SlowQueryMs > 0 {
+		data.SlowQueryMs = h.queries.SlowQueryMs
 	}
 
 	// Get active suggestions
@@ -327,9 +324,13 @@ func (h *PageHandler) Queries(c echo.Context) error {
 
 	// Apply slow filter if requested
 	if filter == "slow" {
+		slowMs := float64(defaultSlowQueryMs)
+		if h.queries != nil && h.queries.SlowQueryMs > 0 {
+			slowMs = h.queries.SlowQueryMs
+		}
 		var filtered []models.QueryStat
 		for _, s := range stats {
-			if s.MeanExecTime > 1000 {
+			if s.MeanExecTime >= slowMs {
 				filtered = append(filtered, s)
 			}
 		}

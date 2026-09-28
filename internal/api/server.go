@@ -35,6 +35,7 @@ type Server struct {
 	version       string
 	verifier      *verify.Verifier
 	setup         *setup.Checker
+	queries       handlers.QueryWindowConfig
 }
 
 // ServerConfig holds configuration for creating a Server.
@@ -50,6 +51,10 @@ type ServerConfig struct {
 	Version       string
 	// Verifier enables fix verification on resolved suggestions. Optional.
 	Verifier *verify.Verifier
+	// SlowQueryWindow and SlowQueryMs make dashboard query figures match the
+	// analyzer's. Zero values fall back to 24h and 1000ms.
+	SlowQueryWindow time.Duration
+	SlowQueryMs     float64
 	// Setup enables the /setup page, the dashboard banner and the health
 	// setup summary. Optional.
 	Setup *setup.Checker
@@ -141,6 +146,11 @@ func NewServer(cfg ServerConfig) (*Server, error) {
 		version:       version,
 		verifier:      cfg.Verifier,
 		setup:         cfg.Setup,
+		queries: handlers.QueryWindowConfig{
+			Storage:     cfg.Storage,
+			Window:      cfg.SlowQueryWindow,
+			SlowQueryMs: cfg.SlowQueryMs,
+		},
 	}
 
 	// Register routes
@@ -153,12 +163,12 @@ func NewServer(cfg ServerConfig) (*Server, error) {
 func (s *Server) registerRoutes() {
 	// Create handlers
 	healthHandler := handlers.NewHealthHandler(s.storage, s.pgClient, s.scheduler, s.instanceID).WithSetup(s.setup)
-	dashboardHandler := handlers.NewDashboardHandler(s.storage, s.instanceID)
+	dashboardHandler := handlers.NewDashboardHandler(s.storage, s.instanceID).WithQueryWindow(s.queries)
 	queriesHandler := handlers.NewQueriesHandler(s.storage, s.pgClient, s.instanceID)
 	schemaHandler := handlers.NewSchemaHandler(s.storage, s.instanceID)
 	suggestionsHandler := handlers.NewSuggestionsHandler(s.storage, s.instanceID)
 	snapshotsHandler := handlers.NewSnapshotsHandler(s.storage, s.scheduler, s.instanceID)
-	pageHandler := handlers.NewPageHandler(s.storage, s.instanceID, s.version).WithVerifier(s.verifier).WithSetup(s.setup)
+	pageHandler := handlers.NewPageHandler(s.storage, s.instanceID, s.version).WithVerifier(s.verifier).WithSetup(s.setup).WithQueryWindow(s.queries)
 
 	// Health endpoint (no auth required - handled in middleware)
 	s.echo.GET("/health", healthHandler.GetHealth)
