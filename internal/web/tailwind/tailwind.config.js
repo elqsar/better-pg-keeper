@@ -2,6 +2,8 @@
 module.exports = {
   content: [
     "./internal/web/templates/**/*.html",
+    // Template helpers return class names (severityBadgeClass, ...).
+    "./internal/web/*.go",
   ],
   theme: {
     extend: {

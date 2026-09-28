@@ -335,10 +335,47 @@ Last updated: 2026-09-28. Everything below is committed.
   `-check` all OK after the `search_path` fix. The managed-service sections
   aren't verified against live services; each points to `-check` to confirm.
 
+### 10. Dashboard catches up with the analyzer (2026-09-28)
+
+- **Windowed query figures.** The dashboard page and `/api/v1/dashboard` use
+  `analyzer.RecentQueryStats`: the last `slow_query_window`, against the same
+  baseline snapshot as the slow-query analyzer, and the configured
+  `slow_query_ms`.
+  - Before a full window of history exists they show lifetime figures, and the
+    page labels which one it shows.
+  - The API adds `query_window_seconds` and `slow_query_ms`.
+  - The queries page's slow filter uses the configured threshold.
+- **Outage-risk panel** on the dashboard:
+  - wraparound as a share of 2^31
+  - replication slots, retained WAL and replay lag
+  - the top sequence, sequences over 50%, and `SequencesUnreadable`
+  - open prepared transactions
+  - size, growth and "full in ~N days" (same fit and forecast as
+    `disk_growth`)
+  - checks that could not run
+  - Each row shows its rule's active suggestion count rather than new
+    thresholds.
+- **Rendered markdown** in suggestion descriptions, on the detail page and the
+  list, with goldmark:
+  - Raw HTML is dropped and unsafe link schemes aren't rendered, because
+    descriptions include text from the monitored database. Tests cover
+    `<script>`, `<img onerror>` and `javascript:` links.
+  - The `.markdown` styles are in `tailwind/input.css`.
+- Fixed while checking the UI in a browser: Tailwind only scanned templates,
+  so class names returned by Go helpers (`badge-critical`,
+  `suggestion-card-*`, `cache-*`) were purged. Critical badges showed as plain
+  text. `internal/web/*.go` is now in Tailwind's `content`.
+- `go mod tidy`: goldmark added, prometheus marked direct, and the unused
+  `rogpeppe/go-internal` dropped.
+- Verified in the browser against PG17 with a 93% sequence: the history
+  banner, the panel with "1 active" on sequences, the rendered suggestion
+  page, and the list with severity styling.
+
 ## Known gaps in what's done
 
-- The dashboard and query pages still use lifetime means and a hard-coded 1000 ms
-  (`internal/api/handlers/pages.go:134`, `dashboard.go:95`).
+- The queries list (`/queries`) still sorts and shows lifetime
+  `pg_stat_statements` figures; only its slow filter uses the configured
+  threshold.
 - Per-query cache analysis (`internal/analyzer/cache.go`) uses lifetime counters.
 - "Bloat" is the dead-tuple ratio, not an estimate of reclaimable space.
 - Alerts stop if the pganalyzer process dies. The README recommends an uptime
@@ -362,15 +399,11 @@ Last updated: 2026-09-28. Everything below is committed.
     Other databases get only a database-level age and a SQL snippet.
   - Disk forecast counts database files only, not WAL, logs or temp files, and
     needs `disk_capacity_gb`. Free space isn't visible from SQL.
-  - `SequencesUnreadable` is collected but not shown anywhere yet.
-  - The new signals appear only as suggestions. There is no dashboard panel yet.
 - Index advisor:
   - Only btree proposals from scan filters. Join keys, ORDER BY, expression and
     partial indexes are not proposed.
   - Queries recorded as SQL-level `PREPARE name AS ...` are skipped. Protocol-level
     prepared statements, which drivers use, are fine.
-  - Suggestion descriptions are markdown shown as preformatted text; a renderer
-    would make code blocks and links clickable.
 - Configuration review:
   - RAM isn't visible from SQL. Without `server_memory_gb`, only the untuned
     128MB `shared_buffers` default is flagged, and `work_mem` isn't checked.
@@ -384,16 +417,12 @@ Last updated: 2026-09-28. Everything below is committed.
 
 ## Next steps (in order)
 
-1. **Dashboard catches up with the analyzer.**
-   - Windowed slow-query stats and the configured threshold (see gaps).
-   - An outage-risk panel, including `SequencesUnreadable`.
-   - Rendered suggestion markdown.
-2. **Housekeeping.**
+1. **Housekeeping.**
    - Delete the stale root `migrations/sqlite/`.
    - Run golangci-lint.
    - Add collector subpackage tests.
    - Merge `feat/config-review` into `main`.
-3. **Releases.**
+2. **Releases.**
    - CI: unit, lint, and integration tests on PG14/PG17.
    - Goreleaser and a multi-arch image (the Dockerfile hard-codes amd64).
    - A Helm chart.

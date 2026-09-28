@@ -51,6 +51,7 @@ func NewTemplateRenderer() (*TemplateRenderer, error) {
 		"formatMs":            verify.FormatMs,
 		"formatSpan":          formatSpan,
 		"formatFraction":      formatFraction,
+		"markdown":            renderMarkdown,
 	}
 
 	tmpl, err := template.New("").Funcs(funcMap).ParseFS(templatesFS, "templates/*.html")

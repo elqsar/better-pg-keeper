@@ -122,7 +122,7 @@
                         <h2 class="font-semibold text-gray-900">Description</h2>
                     </div>
                     <div class="p-6">
-                        <p class="text-gray-700 leading-relaxed whitespace-pre-wrap">{{.Suggestion.Description}}</p>
+                        <div class="markdown text-gray-700 leading-relaxed">{{markdown .Suggestion.Description}}</div>
                     </div>
                 </div>
             </div>
