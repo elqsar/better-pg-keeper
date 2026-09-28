@@ -256,6 +256,17 @@ func (s *Scheduler) executeMaintenance(ctx context.Context) {
 		s.logger.Printf("[scheduler] purged %d query samples (retention=%v)", queryPurged, queryRetention)
 	}
 
+	// Size samples outlive snapshots so disk growth can be forecast.
+	if sizeRetention := s.retention.SizeHistory.Duration(); sizeRetention > 0 {
+		sizePurged, err := s.storage.PurgeOldSizeHistory(ctx, sizeRetention)
+		if err != nil {
+			s.logger.Printf("[scheduler] failed to purge size history: %v", err)
+			success = false
+		} else if sizePurged > 0 {
+			s.logger.Printf("[scheduler] purged %d size samples (retention=%v)", sizePurged, sizeRetention)
+		}
+	}
+
 	s.updateMaintenanceHealth(success)
 	s.logger.Printf("[scheduler] maintenance completed in %v", time.Since(start))
 }

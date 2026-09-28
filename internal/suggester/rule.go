@@ -6,8 +6,10 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"time"
 
 	"github.com/elqsar/pganalyzer/internal/analyzer"
+	"github.com/elqsar/pganalyzer/internal/config"
 	"github.com/elqsar/pganalyzer/internal/models"
 )
 
@@ -79,16 +81,32 @@ type Config struct {
 	VacuumStaleDays       int     // days since last vacuum to consider stale
 
 	// Operational thresholds
-	LongRunningQuerySeconds      float64 // queries running longer flagged (warning)
-	LongRunningCriticalSeconds   float64 // queries running longer are critical
-	IdleInTxSeconds              float64 // idle-in-tx warning threshold
-	IdleInTxCriticalSeconds      float64 // idle-in-tx critical threshold
-	BlockedQuerySeconds          float64 // blocked query warning threshold
-	BlockedQueryCriticalSeconds  float64 // blocked query critical threshold
-	TempBytesWarning             int64   // temp bytes per snapshot warning
-	TempBytesCritical            int64   // temp bytes per snapshot critical
-	DeadlocksWarning             int64   // deadlocks per snapshot warning
-	ConnectionUtilizationWarning float64 // connection utilization warning (0-1)
+	LongRunningQuerySeconds       float64 // queries running longer flagged (warning)
+	LongRunningCriticalSeconds    float64 // queries running longer are critical
+	IdleInTxSeconds               float64 // idle-in-tx warning threshold
+	IdleInTxCriticalSeconds       float64 // idle-in-tx critical threshold
+	BlockedQuerySeconds           float64 // blocked query warning threshold
+	BlockedQueryCriticalSeconds   float64 // blocked query critical threshold
+	TempBytesWarning              int64   // temp bytes per snapshot warning
+	TempBytesCritical             int64   // temp bytes per snapshot critical
+	DeadlocksWarning              int64   // deadlocks per snapshot warning
+	ConnectionUtilizationWarning  float64 // connection utilization warning (0-1)
+	ConnectionUtilizationCritical float64 // connection utilization critical (0-1)
+
+	// Outage-risk thresholds
+	XIDAgeWarning             int64         // transaction/multixact age warning
+	XIDAgeCritical            int64         // transaction/multixact age critical
+	FreezeMaxAgeFactor        float64       // warn at this multiple of autovacuum_*freeze_max_age
+	SlotRetainedWarningBytes  int64         // WAL retained by an inactive slot, warning
+	SlotRetainedCriticalBytes int64         // WAL retained by any slot, critical
+	ReplicaLagWarningSeconds  float64       // replay lag warning
+	SequenceUsageWarning      float64       // fraction of a sequence's range used, warning
+	SequenceUsageCritical     float64       // fraction of a sequence's range used, critical
+	PreparedXactWarning       time.Duration // prepared transaction age, warning
+	PreparedXactCritical      time.Duration // prepared transaction age, critical
+	DiskCapacityBytes         int64         // data volume size; 0 means unknown
+	DiskFullWarningDays       float64       // forecast days to full, warning
+	DiskFullCriticalDays      float64       // forecast days to full, critical
 }
 
 // DefaultConfig returns the default suggester configuration.
@@ -117,5 +135,57 @@ func DefaultConfig() *Config {
 		TempBytesCritical:            10 * 1024 * 1024 * 1024, // 10GB
 		DeadlocksWarning:             1,                       // any deadlocks
 		ConnectionUtilizationWarning: 0.8,                     // 80%
+
+		ConnectionUtilizationCritical: 0.95,
+
+		// PostgreSQL refuses writes near 2^31 (~2.1B). Autovacuum starts forcing
+		// freezes at autovacuum_freeze_max_age (200M by default); being well past
+		// that means freezing is not keeping up.
+		XIDAgeWarning:             500_000_000,
+		XIDAgeCritical:            1_000_000_000,
+		FreezeMaxAgeFactor:        1.5,
+		SlotRetainedWarningBytes:  1 << 30,  // 1GB
+		SlotRetainedCriticalBytes: 10 << 30, // 10GB
+		ReplicaLagWarningSeconds:  300,
+		SequenceUsageWarning:      0.75,
+		SequenceUsageCritical:     0.90,
+		PreparedXactWarning:       time.Hour,
+		PreparedXactCritical:      24 * time.Hour,
+		DiskFullWarningDays:       30,
+		DiskFullCriticalDays:      7,
 	}
+}
+
+// ConfigFromThresholds applies the user-configurable thresholds to the defaults.
+// Critical levels that are not configurable are kept at least as strict as the
+// configured warning level, so raising a warning threshold cannot make every
+// finding critical.
+func ConfigFromThresholds(t config.ThresholdsConfig) *Config {
+	c := DefaultConfig()
+	if t.SlowQueryMs > 0 {
+		c.SlowQueryMs = float64(t.SlowQueryMs)
+		if c.SlowQueryCriticalMs < c.SlowQueryMs {
+			c.SlowQueryCriticalMs = 5 * c.SlowQueryMs
+		}
+	}
+	if t.CacheHitRatioWarning > 0 {
+		c.CacheHitRatioWarning = t.CacheHitRatioWarning
+		c.CacheHitRatioCritical = min(c.CacheHitRatioCritical, c.CacheHitRatioWarning)
+	}
+	if t.BloatPercentWarning > 0 {
+		c.BloatPercentWarning = float64(t.BloatPercentWarning)
+		c.BloatPercentCritical = max(c.BloatPercentCritical, c.BloatPercentWarning)
+	}
+	if t.UnusedIndexDays > 0 {
+		c.UnusedIndexDays = t.UnusedIndexDays
+	}
+	if t.SeqScanRatioWarning > 0 {
+		c.SeqScanRatioWarning = t.SeqScanRatioWarning
+		c.SeqScanRatioCritical = max(c.SeqScanRatioCritical, c.SeqScanRatioWarning)
+	}
+	if t.MinTableSizeForIndex > 0 {
+		c.MinTableSizeForIndex = int64(t.MinTableSizeForIndex)
+	}
+	c.DiskCapacityBytes = int64(t.DiskCapacityGB * (1 << 30))
+	return c
 }

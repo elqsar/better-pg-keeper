@@ -19,6 +19,7 @@ import (
 type Storage interface {
 	PurgeOldSnapshots(ctx context.Context, retention time.Duration) (int64, error)
 	PurgeOldQueryHistory(ctx context.Context, retention time.Duration) (int64, error)
+	PurgeOldSizeHistory(ctx context.Context, retention time.Duration) (int64, error)
 }
 
 // Scheduler coordinates data collection, analysis, and maintenance jobs.
@@ -128,8 +129,9 @@ func NewScheduler(cfg Config) (*Scheduler, error) {
 	retentionConfig := cfg.RetentionConfig
 	if retentionConfig == nil {
 		retentionConfig = &config.RetentionConfig{
-			Snapshots:  config.Duration(168 * time.Hour), // 7 days
-			QueryStats: config.Duration(720 * time.Hour), // 30 days
+			Snapshots:   config.Duration(168 * time.Hour),  // 7 days
+			QueryStats:  config.Duration(720 * time.Hour),  // 30 days
+			SizeHistory: config.Duration(2160 * time.Hour), // 90 days
 		}
 	}
 

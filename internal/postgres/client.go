@@ -34,6 +34,9 @@ type Client interface {
 	GetTableBloat(ctx context.Context) ([]models.BloatInfo, error)
 	GetIndexDetails(ctx context.Context) ([]models.IndexDetail, error)
 
+	// Outage risk (wraparound, replication slots, sequences, prepared xacts, size)
+	GetOutageRisk(ctx context.Context) (*models.OutageRisk, error)
+
 	// Query analysis
 	Explain(ctx context.Context, query string, analyze bool) (*models.ExplainPlan, error)
 	ExplainWithParams(ctx context.Context, query string, params []any, analyze bool) (*models.ExplainPlan, error)

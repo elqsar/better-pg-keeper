@@ -80,6 +80,14 @@ type Storage interface {
 	SaveExtendedDatabaseStats(ctx context.Context, snapshotID int64, stats *models.ExtendedDatabaseStats) error
 	GetExtendedDatabaseStats(ctx context.Context, snapshotID int64) (*models.ExtendedDatabaseStats, error)
 
+	// Outage risk operations
+	SaveOutageRisk(ctx context.Context, snapshotID int64, risk *models.OutageRisk) error
+	GetOutageRisk(ctx context.Context, snapshotID int64) (*models.OutageRisk, error)
+	RecordSize(ctx context.Context, instanceID int64, at time.Time, clusterBytes int64) error
+	GetSizeHistory(ctx context.Context, instanceID int64, since time.Time) ([]models.SizeSample, error)
+	PurgeOldSizeHistory(ctx context.Context, retention time.Duration) (int64, error)
+	GetConnectionPeak(ctx context.Context, instanceID int64, since, until time.Time) (*models.ConnectionPeak, error)
+
 	// Suggestion operations
 	UpsertSuggestion(ctx context.Context, sug *models.Suggestion) error
 	GetSuggestionsByStatus(ctx context.Context, instanceID int64, status string) ([]models.Suggestion, error)

@@ -215,6 +215,12 @@ func (a *MainAnalyzer) analyzeOperational(ctx context.Context, coverage map[stri
 			result.ActivityStats = activityStats
 			if activityStats == nil {
 				invalidateDomain(coverage, DomainActivity)
+			} else if peak, err := a.analyzeConnectionPeak(ctx, result.InstanceID, coverage[DomainActivity].CapturedAt); err != nil {
+				// The current sample is still valid; only the trend is missing.
+				result.Errors = append(result.Errors, fmt.Sprintf("connection peak analysis: %v", err))
+				result.ErrorCount++
+			} else {
+				activityStats.Peak = peak
 			}
 		}
 	}
@@ -243,6 +249,20 @@ func (a *MainAnalyzer) analyzeOperational(ctx context.Context, coverage map[stri
 			result.TransactionStats = txStats
 			if txStats == nil {
 				invalidateDomain(coverage, DomainDatabaseStats)
+			}
+		}
+	}
+
+	if id := snapshotFor(coverage, DomainOutageRisk); id != 0 {
+		risk, err := a.analyzeRisk(ctx, result.InstanceID, id, coverage)
+		if err != nil {
+			invalidateDomain(coverage, DomainOutageRisk)
+			result.Errors = append(result.Errors, fmt.Sprintf("outage risk analysis: %v", err))
+			result.ErrorCount++
+		} else {
+			result.Risk = risk
+			if risk == nil {
+				invalidateDomain(coverage, DomainOutageRisk)
 			}
 		}
 	}

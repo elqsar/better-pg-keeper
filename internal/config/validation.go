@@ -133,6 +133,13 @@ func validateStorage(cfg *StorageConfig) ValidationErrors {
 		})
 	}
 
+	if cfg.Retention.SizeHistory < Duration(7*24*time.Hour) {
+		errs = append(errs, ValidationError{
+			Field:   "storage.retention.size_history",
+			Message: fmt.Sprintf("size_history retention must be at least 168h to fit a weekly growth trend, got %s", time.Duration(cfg.Retention.SizeHistory)),
+		})
+	}
+
 	return errs
 }
 
@@ -233,6 +240,13 @@ func validateThresholds(cfg *ThresholdsConfig) ValidationErrors {
 		errs = append(errs, ValidationError{
 			Field:   "thresholds.min_table_size_for_index",
 			Message: "min_table_size_for_index must be positive",
+		})
+	}
+
+	if cfg.DiskCapacityGB < 0 {
+		errs = append(errs, ValidationError{
+			Field:   "thresholds.disk_capacity_gb",
+			Message: "disk_capacity_gb must not be negative (0 means unknown)",
 		})
 	}
 

@@ -49,6 +49,8 @@ type StorageConfig struct {
 type RetentionConfig struct {
 	Snapshots  Duration `yaml:"snapshots"`
 	QueryStats Duration `yaml:"query_stats"`
+	// SizeHistory keeps hourly database size samples for the disk growth trend.
+	SizeHistory Duration `yaml:"size_history"`
 }
 
 // SchedulerConfig contains collection scheduler settings.
@@ -80,6 +82,10 @@ type ThresholdsConfig struct {
 	UnusedIndexDays      int      `yaml:"unused_index_days"`
 	SeqScanRatioWarning  float64  `yaml:"seq_scan_ratio_warning"`
 	MinTableSizeForIndex int      `yaml:"min_table_size_for_index"`
+	// DiskCapacityGB is the size of the volume holding the data directory. SQL
+	// cannot see free disk space, so without it disk growth is reported but no
+	// "full in N days" forecast is made. 0 means unknown.
+	DiskCapacityGB float64 `yaml:"disk_capacity_gb"`
 }
 
 // Duration is a wrapper around time.Duration that supports YAML unmarshaling.
@@ -124,8 +130,9 @@ func Default() Config {
 		Storage: StorageConfig{
 			Path: "./data/pganalyzer.db",
 			Retention: RetentionConfig{
-				Snapshots:  Duration(168 * time.Hour), // 7 days
-				QueryStats: Duration(720 * time.Hour), // 30 days
+				Snapshots:   Duration(168 * time.Hour),  // 7 days
+				QueryStats:  Duration(720 * time.Hour),  // 30 days
+				SizeHistory: Duration(2160 * time.Hour), // 90 days
 			},
 		},
 		Scheduler: SchedulerConfig{

@@ -175,6 +175,10 @@ func (m *mockPGClient) GetStatsResetTime(ctx context.Context) (*time.Time, error
 }
 
 // Operational stats methods
+func (m *mockPGClient) GetOutageRisk(ctx context.Context) (*models.OutageRisk, error) {
+	return &models.OutageRisk{}, nil
+}
+
 func (m *mockPGClient) GetConnectionActivity(ctx context.Context) (*models.ConnectionActivity, error) {
 	return nil, nil
 }

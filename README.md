@@ -6,6 +6,8 @@ A PostgreSQL performance analyzer that collects query statistics, detects perfor
 
 - **Query Statistics Collection**: Collects data from `pg_stat_statements` to track query performance
 - **Performance Analysis**: Identifies slow queries, poor cache performance, table bloat, and unused indexes
+- **Outage Warnings**: Transaction ID wraparound, replication slots retaining WAL, sequences running out,
+  forgotten prepared transactions, disk growth and connection saturation
 - **Automated Recommendations**: Generates actionable suggestions for performance improvements
 - **Web Dashboard**: Server-rendered HTML UI for visualizing metrics and suggestions
 - **REST API**: Full API access to all collected data and analysis results
@@ -50,6 +52,16 @@ CREATE ROLE pganalyzer LOGIN PASSWORD 'change-me';
 GRANT pg_read_all_stats TO pganalyzer;
 GRANT CONNECT ON DATABASE your_database TO pganalyzer;
 ```
+
+To check sequences for exhaustion the role must also be able to read them. Grant
+`pg_read_all_data` (PostgreSQL 14+) or, per schema:
+
+```sql
+GRANT SELECT ON ALL SEQUENCES IN SCHEMA public TO pganalyzer;
+```
+
+Sequences it cannot read are skipped; the rest of the outage checks work with
+`pg_read_all_stats` alone.
 
 `pg_stat_statements.track = all` also counts statements executed inside functions and
 procedures. PGAnalyzer aggregates the resulting rows by query ID, so a query is
@@ -137,11 +149,13 @@ postgres:
 | scheduler.analysis_interval | - | 15m | Analysis interval |
 | storage.retention.snapshots | - | 168h | Snapshot retention (7 days) |
 | storage.retention.query_stats | - | 720h | Independent query history retention (30 days) |
+| storage.retention.size_history | - | 2160h | Hourly database size samples for the disk growth forecast (90 days) |
 | server.port | - | 8080 | HTTP server port |
 | thresholds.slow_query_ms | - | 1000 | Slow query threshold (ms) |
 | thresholds.slow_query_window | - | 24h | Period slow queries are judged over |
 | thresholds.unused_index_days | - | 30 | Minimum days of scan statistics before flagging an unused index |
 | thresholds.cache_hit_ratio | - | 95.0 | Cache hit ratio warning threshold (%) |
+| thresholds.disk_capacity_gb | - | 0 | Size of the data volume; enables the "disk full in N days" forecast |
 
 ## Notifications
 
@@ -375,6 +389,13 @@ PGAnalyzer detects the following issues:
 | idle_in_transaction | Sessions holding a transaction open while idle | Warning/Critical |
 | lock_contention | Queries waiting on locks | Warning/Critical |
 | high_deadlocks | Deadlocks detected | Warning/Critical |
+| xid_wraparound | Oldest unfrozen transaction ID past 1.5x `autovacuum_freeze_max_age` or 500M (critical at 1B); names what blocks freezing | Warning/Critical |
+| multixact_wraparound | Same for multixact IDs | Warning/Critical |
+| replication_slot | Inactive slot retaining >1GB of WAL, any slot >10GB or about to be invalidated, slot holding back freezing, standby replay lag >5 min | Warning/Critical |
+| sequence_exhaustion | Sequence past 75% (critical at 90%) of its range, including a bigint sequence feeding an `integer` column | Warning/Critical |
+| prepared_transaction | Prepared transaction left open for over 1h (critical after 24h) | Warning/Critical |
+| disk_growth | Disk forecast to fill within 30 days (critical within 7) given `disk_capacity_gb`; otherwise size doubling within 90 days | Info/Warning/Critical |
+| connection_saturation | Peak connections over the last 24h above 80% of `max_connections` (critical at 95%) | Warning/Critical |
 
 Scans on read replicas are not visible to PGAnalyzer, which monitors a single
 server. Check replicas before acting on `unused_index`.

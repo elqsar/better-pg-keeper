@@ -27,12 +27,14 @@ const (
 	DomainActivity      = "activity"
 	DomainLocks         = "locks"
 	DomainDatabaseStats = "database_stats"
+	DomainOutageRisk    = "outage_risk"
 )
 
 // AllDomains lists every domain analysis resolves.
 var AllDomains = []string{
 	DomainQueryStats, DomainTableStats, DomainIndexStats,
 	DomainBloat, DomainActivity, DomainLocks, DomainDatabaseStats,
+	DomainOutageRisk,
 }
 
 // DomainCoverage records whether a data domain was actually observed, and how
@@ -82,6 +84,7 @@ type AnalysisResult struct {
 	ActivityStats    *ActivityAnalysis    `json:"activity_stats,omitempty"`
 	LockStats        *LockAnalysis        `json:"lock_stats,omitempty"`
 	TransactionStats *TransactionAnalysis `json:"transaction_stats,omitempty"`
+	Risk             *RiskAnalysis        `json:"risk,omitempty"`
 	ErrorCount       int                  `json:"error_count"`
 	Errors           []string             `json:"errors,omitempty"`
 	// Coverage records which data domains this result actually observed, keyed by
@@ -217,6 +220,8 @@ type ActivityAnalysis struct {
 	WaitingCount          int                        `json:"waiting_count"`
 	LongRunningQueries    []models.LongRunningQuery  `json:"long_running_queries"`
 	IdleInTransaction     []models.IdleInTransaction `json:"idle_in_transaction"`
+	// Peak is the busiest sample over ConnectionPeakWindow, nil without history.
+	Peak *ConnectionPeakAnalysis `json:"peak,omitempty"`
 }
 
 // LockAnalysis contains lock-related analysis.
@@ -334,6 +339,10 @@ type Storage interface {
 	GetLockStats(ctx context.Context, snapshotID int64) (*models.LockStats, error)
 	GetBlockedQueries(ctx context.Context, snapshotID int64) ([]models.BlockedQuery, error)
 	GetExtendedDatabaseStats(ctx context.Context, snapshotID int64) (*models.ExtendedDatabaseStats, error)
+	// Outage risk
+	GetOutageRisk(ctx context.Context, snapshotID int64) (*models.OutageRisk, error)
+	GetSizeHistory(ctx context.Context, instanceID int64, since time.Time) ([]models.SizeSample, error)
+	GetConnectionPeak(ctx context.Context, instanceID int64, since, until time.Time) (*models.ConnectionPeak, error)
 }
 
 // Ensure sqlite.SQLiteStorage implements Storage interface.

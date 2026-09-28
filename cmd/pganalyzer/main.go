@@ -18,6 +18,7 @@ import (
 	"github.com/elqsar/pganalyzer/internal/collector/locks"
 	"github.com/elqsar/pganalyzer/internal/collector/query"
 	"github.com/elqsar/pganalyzer/internal/collector/resource"
+	"github.com/elqsar/pganalyzer/internal/collector/risk"
 	"github.com/elqsar/pganalyzer/internal/collector/schema"
 	"github.com/elqsar/pganalyzer/internal/config"
 	"github.com/elqsar/pganalyzer/internal/logging"
@@ -210,6 +211,11 @@ func run(ctx context.Context, configPath string) error {
 			Storage:    storage,
 			InstanceID: instanceID,
 		}),
+		risk.NewCollector(risk.Config{
+			PGClient:   pgClient,
+			Storage:    storage,
+			InstanceID: instanceID,
+		}),
 	)
 	slog.Info("collectors registered", "count", len(coordinator.Collectors()))
 
@@ -221,7 +227,7 @@ func run(ctx context.Context, configPath string) error {
 	slog.Info("analyzer initialized", "staleness_factor", analyzerCfg.StalenessFactor)
 
 	// Create suggester and register rules
-	suggesterCfg := suggester.DefaultConfig()
+	suggesterCfg := suggester.ConfigFromThresholds(cfg.Thresholds)
 	mainSuggester := suggester.NewSuggester(storage, suggesterCfg, nil)
 	mainSuggester.RegisterRules(
 		rules.NewSlowQueryRule(suggesterCfg),
@@ -237,6 +243,14 @@ func run(ctx context.Context, configPath string) error {
 		rules.NewLockContentionRule(suggesterCfg),
 		rules.NewHighTempUsageRule(suggesterCfg),
 		rules.NewHighDeadlocksRule(suggesterCfg),
+		// Outage-risk rules
+		rules.NewXIDWraparoundRule(suggesterCfg),
+		rules.NewMultixactWraparoundRule(suggesterCfg),
+		rules.NewReplicationSlotRule(suggesterCfg),
+		rules.NewSequenceExhaustionRule(suggesterCfg),
+		rules.NewPreparedTransactionRule(suggesterCfg),
+		rules.NewDiskGrowthRule(suggesterCfg),
+		rules.NewConnectionSaturationRule(suggesterCfg),
 	)
 	slog.Info("suggester initialized", "rules", len(mainSuggester.Rules()))
 

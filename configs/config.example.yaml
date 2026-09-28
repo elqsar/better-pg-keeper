@@ -65,6 +65,10 @@ storage:
     # Default: 720h (30 days)
     query_stats: 720h
 
+    # How long to keep hourly database size samples used to forecast disk growth
+    # Minimum: 168h. Default: 2160h (90 days)
+    size_history: 2160h
+
 # -----------------------------------------------------------------------------
 # Scheduler Settings
 # -----------------------------------------------------------------------------
@@ -197,6 +201,15 @@ thresholds:
   # Days since last analyze before flagging
   # Default: 7 days
   # stale_analyze_days: 7
+
+  # Disk Capacity
+  # -------------
+  # Size of the volume holding the PostgreSQL data directory, in GB. SQL cannot
+  # see free disk space, so with this set PGAnalyzer forecasts "disk full in N
+  # days" from the growth trend (warning under 30 days, critical under 7).
+  # Without it, growth is reported for information only.
+  # For RDS/Cloud SQL use the allocated storage. Default: 0 (unknown)
+  # disk_capacity_gb: 500
 
 # -----------------------------------------------------------------------------
 # Notifications (optional)

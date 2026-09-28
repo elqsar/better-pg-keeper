@@ -280,6 +280,30 @@ func (m *mockStorage) SaveExtendedDatabaseStats(ctx context.Context, snapshotID 
 	return nil
 }
 
+func (m *mockStorage) SaveOutageRisk(ctx context.Context, snapshotID int64, risk *models.OutageRisk) error {
+	return nil
+}
+
+func (m *mockStorage) GetOutageRisk(ctx context.Context, snapshotID int64) (*models.OutageRisk, error) {
+	return nil, nil
+}
+
+func (m *mockStorage) RecordSize(ctx context.Context, instanceID int64, at time.Time, clusterBytes int64) error {
+	return nil
+}
+
+func (m *mockStorage) GetSizeHistory(ctx context.Context, instanceID int64, since time.Time) ([]models.SizeSample, error) {
+	return nil, nil
+}
+
+func (m *mockStorage) PurgeOldSizeHistory(ctx context.Context, retention time.Duration) (int64, error) {
+	return 0, nil
+}
+
+func (m *mockStorage) GetConnectionPeak(ctx context.Context, instanceID int64, since, until time.Time) (*models.ConnectionPeak, error) {
+	return nil, nil
+}
+
 func (m *mockStorage) GetExtendedDatabaseStats(ctx context.Context, snapshotID int64) (*models.ExtendedDatabaseStats, error) {
 	return nil, nil
 }
@@ -435,6 +459,10 @@ func (m *mockPGClient) ExplainWithParams(ctx context.Context, query string, para
 }
 
 // Operational stats methods
+func (m *mockPGClient) GetOutageRisk(ctx context.Context) (*models.OutageRisk, error) {
+	return &models.OutageRisk{}, nil
+}
+
 func (m *mockPGClient) GetConnectionActivity(ctx context.Context) (*models.ConnectionActivity, error) {
 	return nil, nil
 }

@@ -21,6 +21,9 @@ type mockStorage struct {
 	queryDeltas   []models.QueryStatDelta
 	onDelta       func(from, to int64)
 	queryStatsErr error
+	outageRisk    map[int64]*models.OutageRisk
+	sizeHistory   []models.SizeSample
+	connPeak      *models.ConnectionPeak
 	// coverage optionally overrides which snapshots a collector contributed to,
 	// keyed by domain. Nil means "derive it from the data maps above".
 	coverage map[string][]int64
@@ -34,6 +37,7 @@ func newMockStorage() *mockStorage {
 		indexStats:    make(map[int64][]models.IndexStat),
 		bloatStats:    make(map[int64][]models.BloatInfo),
 		extendedStats: make(map[int64]*models.ExtendedDatabaseStats),
+		outageRisk:    make(map[int64]*models.OutageRisk),
 	}
 }
 
@@ -111,6 +115,8 @@ func (m *mockStorage) covers(snapshotID int64, collector string) bool {
 		return len(m.indexStats[snapshotID]) > 0
 	case DomainBloat:
 		return len(m.bloatStats[snapshotID]) > 0
+	case DomainOutageRisk:
+		return m.outageRisk[snapshotID] != nil
 	case DomainActivity, DomainLocks, DomainDatabaseStats:
 		// The mock returns nil for these and the analyzers treat nil as
 		// "not collected", so reporting them as covered costs nothing.
@@ -178,6 +184,24 @@ func (m *mockStorage) GetLockStats(ctx context.Context, snapshotID int64) (*mode
 
 func (m *mockStorage) GetBlockedQueries(ctx context.Context, snapshotID int64) ([]models.BlockedQuery, error) {
 	return nil, nil
+}
+
+func (m *mockStorage) GetOutageRisk(ctx context.Context, snapshotID int64) (*models.OutageRisk, error) {
+	return m.outageRisk[snapshotID], nil
+}
+
+func (m *mockStorage) GetSizeHistory(ctx context.Context, instanceID int64, since time.Time) ([]models.SizeSample, error) {
+	var out []models.SizeSample
+	for _, s := range m.sizeHistory {
+		if !s.CapturedAt.Before(since) {
+			out = append(out, s)
+		}
+	}
+	return out, nil
+}
+
+func (m *mockStorage) GetConnectionPeak(ctx context.Context, instanceID int64, since, until time.Time) (*models.ConnectionPeak, error) {
+	return m.connPeak, nil
 }
 
 func (m *mockStorage) GetExtendedDatabaseStats(ctx context.Context, snapshotID int64) (*models.ExtendedDatabaseStats, error) {
