@@ -31,6 +31,10 @@ A PostgreSQL performance analyzer that collects query statistics, detects perfor
 
 ### 1. Enable pg_stat_statements in PostgreSQL
 
+[docs/postgresql-setup.md](docs/postgresql-setup.md) has the full guide: a
+monitoring role, optional extras, and steps for Amazon RDS/Aurora, Google Cloud
+SQL and Supabase. For a self-managed server, the short version:
+
 Add to your `postgresql.conf`:
 
 ```ini

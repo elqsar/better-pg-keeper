@@ -59,10 +59,13 @@ func (c *PgxClient) setupVersion(ctx context.Context) models.SetupCheck {
 func (c *PgxClient) setupStatStatements(ctx context.Context) models.SetupCheck {
 	check := models.SetupCheck{Name: "pg_stat_statements", Title: "pg_stat_statements"}
 	var installed bool
-	var db string
+	var db, schema, user string
 	if err := c.pool.QueryRow(ctx, `
-		SELECT EXISTS (SELECT 1 FROM pg_extension WHERE extname = 'pg_stat_statements'), current_database()
-	`).Scan(&installed, &db); err != nil {
+		SELECT EXISTS (SELECT 1 FROM pg_extension WHERE extname = 'pg_stat_statements'), current_database(),
+		       COALESCE((SELECT n.nspname FROM pg_extension e JOIN pg_namespace n ON n.oid = e.extnamespace
+		                 WHERE e.extname = 'pg_stat_statements'), ''),
+		       current_user
+	`).Scan(&installed, &db, &schema, &user); err != nil {
 		check.Status, check.Detail = models.SetupFail, err.Error()
 		return check
 	}
@@ -80,10 +83,16 @@ func (c *PgxClient) setupStatStatements(ctx context.Context) models.SetupCheck {
 	var entries int64
 	if err := c.pool.QueryRow(ctx, `SELECT count(*) FROM pg_stat_statements`).Scan(&entries); err != nil {
 		check.Status = models.SetupFail
-		if strings.Contains(err.Error(), "shared_preload_libraries") {
+		switch {
+		case strings.Contains(err.Error(), "shared_preload_libraries"):
 			check.Detail = "The extension exists but the library is not loaded, so it records nothing."
 			check.Fix = preloadFix
-		} else {
+		case strings.Contains(err.Error(), "SQLSTATE 42P01"):
+			// Installed in a schema the role doesn't search, as on Supabase.
+			check.Detail = fmt.Sprintf("The extension is in schema %q, which is not on %q's search_path.", schema, user)
+			check.Fix = fmt.Sprintf("ALTER ROLE %s SET search_path = \"$user\", public, %s;\nPGAnalyzer picks it up on its next connection; restart it to apply now.",
+				quoteIdentifier(user), quoteIdentifier(schema))
+		default:
 			check.Detail = "Reading pg_stat_statements failed: " + err.Error()
 		}
 		return check

@@ -68,10 +68,12 @@ func TestSetupChecks(t *testing.T) {
 	const (
 		plainRole = "pgk_it_setup_plain"
 		bareDB    = "pgk_it_setup_bare"
+		schemaDB  = "pgk_it_setup_schema"
 	)
 	cleanup := func() {
 		bg := context.Background()
 		_, _ = conn.Exec(bg, "DROP DATABASE IF EXISTS "+bareDB+" WITH (FORCE)")
+		_, _ = conn.Exec(bg, "DROP DATABASE IF EXISTS "+schemaDB+" WITH (FORCE)")
 		_, _ = conn.Exec(bg, "DROP ROLE IF EXISTS "+plainRole)
 	}
 	cleanup()
@@ -82,6 +84,7 @@ func TestSetupChecks(t *testing.T) {
 	for _, stmt := range []string{
 		"CREATE ROLE " + plainRole + " LOGIN PASSWORD 'plain'",
 		"CREATE DATABASE " + bareDB,
+		"CREATE DATABASE " + schemaDB,
 	} {
 		if _, err := conn.Exec(ctx, stmt); err != nil {
 			t.Fatalf("%s: %v", stmt, err)
@@ -104,6 +107,23 @@ func TestSetupChecks(t *testing.T) {
 	}
 	if s := plain["pg_stat_statements"]; s.Status != models.SetupOK {
 		t.Errorf("plain role pg_stat_statements = %+v, want ok", s)
+	}
+
+	// The extension in a schema the role doesn't search, as on Supabase.
+	schemaConn, err := pgx.Connect(ctx, fmt.Sprintf("host=%s port=%d dbname=%s user=%s password=%s sslmode=%s",
+		host, port, schemaDB, user, password, envOr("POSTGRES_SSLMODE", "disable")))
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, stmt := range []string{"CREATE SCHEMA extensions", "CREATE EXTENSION pg_stat_statements SCHEMA extensions"} {
+		if _, err := schemaConn.Exec(ctx, stmt); err != nil {
+			t.Fatalf("%s: %v", stmt, err)
+		}
+	}
+	schemaConn.Close(ctx)
+	if s := checks(schemaDB, user, password)["pg_stat_statements"]; s.Status != models.SetupFail ||
+		!strings.Contains(s.Fix, `SET search_path = "$user", public, "extensions";`) {
+		t.Errorf("extension outside search_path = %+v", s)
 	}
 
 	bare := checks(bareDB, user, password)

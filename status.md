@@ -312,6 +312,29 @@ Last updated: 2026-09-28. Everything below is committed.
       OK and the banner switched to "still collecting history"
     - `admin/admin` was refused at startup
 
+### 9. Setup docs (2026-09-28)
+
+- `docs/postgresql-setup.md`, a how-to guide. It fixes the broken link in
+  `configs/config.example.yaml` and is linked from the README Quick Start. It
+  covers:
+  - requirements
+  - self-managed setup
+  - RDS/Aurora (parameter groups, `rds_superuser`)
+  - Cloud SQL (flags, Auth Proxy)
+  - Supabase (the `extensions` schema, direct vs session pooler)
+  - why transaction-mode poolers don't work
+  - a troubleshooting table keyed on setup-check messages
+- The optional grants are spelled out: `pg_read_all_data` or schema `SELECT`
+  enables index advice and sequence checks. Without them those queries are
+  skipped.
+- Found while testing the guide: with the extension in a schema the role
+  doesn't search (as on Supabase), the setup check failed without a fix. It
+  now names the schema and prints the `ALTER ROLE … SET search_path` fix.
+  Covered by a new case in `tests/integration/setup_test.go`.
+- The self-managed steps were verified on PG14: role created as documented,
+  `-check` all OK after the `search_path` fix. The managed-service sections
+  aren't verified against live services; each points to `-check` to confirm.
+
 ## Known gaps in what's done
 
 - The dashboard and query pages still use lifetime means and a hard-coded 1000 ms
@@ -361,19 +384,16 @@ Last updated: 2026-09-28. Everything below is committed.
 
 ## Next steps (in order)
 
-1. **Setup docs**: `docs/postgresql-setup.md` (fixes the broken link in
-   `configs/config.example.yaml`), with RDS/Aurora, Cloud SQL and Supabase
-   sections.
-2. **Dashboard catches up with the analyzer.**
+1. **Dashboard catches up with the analyzer.**
    - Windowed slow-query stats and the configured threshold (see gaps).
    - An outage-risk panel, including `SequencesUnreadable`.
    - Rendered suggestion markdown.
-3. **Housekeeping.**
+2. **Housekeeping.**
    - Delete the stale root `migrations/sqlite/`.
    - Run golangci-lint.
    - Add collector subpackage tests.
    - Merge `feat/config-review` into `main`.
-4. **Releases.**
+3. **Releases.**
    - CI: unit, lint, and integration tests on PG14/PG17.
    - Goreleaser and a multi-arch image (the Dockerfile hard-codes amd64).
    - A Helm chart.
