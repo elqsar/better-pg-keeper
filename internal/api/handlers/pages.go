@@ -42,6 +42,13 @@ type PageHandler struct {
 	verifier   *verify.Verifier
 	setup      *setup.Checker
 	queries    *QueryWindowConfig
+	risk       *OutageRiskConfig
+}
+
+// WithOutageRisk adds the outage-risk panel to the dashboard.
+func (h *PageHandler) WithOutageRisk(cfg OutageRiskConfig) *PageHandler {
+	h.risk = &cfg
+	return h
 }
 
 // WithQueryWindow makes the dashboard's query figures cover the slow-query
@@ -85,7 +92,9 @@ type DashboardPageData struct {
 	BasePageData
 	// Setup is the setup checklist, shown as a banner when something needs
 	// attention or history is still being collected.
-	Setup            *SetupBanner
+	Setup *SetupBanner
+	// Risk summarises the outage-risk signals; nil before the first collection.
+	Risk             *RiskPanel
 	CacheHitRatio    float64
 	TotalQueries     int64
 	SlowQueriesCount int
@@ -182,6 +191,11 @@ func (h *PageHandler) Dashboard(c echo.Context) error {
 		c.Logger().Errorf("failed to get suggestions: %v", err)
 	} else {
 		data.ActiveSuggestions = len(suggestions)
+		if risk, err := buildRiskPanel(ctx, h.risk, h.instanceID, suggestions); err != nil {
+			c.Logger().Errorf("failed to build outage-risk panel: %v", err)
+		} else {
+			data.Risk = risk
+		}
 
 		// Recent 5 suggestions
 		limit := 5

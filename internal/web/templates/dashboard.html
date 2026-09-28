@@ -111,6 +111,50 @@
                 </div>
             </div>
 
+            {{with .Risk}}
+            <!-- Outage Risk -->
+            <div class="card overflow-hidden mb-8">
+                <div class="px-6 py-4 border-b border-gray-200 flex items-center justify-between">
+                    <h2 class="font-semibold text-gray-900">Outage risk <span class="text-sm font-medium text-gray-500">as of {{formatTime .CollectedAt}}{{if .InRecovery}} · standby{{end}}</span></h2>
+                    <a href="/suggestions" class="text-sm text-primary hover:text-primary-hover font-medium">Suggestions</a>
+                </div>
+                <div class="p-6">
+                    <table class="w-full">
+                        <tbody class="divide-y divide-gray-100">
+                            <tr>
+                                <td class="py-3 text-gray-500">Transaction ID wraparound</td>
+                                <td class="py-3 text-gray-900">{{formatFraction .XIDFraction}} of the limit{{if .XIDDatabase}} (oldest: {{.XIDDatabase}}){{end}} · multixact {{formatFraction .MXIDFraction}}</td>
+                                <td class="py-3 text-right">{{template "riskIssues" .XIDIssues}}</td>
+                            </tr>
+                            <tr>
+                                <td class="py-3 text-gray-500">Replication</td>
+                                <td class="py-3 text-gray-900">{{if .Slots}}{{.Slots}} slot(s){{if .InactiveSlots}}, {{.InactiveSlots}} inactive{{end}}, {{formatBytes .RetainedWALBytes}} WAL retained{{else}}No replication slots{{end}}{{if .MaxReplayLagSecs}} · replay lag {{formatDurationSec .MaxReplayLagSecs}}{{end}}</td>
+                                <td class="py-3 text-right">{{template "riskIssues" .SlotIssues}}</td>
+                            </tr>
+                            <tr>
+                                <td class="py-3 text-gray-500">Sequences</td>
+                                <td class="py-3 text-gray-900">{{with .TopSequence}}Highest: <span class="font-mono">{{.SchemaName}}.{{.SequenceName}}</span> at {{formatFraction .UsedFraction}}{{else}}No sequences in use{{end}}{{if .SequencesOverHalf}} · {{.SequencesOverHalf}} over 50%{{end}}{{if .SequencesUnreadable}} · <span class="text-amber-700">{{.SequencesUnreadable}} not readable by the monitoring role</span>{{end}}</td>
+                                <td class="py-3 text-right">{{template "riskIssues" .SequenceIssues}}</td>
+                            </tr>
+                            <tr>
+                                <td class="py-3 text-gray-500">Prepared transactions</td>
+                                <td class="py-3 text-gray-900">{{if .PreparedXacts}}{{.PreparedXacts}} open{{else}}None{{end}}</td>
+                                <td class="py-3 text-right">{{template "riskIssues" .PreparedIssues}}</td>
+                            </tr>
+                            <tr>
+                                <td class="py-3 text-gray-500">Disk</td>
+                                <td class="py-3 text-gray-900">{{formatBytes .ClusterBytes}}{{if .CapacityBytes}} of {{formatBytes .CapacityBytes}}{{end}}{{if .HasTrend}} · {{if .Shrinking}}shrinking {{else}}+{{end}}{{formatBytes .GrowthBytes}}/day{{if ge .DaysToFull 0.0}} · full in ~{{printf "%.0f" .DaysToFull}} days{{end}}{{else}} · growth trend after 24h of history{{end}}{{if not .CapacityBytes}} · set <span class="font-mono">thresholds.disk_capacity_gb</span> for a forecast{{end}}</td>
+                                <td class="py-3 text-right">{{template "riskIssues" .DiskIssues}}</td>
+                            </tr>
+                        </tbody>
+                    </table>
+                    {{if .Unavailable}}
+                    <p class="mt-4 text-sm text-amber-700">Checks that could not run: {{range $i, $c := .Unavailable}}{{if $i}}, {{end}}{{$c}}{{end}}. Their rows may be incomplete; see <a href="/setup" class="underline">setup</a>.</p>
+                    {{end}}
+                </div>
+            </div>
+            {{end}}
+
             <div class="grid grid-cols-1 lg:grid-cols-2 gap-6">
                 <!-- Top Queries -->
                 <div class="card overflow-hidden">
@@ -207,3 +251,5 @@
 </body>
 </html>
 {{end}}
+
+{{define "riskIssues"}}{{if .}}<a href="/suggestions" class="badge-warning">{{.}} active</a>{{else}}<span class="badge-success">OK</span>{{end}}{{end}}

@@ -36,6 +36,7 @@ type Server struct {
 	verifier      *verify.Verifier
 	setup         *setup.Checker
 	queries       handlers.QueryWindowConfig
+	risk          handlers.OutageRiskConfig
 }
 
 // ServerConfig holds configuration for creating a Server.
@@ -55,6 +56,8 @@ type ServerConfig struct {
 	// analyzer's. Zero values fall back to 24h and 1000ms.
 	SlowQueryWindow time.Duration
 	SlowQueryMs     float64
+	// DiskCapacityBytes enables the dashboard's "disk full in N days"; 0 means unknown.
+	DiskCapacityBytes int64
 	// Setup enables the /setup page, the dashboard banner and the health
 	// setup summary. Optional.
 	Setup *setup.Checker
@@ -151,6 +154,7 @@ func NewServer(cfg ServerConfig) (*Server, error) {
 			Window:      cfg.SlowQueryWindow,
 			SlowQueryMs: cfg.SlowQueryMs,
 		},
+		risk: handlers.OutageRiskConfig{Storage: cfg.Storage, DiskCapacityBytes: cfg.DiskCapacityBytes},
 	}
 
 	// Register routes
@@ -168,7 +172,7 @@ func (s *Server) registerRoutes() {
 	schemaHandler := handlers.NewSchemaHandler(s.storage, s.instanceID)
 	suggestionsHandler := handlers.NewSuggestionsHandler(s.storage, s.instanceID)
 	snapshotsHandler := handlers.NewSnapshotsHandler(s.storage, s.scheduler, s.instanceID)
-	pageHandler := handlers.NewPageHandler(s.storage, s.instanceID, s.version).WithVerifier(s.verifier).WithSetup(s.setup).WithQueryWindow(s.queries)
+	pageHandler := handlers.NewPageHandler(s.storage, s.instanceID, s.version).WithVerifier(s.verifier).WithSetup(s.setup).WithQueryWindow(s.queries).WithOutageRisk(s.risk)
 
 	// Health endpoint (no auth required - handled in middleware)
 	s.echo.GET("/health", healthHandler.GetHealth)

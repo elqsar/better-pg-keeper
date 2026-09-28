@@ -50,6 +50,7 @@ func NewTemplateRenderer() (*TemplateRenderer, error) {
 		"formatDurationSec":   formatDurationSec,
 		"formatMs":            verify.FormatMs,
 		"formatSpan":          formatSpan,
+		"formatFraction":      formatFraction,
 	}
 
 	tmpl, err := template.New("").Funcs(funcMap).ParseFS(templatesFS, "templates/*.html")
@@ -299,4 +300,12 @@ func formatSpan(d time.Duration) string {
 		return fmt.Sprintf("%d days", int(d.Hours()/24))
 	}
 	return fmt.Sprintf("%dh", int(d.Hours()))
+}
+
+// formatFraction renders a 0-1 fraction as a percentage, with a decimal below 10%.
+func formatFraction(f float64) string {
+	if f < 0.1 {
+		return fmt.Sprintf("%.1f%%", 100*f)
+	}
+	return fmt.Sprintf("%.0f%%", 100*f)
 }

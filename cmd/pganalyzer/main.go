@@ -366,6 +366,8 @@ func run(ctx context.Context, configPath string) error {
 
 		SlowQueryWindow: time.Duration(cfg.Thresholds.SlowQueryWindow),
 		SlowQueryMs:     float64(cfg.Thresholds.SlowQueryMs),
+		// Same conversion as suggester.ConfigFromThresholds.
+		DiskCapacityBytes: int64(cfg.Thresholds.DiskCapacityGB * (1 << 30)),
 	})
 	if err != nil {
 		return fmt.Errorf("creating api server: %w", err)
