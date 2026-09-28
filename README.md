@@ -193,7 +193,7 @@ PGAnalyzer can post to Slack or any webhook, so nobody has to watch the dashboar
   `collection_stale_after`, and a message when it recovers.
 - **Digest** (weekly by default): active issues by severity, issues that
   appeared or were resolved in the period, and the queries that used the most
-  database time.
+  database time. Resolved query issues show what the fix did (see below).
 
 ```yaml
 notifications:
@@ -210,6 +210,21 @@ Check the setup with `pganalyzer -config configs/config.yaml -notify-test` (or
 
 Alerts come from PGAnalyzer itself, so they stop if PGAnalyzer stops. Point an
 uptime monitor at `/health` to cover that.
+
+## Fix Verification
+
+When a `slow_query` or `index_recommendation` suggestion resolves, PGAnalyzer
+compares the mean time of its queries before and after, from query history:
+"index on orders(status, created_at): 3.2s → 40ms (99% faster)". The result is
+shown on the suggestion page and next to the issue in the digest.
+
+- Each side covers up to `thresholds.slow_query_window` (default 24h). A slow
+  query resolves only once its trailing-window mean drops, up to a window after
+  the fix, so its "before" period ends a window earlier.
+- Verdicts: faster (at least 20% lower), slower (at least 20% higher), no
+  significant change, no longer running, or waiting for data. A verdict needs at
+  least 1h and 10 calls after the resolution.
+- History older than `storage.retention.query_stats` can't be compared.
 
 ## Docker Deployment
 

@@ -32,6 +32,7 @@ import (
 	"github.com/elqsar/pganalyzer/internal/storage/sqlite"
 	"github.com/elqsar/pganalyzer/internal/suggester"
 	"github.com/elqsar/pganalyzer/internal/suggester/rules"
+	"github.com/elqsar/pganalyzer/internal/verify"
 )
 
 // Build-time variables set via ldflags
@@ -297,6 +298,10 @@ func run(ctx context.Context, configPath string) error {
 		"analysis_interval", cfg.Scheduler.AnalysisInterval,
 	)
 
+	// Fix verification compares query history over a slow-query window on
+	// each side of a suggestion's resolution.
+	verifier := verify.New(storage, time.Duration(cfg.Thresholds.SlowQueryWindow))
+
 	if cfg.Notifications.Enabled {
 		channels, err := notifier.NewChannels(cfg.Notifications.Channels, nil)
 		if err != nil {
@@ -309,6 +314,7 @@ func run(ctx context.Context, configPath string) error {
 			Channels:   channels,
 			InstanceID: instanceID,
 			Instance:   instanceName,
+			Verifier:   verifier,
 		})
 		if err != nil {
 			return fmt.Errorf("creating notifier: %w", err)
@@ -331,6 +337,7 @@ func run(ctx context.Context, configPath string) error {
 		Scheduler:     sched,
 		InstanceID:    instanceID,
 		Version:       version,
+		Verifier:      verifier,
 	})
 	if err != nil {
 		return fmt.Errorf("creating api server: %w", err)

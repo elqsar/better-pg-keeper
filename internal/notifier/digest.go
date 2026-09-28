@@ -9,6 +9,7 @@ import (
 	"github.com/elqsar/pganalyzer/internal/analyzer"
 	"github.com/elqsar/pganalyzer/internal/config"
 	"github.com/elqsar/pganalyzer/internal/models"
+	"github.com/elqsar/pganalyzer/internal/verify"
 )
 
 // topQueryCount is how many queries the digest lists.
@@ -105,13 +106,14 @@ func (n *Notifier) buildDigest(ctx context.Context, since, now time.Time) (Messa
 		}
 	}
 	// Suggestions are listed most severe first, so the capped lists keep the
-	// most important ones. Resolution time is not stored; last_seen_at is the
-	// last analysis that still saw the issue, just before it resolved.
+	// most important ones.
 	for _, s := range resolved {
-		if !s.LastSeenAt.Before(since) {
+		if !resolvedAt(s).Before(since) {
 			d.ResolvedTotal++
 			if len(d.Resolved) < maxListed {
-				d.Resolved = append(d.Resolved, n.item(EventResolved, s, ""))
+				it := n.item(EventResolved, s, "")
+				it.Outcome = n.outcome(ctx, s, now)
+				d.Resolved = append(d.Resolved, it)
 			}
 		}
 	}
@@ -176,4 +178,34 @@ func (n *Notifier) topQueries(ctx context.Context, since, now time.Time) ([]TopQ
 		})
 	}
 	return top, nil
+}
+
+// resolvedAt is when a suggestion resolved. Rows resolved before resolution
+// times were stored fall back to the last analysis that still saw the issue.
+func resolvedAt(s models.Suggestion) time.Time {
+	if s.ResolvedAt != nil {
+		return *s.ResolvedAt
+	}
+	return s.LastSeenAt
+}
+
+// outcome summarises fix verification for a resolved issue, or "" when there
+// is no verdict yet. Verification is best effort: the digest goes out without it.
+func (n *Notifier) outcome(ctx context.Context, s models.Suggestion, now time.Time) string {
+	if n.verifier == nil {
+		return ""
+	}
+	res, err := n.verifier.Verify(ctx, s, now)
+	if err != nil {
+		n.logger.Warn("notifier: fix verification failed", "suggestion", s.ID, "error", err)
+		return ""
+	}
+	if res == nil {
+		return ""
+	}
+	switch res.Verdict {
+	case verify.VerdictImproved, verify.VerdictRegressed, verify.VerdictUnchanged, verify.VerdictStopped:
+		return res.Summary
+	}
+	return ""
 }

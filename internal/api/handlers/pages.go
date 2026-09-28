@@ -11,6 +11,7 @@ import (
 	"github.com/labstack/echo/v4"
 
 	"github.com/elqsar/pganalyzer/internal/models"
+	"github.com/elqsar/pganalyzer/internal/verify"
 )
 
 // PageStorage defines the storage interface needed by page handlers.
@@ -37,6 +38,13 @@ type PageHandler struct {
 	storage    PageStorage
 	instanceID int64
 	version    string
+	verifier   *verify.Verifier
+}
+
+// WithVerifier enables fix verification on resolved suggestion pages.
+func (h *PageHandler) WithVerifier(v *verify.Verifier) *PageHandler {
+	h.verifier = v
+	return h
 }
 
 // NewPageHandler creates a new PageHandler.
@@ -678,6 +686,9 @@ type SuggestionDetailPageData struct {
 	BasePageData
 	Suggestion     *models.Suggestion
 	DuplicateIndex *DuplicateIndexSuggestionDetails
+	// Verification compares query history before and after a resolved
+	// suggestion; nil when the suggestion is not resolved or not about queries.
+	Verification *verify.Result
 }
 
 // DuplicateIndexSuggestionDetails contains structured duplicate-index metadata for the UI.
@@ -729,6 +740,14 @@ func (h *PageHandler) SuggestionDetail(c echo.Context) error {
 			c.Logger().Errorf("failed to parse duplicate index suggestion metadata: %v", err)
 		} else {
 			data.DuplicateIndex = details
+		}
+	}
+	if h.verifier != nil {
+		result, err := h.verifier.Verify(ctx, *suggestion, time.Now())
+		if err != nil {
+			c.Logger().Errorf("failed to verify suggestion %d: %v", suggestion.ID, err)
+		} else {
+			data.Verification = result
 		}
 	}
 

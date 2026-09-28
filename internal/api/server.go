@@ -17,6 +17,7 @@ import (
 	"github.com/elqsar/pganalyzer/internal/postgres"
 	"github.com/elqsar/pganalyzer/internal/scheduler"
 	"github.com/elqsar/pganalyzer/internal/storage/sqlite"
+	"github.com/elqsar/pganalyzer/internal/verify"
 	"github.com/elqsar/pganalyzer/internal/web"
 )
 
@@ -31,6 +32,7 @@ type Server struct {
 	instanceID    int64
 	logger        *log.Logger
 	version       string
+	verifier      *verify.Verifier
 }
 
 // ServerConfig holds configuration for creating a Server.
@@ -44,6 +46,8 @@ type ServerConfig struct {
 	InstanceID    int64
 	Logger        *log.Logger
 	Version       string
+	// Verifier enables fix verification on resolved suggestions. Optional.
+	Verifier *verify.Verifier
 }
 
 // NewServer creates a new API server.
@@ -130,6 +134,7 @@ func NewServer(cfg ServerConfig) (*Server, error) {
 		instanceID:    cfg.InstanceID,
 		logger:        logger,
 		version:       version,
+		verifier:      cfg.Verifier,
 	}
 
 	// Register routes
@@ -147,7 +152,7 @@ func (s *Server) registerRoutes() {
 	schemaHandler := handlers.NewSchemaHandler(s.storage, s.instanceID)
 	suggestionsHandler := handlers.NewSuggestionsHandler(s.storage, s.instanceID)
 	snapshotsHandler := handlers.NewSnapshotsHandler(s.storage, s.scheduler, s.instanceID)
-	pageHandler := handlers.NewPageHandler(s.storage, s.instanceID, s.version)
+	pageHandler := handlers.NewPageHandler(s.storage, s.instanceID, s.version).WithVerifier(s.verifier)
 
 	// Health endpoint (no auth required - handled in middleware)
 	s.echo.GET("/health", healthHandler.GetHealth)

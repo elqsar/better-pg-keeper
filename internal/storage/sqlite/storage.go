@@ -1325,13 +1325,14 @@ func (s *SQLiteStorage) GetExtendedDatabaseStats(ctx context.Context, snapshotID
 // UpsertSuggestion creates or updates a suggestion.
 // Suggestions are deduplicated by (instance_id, rule_id, target_object).
 func (s *SQLiteStorage) UpsertSuggestion(ctx context.Context, sug *models.Suggestion) error {
-	now := time.Now()
+	now := time.Now().Round(0)
 
 	// Try to update existing suggestion
 	result, err := s.writeDB.ExecContext(ctx, `
 		UPDATE suggestions
 		SET severity = ?, title = ?, description = ?, metadata = ?,
 			status = CASE WHEN status = 'resolved' THEN 'active' ELSE status END,
+			resolved_at = CASE WHEN status = 'resolved' THEN NULL ELSE resolved_at END,
 			last_seen_at = ?
 		WHERE instance_id = ? AND rule_id = ? AND target_object = ?
 	`, sug.Severity, sug.Title, sug.Description, sug.Metadata, now,
@@ -1370,7 +1371,8 @@ func (s *SQLiteStorage) UpsertSuggestion(ctx context.Context, sug *models.Sugges
 func (s *SQLiteStorage) GetSuggestionsByStatus(ctx context.Context, instanceID int64, status string) ([]models.Suggestion, error) {
 	rows, err := s.readDB.QueryContext(ctx, `
 		SELECT id, instance_id, rule_id, severity, title, description,
-			target_object, metadata, status, first_seen_at, last_seen_at, dismissed_at
+			target_object, metadata, status, first_seen_at, last_seen_at, dismissed_at,
+			resolved_at
 		FROM suggestions
 		WHERE instance_id = ? AND status = ?
 		ORDER BY
@@ -1393,7 +1395,7 @@ func (s *SQLiteStorage) GetSuggestionsByStatus(ctx context.Context, instanceID i
 		err := rows.Scan(
 			&sug.ID, &sug.InstanceID, &sug.RuleID, &sug.Severity, &sug.Title,
 			&sug.Description, &sug.TargetObject, &sug.Metadata, &sug.Status,
-			&sug.FirstSeenAt, &sug.LastSeenAt, &sug.DismissedAt,
+			&sug.FirstSeenAt, &sug.LastSeenAt, &sug.DismissedAt, &sug.ResolvedAt,
 		)
 		if err != nil {
 			return nil, fmt.Errorf("scanning suggestion: %w", err)
@@ -1409,13 +1411,14 @@ func (s *SQLiteStorage) GetSuggestionByID(ctx context.Context, id int64) (*model
 	var sug models.Suggestion
 	err := s.readDB.QueryRowContext(ctx, `
 		SELECT id, instance_id, rule_id, severity, title, description,
-			target_object, metadata, status, first_seen_at, last_seen_at, dismissed_at
+			target_object, metadata, status, first_seen_at, last_seen_at, dismissed_at,
+			resolved_at
 		FROM suggestions
 		WHERE id = ?
 	`, id).Scan(
 		&sug.ID, &sug.InstanceID, &sug.RuleID, &sug.Severity, &sug.Title,
 		&sug.Description, &sug.TargetObject, &sug.Metadata, &sug.Status,
-		&sug.FirstSeenAt, &sug.LastSeenAt, &sug.DismissedAt,
+		&sug.FirstSeenAt, &sug.LastSeenAt, &sug.DismissedAt, &sug.ResolvedAt,
 	)
 
 	if err == sql.ErrNoRows {
@@ -1430,7 +1433,7 @@ func (s *SQLiteStorage) GetSuggestionByID(ctx context.Context, id int64) (*model
 
 // DismissSuggestion marks a suggestion as dismissed.
 func (s *SQLiteStorage) DismissSuggestion(ctx context.Context, id int64) error {
-	now := time.Now()
+	now := time.Now().Round(0)
 	_, err := s.writeDB.ExecContext(ctx, `
 		UPDATE suggestions
 		SET status = 'dismissed', dismissed_at = ?
@@ -1446,11 +1449,12 @@ func (s *SQLiteStorage) DismissSuggestion(ctx context.Context, id int64) error {
 
 // ResolveSuggestion marks a suggestion as resolved.
 func (s *SQLiteStorage) ResolveSuggestion(ctx context.Context, id int64) error {
+	// Only an active suggestion moves; resolving twice keeps the first time.
 	_, err := s.writeDB.ExecContext(ctx, `
 		UPDATE suggestions
-		SET status = 'resolved'
-		WHERE id = ?
-	`, id)
+		SET status = 'resolved', resolved_at = ?
+		WHERE id = ? AND status = 'active'
+	`, time.Now().Round(0), id)
 
 	if err != nil {
 		return fmt.Errorf("resolving suggestion: %w", err)

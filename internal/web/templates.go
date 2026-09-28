@@ -4,6 +4,7 @@ package web
 import (
 	"embed"
 	"fmt"
+	"github.com/elqsar/pganalyzer/internal/verify"
 	"html/template"
 	"io"
 	"strings"
@@ -47,6 +48,7 @@ func NewTemplateRenderer() (*TemplateRenderer, error) {
 		"dict":                dict,
 		"eq":                  eq,
 		"formatDurationSec":   formatDurationSec,
+		"formatMs":            verify.FormatMs,
 	}
 
 	tmpl, err := template.New("").Funcs(funcMap).ParseFS(templatesFS, "templates/*.html")

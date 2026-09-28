@@ -11,6 +11,7 @@ import (
 
 	"github.com/elqsar/pganalyzer/internal/config"
 	"github.com/elqsar/pganalyzer/internal/models"
+	"github.com/elqsar/pganalyzer/internal/verify"
 )
 
 // tickInterval is how often the notifier checks for something to send. Alerts
@@ -40,6 +41,11 @@ type CollectionStatus interface {
 	CollectionStatus() (lastSuccess time.Time, lastError string)
 }
 
+// Verifier checks whether a resolved suggestion made its queries faster.
+type Verifier interface {
+	Verify(ctx context.Context, sug models.Suggestion, now time.Time) (*verify.Result, error)
+}
+
 // Options configures a Notifier.
 type Options struct {
 	Config     config.NotificationsConfig
@@ -49,6 +55,8 @@ type Options struct {
 	InstanceID int64
 	// Instance names the monitored database in messages, e.g. host:port/db.
 	Instance string
+	// Verifier adds fix verification to resolved issues in the digest. Optional.
+	Verifier Verifier
 	Logger   *slog.Logger
 	// Now overrides the clock, for tests.
 	Now func() time.Time
@@ -62,6 +70,7 @@ type Notifier struct {
 	channels   []Channel
 	instanceID int64
 	instance   string
+	verifier   Verifier
 	logger     *slog.Logger
 	now        func() time.Time
 	started    time.Time
@@ -94,6 +103,7 @@ func New(opts Options) (*Notifier, error) {
 		channels:   opts.Channels,
 		instanceID: opts.InstanceID,
 		instance:   opts.Instance,
+		verifier:   opts.Verifier,
 		logger:     opts.Logger,
 		now:        opts.Now,
 		started:    opts.Now(),

@@ -70,6 +70,12 @@
                                     <td class="py-3 text-gray-500">Last Seen</td>
                                     <td class="py-3 text-right text-gray-700">{{formatTime .Suggestion.LastSeenAt}}</td>
                                 </tr>
+                                {{with .Suggestion.ResolvedAt}}
+                                <tr>
+                                    <td class="py-3 text-gray-500">Resolved</td>
+                                    <td class="py-3 text-right text-gray-700">{{formatTime .}}</td>
+                                </tr>
+                                {{end}}
                                 {{if .DuplicateIndex}}
                                 <tr>
                                     <td class="py-3 text-gray-500">Candidate Index</td>
@@ -120,6 +126,45 @@
                     </div>
                 </div>
             </div>
+
+            {{with .Verification}}
+            <!-- Fix Verification Card -->
+            <div class="card overflow-hidden mb-6">
+                <div class="px-6 py-4 border-b border-gray-200 bg-gray-50 flex items-center gap-3">
+                    <h2 class="font-semibold text-gray-900">Fix verification</h2>
+                    {{if eq .Verdict "improved"}}<span class="badge-success">Faster</span>
+                    {{else if eq .Verdict "regressed"}}<span class="badge-warning">Slower</span>
+                    {{else if eq .Verdict "pending"}}<span class="badge-info">Waiting for data</span>
+                    {{else if eq .Verdict "stopped"}}<span class="badge-gray">No longer running</span>
+                    {{else if eq .Verdict "unchanged"}}<span class="badge-gray">No significant change</span>
+                    {{else}}<span class="badge-gray">No earlier history</span>{{end}}
+                </div>
+                <div class="p-6">
+                    <p class="text-gray-700 mb-4">{{.Summary}}</p>
+                    <table class="w-full">
+                        <thead>
+                            <tr class="text-gray-500 text-sm">
+                                <th class="py-2 text-left font-medium">Query</th>
+                                <th class="py-2 text-right font-medium">Before the fix</th>
+                                <th class="py-2 text-right font-medium">After the fix</th>
+                                <th class="py-2 text-right font-medium">Result</th>
+                            </tr>
+                        </thead>
+                        <tbody class="divide-y divide-gray-100">
+                            {{range .Queries}}
+                            <tr>
+                                <td class="py-3 font-mono text-gray-900"><a href="/queries/{{.QueryID}}" class="text-primary hover:underline">{{if .Query}}{{truncate .Query 80}}{{else}}{{.QueryID}}{{end}}</a></td>
+                                <td class="py-3 text-right text-gray-700">{{with .Before}}{{formatMs .MeanMs}} · {{formatNumber .Calls}} calls{{else}}—{{end}}</td>
+                                <td class="py-3 text-right text-gray-700">{{with .After}}{{if .Calls}}{{formatMs .MeanMs}} · {{end}}{{formatNumber .Calls}} calls{{else}}—{{end}}</td>
+                                <td class="py-3 text-right text-gray-700">{{.Verdict}}</td>
+                            </tr>
+                            {{end}}
+                        </tbody>
+                    </table>
+                    <p class="mt-4 text-sm text-gray-500">Mean execution time from query history, over up to a slow-query window on each side of the resolution ({{formatTime .ResolvedAt}}). A slow query resolves up to a window after its fix, so its "before" period ends a window earlier.</p>
+                </div>
+            </div>
+            {{end}}
 
             <!-- Actions -->
             <div class="flex items-center gap-4">

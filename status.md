@@ -200,6 +200,44 @@ Last updated: 2026-09-28. Everything below is committed.
     "Autovacuum is disabled" webhook alert arrived about 60s after start, and the
     suggestion page rendered.
 
+### 6. Fix verification (2026-09-28)
+
+- **`resolved_at` on suggestions** (migration `021_suggestion_resolved_at.sql`):
+  - Set when a suggestion resolves. Resolving again keeps the first time, and
+    the issue coming back clears it.
+  - Backfilled from `last_seen_at` for rows resolved earlier.
+  - The migration also strips the Go monotonic-clock suffix (`m=+…`) from
+    suggestion timestamps, which 015 missed. Suggestion writes now use
+    `Round(0)`.
+  - Exposed in the suggestions API and on the suggestion page.
+  - The digest now counts resolved issues by `resolved_at`.
+- **`internal/verify`** compares query history before and after a resolved
+  `slow_query` or `index_recommendation` suggestion:
+  - Means come from deltas between cumulative `query_history` samples, so a
+    `pg_stat_statements` reset counts from zero instead of going negative.
+  - Each side covers up to `slow_query_window`. For `slow_query`, the "before"
+    period ends a window earlier, because the rule resolves only once the
+    trailing mean drops, up to a window after the fix.
+  - Verdicts: improved (≤0.8×), regressed (≥1.2×), unchanged, stopped (no calls
+    over a full window after), pending (under 1h or 10 calls after), no_data.
+  - Query ids are decoded with `UseNumber`, so 64-bit ids stay exact.
+- Shown on the suggestion page as a "Fix verification" card, per query with
+  links, using only CSS classes already compiled. In the digest, resolved items
+  carry an `outcome` ("3.2s → 40ms (99% faster)"); pending and no-data verdicts
+  are left out.
+- Tests:
+  - unit tests for verify: verdicts, the slow-query baseline shift, counter
+    reset, multi-query summary, 64-bit ids
+  - storage tests for the `resolved_at` lifecycle and the 021 backfill and
+    suffix strip
+  - verifier run on real SQLite `query_history` rows
+  - page rendering and digest outcome
+  - End to end: the new binary migrated a database from the previous build and
+    resolved the autovacuum finding once autovacuum was back on. The page showed
+    the resolution time.
+- Also fixed: the suggestions API labelled local times with `Z`; it now
+  converts to UTC first.
+
 ## Known gaps in what's done
 
 - The dashboard and query pages still use lifetime means and a hard-coded 1000 ms
@@ -208,8 +246,17 @@ Last updated: 2026-09-28. Everything below is committed.
 - "Bloat" is the dead-tuple ratio, not an estimate of reclaimable space.
 - Alerts stop if the pganalyzer process dies. The README recommends an uptime
   monitor on `/health`.
-- The digest approximates resolution time with `last_seen_at`, because no
-  `resolved_at` is stored.
+- Fix verification:
+  - It covers only query-bound rules. Other fixes, such as dropping an unused
+    index or turning autovacuum on, aren't measured.
+  - The fix time is inferred from the resolution, not recorded. For
+    `slow_query` it can be up to a window off, which the shifted baseline
+    absorbs. An unrelated change in the same window is attributed to the fix.
+  - A query that changes shape after the fix (a new queryid) looks "stopped".
+  - It is computed on each page view and digest, not stored. A verdict can
+    change until the "after" window completes.
+  - The immediate "resolved" alert has no outcome, because there is no "after"
+    data yet.
 - A persistently failing single collector (e.g. a missing permission) counts as
   a collection failure and alerts. This is intended, but it can surprise people.
 - `golangci-lint` isn't installed locally, so `task lint` hasn't been run.
@@ -242,23 +289,16 @@ Last updated: 2026-09-28. Everything below is committed.
 
 ## Next steps (in order)
 
-1. **Fix verification.**
-   - Store `resolved_at` on suggestions (migration 021). This also fixes the
-     digest's approximation.
-   - For resolved `slow_query` or `index_recommendation` issues, compare the
-     windowed mean from `query_history` before and after the resolution or the
-     index's creation.
-   - Show the result on the suggestion page and in the digest.
-2. **Multi-database support.** Accept a list of targets in config instead of one
+1. **Multi-database support.** Accept a list of targets in config instead of one
    instance per process (`cmd/pganalyzer/main.go:157`). Storage is already keyed
    by `instance_id`. Label notifications with the target.
-3. **Setup and onboarding.**
+2. **Setup and onboarding.**
    - Refuse to start with the default `admin/admin` unless auth is explicitly off.
    - Add a first-run check for `pg_stat_statements`, grants, and how much
      history has been collected.
    - Write setup docs for managed Postgres (RDS/Aurora, Cloud SQL, Supabase).
    - Publish releases, a container image, and a Helm chart.
-4. **Housekeeping.**
+3. **Housekeeping.**
    - Switch the dashboard to windowed query stats (see gaps).
    - Add tests for the collector subpackages.
    - `configs/config.example.yaml` references a missing `docs/postgresql-setup.md`.
