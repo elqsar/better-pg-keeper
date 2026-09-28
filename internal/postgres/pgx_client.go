@@ -261,9 +261,46 @@ func (c *PgxClient) GetStatIndexes(ctx context.Context) ([]models.IndexStat, err
 			s.idx_tup_fetch,
 			pg_relation_size(s.indexrelid) as index_size,
 			i.indisunique,
-			i.indisprimary
+			i.indisprimary,
+			am.amname,
+			pg_get_indexdef(s.indexrelid),
+			-- Key columns in order, with the opclass, collation and sort options
+			-- that decide whether one index can stand in for another.
+			COALESCE((
+				SELECT string_agg(k.attnum || ':' || k.opc || ':' || k.coll || ':' || k.opt, ' ' ORDER BY k.ord)
+				FROM unnest(i.indkey::int2[], i.indclass::oid[], i.indcollation::oid[], i.indoption::int2[])
+					WITH ORDINALITY AS k(attnum, opc, coll, opt, ord)
+				WHERE k.ord <= i.indnkeyatts
+			), ''),
+			COALESCE((
+				SELECT string_agg(k.attnum::text, ' ' ORDER BY k.ord)
+				FROM unnest(i.indkey::int2[]) WITH ORDINALITY AS k(attnum, ord)
+				WHERE k.ord > i.indnkeyatts
+			), ''),
+			COALESCE(pg_get_expr(i.indexprs, i.indrelid), ''),
+			COALESCE(pg_get_expr(i.indpred, i.indrelid), ''),
+			-- A non-partial index whose leading key columns are exactly a foreign
+			-- key's columns serves that FK's lookups on delete/update.
+			EXISTS (
+				SELECT 1
+				FROM pg_constraint c,
+					LATERAL (
+						SELECT array_agg(k.attnum) AS lead
+						FROM unnest(i.indkey::int2[]) WITH ORDINALITY AS k(attnum, ord)
+						WHERE k.ord <= cardinality(c.conkey)
+					) l
+				WHERE c.contype = 'f' AND c.conrelid = i.indrelid AND i.indpred IS NULL
+					AND cardinality(c.conkey) <= i.indnkeyatts
+					AND l.lead @> c.conkey AND l.lead <@ c.conkey
+			),
+			-- A crash discards statistics along with stats_reset, so a NULL reset
+			-- time only guarantees counting since the server started.
+			(SELECT COALESCE(d.stats_reset, pg_postmaster_start_time())
+				FROM pg_stat_database d WHERE d.datname = current_database())
 		FROM pg_stat_user_indexes s
 		JOIN pg_index i ON s.indexrelid = i.indexrelid
+		JOIN pg_class ic ON ic.oid = s.indexrelid
+		JOIN pg_am am ON am.oid = ic.relam
 	`
 
 	rows, err := c.pool.Query(ctx, query)
@@ -285,6 +322,14 @@ func (c *PgxClient) GetStatIndexes(ctx context.Context) ([]models.IndexStat, err
 			&s.IndexSize,
 			&s.IsUnique,
 			&s.IsPrimary,
+			&s.AccessMethod,
+			&s.IndexDef,
+			&s.KeyColumns,
+			&s.IncludeColumns,
+			&s.Expressions,
+			&s.Predicate,
+			&s.BacksForeignKey,
+			&s.StatsSince,
 		)
 		if err != nil {
 			return nil, fmt.Errorf("postgres: failed to scan index stat: %w", err)

@@ -122,6 +122,13 @@ type SlowQuery struct {
 	DeltaCalls        int64   `json:"delta_calls,omitempty"`
 	DeltaTotalTime    float64 `json:"delta_total_time_ms,omitempty"`
 	DeltaMeanExecTime float64 `json:"delta_mean_exec_time_ms,omitempty"`
+	// Window is the period the mean, total, calls, rows and cache figures cover.
+	// Zero means they are cumulative since pg_stat_statements was last reset,
+	// which happens only until enough history has been collected.
+	Window time.Duration `json:"window_ns,omitempty"`
+	// LifetimeMeanExecTime is the mean since statistics were reset, for comparing
+	// the window against the query's long-run behaviour.
+	LifetimeMeanExecTime float64 `json:"lifetime_mean_exec_time_ms,omitempty"`
 }
 
 // CacheAnalysis contains database-level and query-level cache statistics.
@@ -183,6 +190,14 @@ type IndexIssue struct {
 	DuplicateOf        string `json:"duplicate_of,omitempty"`          // for duplicate indexes
 	DuplicateOfIdxScan int64  `json:"duplicate_of_idx_scan,omitempty"` // scans on the retained index
 	SpaceSavings       int64  `json:"space_savings,omitempty"`         // potential bytes saved
+	IndexDef           string `json:"index_def,omitempty"`
+	DuplicateOfDef     string `json:"duplicate_of_def,omitempty"`
+	// ExactDuplicate distinguishes an identical index from one whose columns are
+	// a leading prefix of the retained index.
+	ExactDuplicate bool `json:"exact_duplicate,omitempty"`
+	// StatsWindow is how long idx_scan has been counting when the index was
+	// judged unused.
+	StatsWindow time.Duration `json:"stats_window_ns,omitempty"`
 }
 
 // IndexIssueType constants.
@@ -224,7 +239,10 @@ type TransactionAnalysis struct {
 
 // Config holds analyzer configuration derived from thresholds.
 type Config struct {
-	SlowQueryMs          float64 // queries slower than this are flagged
+	SlowQueryMs float64 // queries slower than this are flagged
+	// SlowQueryWindow is the recent period a query's mean time is judged over.
+	// A lifetime mean hides regressions and keeps flagging queries already fixed.
+	SlowQueryWindow      time.Duration
 	CacheHitRatioWarning float64 // warn below this ratio (0-1)
 	BloatPercentWarning  float64 // tables with > this % bloat
 	UnusedIndexDays      int     // days without scans
@@ -260,10 +278,15 @@ func (c *Config) StalenessBudget(domain string) time.Duration {
 // a couple of missed cycles without letting genuinely stale data drive decisions.
 const DefaultStalenessFactor = 3.0
 
+// DefaultSlowQueryWindow covers a full daily cycle, so nightly jobs stay visible
+// during the day while a regression still shows within hours.
+const DefaultSlowQueryWindow = 24 * time.Hour
+
 // DefaultConfig returns the default analyzer configuration.
 func DefaultConfig() *Config {
 	return &Config{
 		SlowQueryMs:          1000,
+		SlowQueryWindow:      DefaultSlowQueryWindow,
 		CacheHitRatioWarning: 0.95,
 		BloatPercentWarning:  20,
 		UnusedIndexDays:      30,
@@ -279,6 +302,7 @@ func DefaultConfig() *Config {
 func ConfigFromThresholds(t config.ThresholdsConfig) *Config {
 	return &Config{
 		SlowQueryMs:          float64(t.SlowQueryMs),
+		SlowQueryWindow:      time.Duration(t.SlowQueryWindow),
 		CacheHitRatioWarning: t.CacheHitRatioWarning,
 		BloatPercentWarning:  float64(t.BloatPercentWarning),
 		UnusedIndexDays:      t.UnusedIndexDays,

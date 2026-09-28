@@ -115,6 +115,22 @@ type IndexStat struct {
 	IndexSize    int64  `json:"index_size"` // bytes
 	IsUnique     bool   `json:"is_unique"`
 	IsPrimary    bool   `json:"is_primary"`
+
+	// Structural description used to compare indexes on the same table.
+	AccessMethod string `json:"access_method,omitempty"` // btree, gin, ...
+	IndexDef     string `json:"index_def,omitempty"`     // pg_get_indexdef output
+	// KeyColumns lists key columns in order as "attnum:opclass:collation:option"
+	// tokens separated by spaces. Expression columns have attnum 0.
+	KeyColumns     string `json:"key_columns,omitempty"`
+	IncludeColumns string `json:"include_columns,omitempty"` // space-separated attnums
+	Expressions    string `json:"expressions,omitempty"`
+	Predicate      string `json:"predicate,omitempty"`
+	// BacksForeignKey is set when the index's leading columns match a foreign
+	// key on its table, so dropping it would slow down FK checks.
+	BacksForeignKey bool `json:"backs_foreign_key"`
+	// StatsSince is the earliest time idx_scan is known to have been counting
+	// from: the database's stats_reset, or server start when it was never reset.
+	StatsSince *time.Time `json:"stats_since,omitempty"`
 }
 
 // Suggestion represents a generated recommendation.

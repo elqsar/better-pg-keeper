@@ -9,9 +9,9 @@ import (
 	"github.com/elqsar/pganalyzer/internal/suggester"
 )
 
-const duplicateIndexDetectionMethod = "name_and_size_heuristic"
+const duplicateIndexDetectionMethod = "index_definition"
 
-// DuplicateIndexRule generates suggestions for potentially redundant indexes.
+// DuplicateIndexRule generates suggestions for indexes made redundant by another index.
 type DuplicateIndexRule struct{}
 
 // NewDuplicateIndexRule creates a new DuplicateIndexRule.
@@ -51,31 +51,46 @@ func (r *DuplicateIndexRule) Evaluate(ctx context.Context, analysis *analyzer.An
 			continue
 		}
 
-		title := fmt.Sprintf("Potential duplicate index: %s", issue.IndexName)
+		// An identical index is pure overhead. A prefix index can still be
+		// marginally faster for queries it serves, being smaller.
+		severity := suggester.SeverityInfo
+		title := fmt.Sprintf("Redundant index: %s is covered by %s", issue.IndexName, issue.DuplicateOf)
+		if issue.ExactDuplicate {
+			severity = suggester.SeverityWarning
+			title = fmt.Sprintf("Duplicate index: %s is identical to %s", issue.IndexName, issue.DuplicateOf)
+		}
 
 		var desc strings.Builder
-		fmt.Fprintf(&desc, "Index `%s.%s.%s` may be redundant with `%s`.\n\n",
-			issue.SchemaName, issue.TableName, issue.IndexName, issue.DuplicateOf)
+		if issue.ExactDuplicate {
+			fmt.Fprintf(&desc, "Index `%s.%s.%s` has the same definition as `%s`. PostgreSQL maintains both on every write but only needs one.\n\n",
+				issue.SchemaName, issue.TableName, issue.IndexName, issue.DuplicateOf)
+		} else {
+			fmt.Fprintf(&desc, "The columns of index `%s.%s.%s` are the leading columns of `%s`, which can serve the same lookups.\n\n",
+				issue.SchemaName, issue.TableName, issue.IndexName, issue.DuplicateOf)
+		}
 
-		desc.WriteString("**Duplicate Index Details:**\n")
-		fmt.Fprintf(&desc, "- Table: %s.%s\n", issue.SchemaName, issue.TableName)
+		desc.WriteString("**Definitions:**\n")
+		fmt.Fprintf(&desc, "- Candidate: `%s`\n", issue.IndexDef)
+		fmt.Fprintf(&desc, "- Retained: `%s`\n\n", issue.DuplicateOfDef)
+
+		desc.WriteString("**Usage:**\n")
 		fmt.Fprintf(&desc, "- Candidate index scans: %d\n", issue.IdxScan)
 		fmt.Fprintf(&desc, "- Retained index scans: %d\n", issue.DuplicateOfIdxScan)
-		fmt.Fprintf(&desc, "- Index size: %s\n", formatBytes(issue.IndexSize))
-		fmt.Fprintf(&desc, "- Estimated space savings: %s\n", formatBytes(issue.SpaceSavings))
-		desc.WriteString("- Detection method: name and size heuristic\n\n")
+		fmt.Fprintf(&desc, "- Space saved by dropping: %s\n\n", formatBytes(issue.SpaceSavings))
 
 		desc.WriteString("**Recommendation:**\n")
-		desc.WriteString("This check is heuristic-based. Verify both index definitions, predicates, and operator classes before dropping anything.\n\n")
-		fmt.Fprintf(&desc, "```sql\nDROP INDEX %s.%s;\n```\n\n", issue.SchemaName, issue.IndexName)
-		desc.WriteString("**Before dropping:**\n")
-		desc.WriteString("- Compare index definitions in PostgreSQL\n")
-		desc.WriteString("- Confirm the retained index supports the same query patterns\n")
-		desc.WriteString("- Review recent execution plans during representative traffic\n")
+		if issue.ExactDuplicate {
+			desc.WriteString("Drop the candidate. Queries that used it will use the retained index, which is identical.\n\n")
+		} else {
+			desc.WriteString("Dropping the candidate is usually safe: queries that used it will use the retained index instead. ")
+			desc.WriteString("That index is wider, so those queries may read slightly more pages. Check the most frequent queries on this table afterwards.\n\n")
+		}
+		desc.WriteString("`DROP INDEX CONCURRENTLY` does not block reads or writes, but cannot run inside a transaction block:\n")
+		fmt.Fprintf(&desc, "```sql\nDROP INDEX CONCURRENTLY %s;\n```\n", quoteQualified(issue.SchemaName, issue.IndexName))
 
 		suggestions = append(suggestions, suggester.Suggestion{
 			RuleID:       r.ID(),
-			Severity:     suggester.SeverityInfo,
+			Severity:     severity,
 			Title:        title,
 			Description:  desc.String(),
 			TargetObject: fmt.Sprintf("%s.%s.%s", issue.SchemaName, issue.TableName, issue.IndexName),
@@ -89,6 +104,9 @@ func (r *DuplicateIndexRule) Evaluate(ctx context.Context, analysis *analyzer.An
 				"index_size":            issue.IndexSize,
 				"space_savings":         issue.SpaceSavings,
 				"detection_method":      duplicateIndexDetectionMethod,
+				"exact_duplicate":       issue.ExactDuplicate,
+				"index_def":             issue.IndexDef,
+				"duplicate_of_def":      issue.DuplicateOfDef,
 			},
 		})
 	}

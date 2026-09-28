@@ -11,7 +11,6 @@ import (
 
 // MissingIndexRule generates suggestions for tables with high sequential scan ratios.
 type MissingIndexRule struct {
-	warningRatio  float64
 	criticalRatio float64
 	minTableSize  int64
 }
@@ -19,7 +18,6 @@ type MissingIndexRule struct {
 // NewMissingIndexRule creates a new MissingIndexRule with the given thresholds.
 func NewMissingIndexRule(config *suggester.Config) *MissingIndexRule {
 	return &MissingIndexRule{
-		warningRatio:  config.SeqScanRatioWarning,
 		criticalRatio: config.SeqScanRatioCritical,
 		minTableSize:  config.MinTableSizeForIndex,
 	}
@@ -60,12 +58,11 @@ func (r *MissingIndexRule) Evaluate(ctx context.Context, analysis *analyzer.Anal
 			continue
 		}
 
-		// Determine severity based on sequential scan ratio
+		// The analyzer only reports tables at or above the warning ratio, so
+		// those are informational until the scan ratio reaches critical.
 		severity := suggester.SeverityInfo
 		if issue.SeqScanRatio >= r.criticalRatio {
 			severity = suggester.SeverityWarning
-		} else if issue.SeqScanRatio >= r.warningRatio {
-			severity = suggester.SeverityInfo
 		}
 
 		title := fmt.Sprintf("Consider index on %s.%s", issue.SchemaName, issue.TableName)

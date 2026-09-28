@@ -5,6 +5,7 @@ import (
 	"context"
 	"fmt"
 	"strings"
+	"time"
 
 	"github.com/elqsar/pganalyzer/internal/analyzer"
 	"github.com/elqsar/pganalyzer/internal/suggester"
@@ -61,14 +62,25 @@ func (r *SlowQueryRule) Evaluate(ctx context.Context, analysis *analyzer.Analysi
 
 		// Build description with optimization hints
 		var desc strings.Builder
-		fmt.Fprintf(&desc, "Query has mean execution time of %.2f ms (threshold: %.0f ms).\n\n", sq.MeanExecTime, r.warningThresholdMs)
-		desc.WriteString("**Execution Statistics:**\n")
+		period := "since statistics were reset"
+		if sq.Window > 0 {
+			period = "over the last " + formatWindow(sq.Window)
+		}
+		fmt.Fprintf(&desc, "Query has mean execution time of %.2f ms %s (threshold: %.0f ms).\n\n", sq.MeanExecTime, period, r.warningThresholdMs)
+		fmt.Fprintf(&desc, "**Execution Statistics (%s):**\n", period)
 		fmt.Fprintf(&desc, "- Mean execution time: %.2f ms\n", sq.MeanExecTime)
-		fmt.Fprintf(&desc, "- Max execution time: %.2f ms\n", sq.MaxExecTime)
 		fmt.Fprintf(&desc, "- Total execution time: %.2f ms\n", sq.TotalExecTime)
-		fmt.Fprintf(&desc, "- Total calls: %d\n", sq.Calls)
+		fmt.Fprintf(&desc, "- Calls: %d\n", sq.Calls)
 		fmt.Fprintf(&desc, "- Average rows returned: %.1f\n", sq.AvgRows)
-		fmt.Fprintf(&desc, "- Cache hit ratio: %.1f%%\n\n", sq.CacheHitRatio*100)
+		fmt.Fprintf(&desc, "- Cache hit ratio: %.1f%%\n", sq.CacheHitRatio*100)
+		if sq.Window > 0 && sq.LifetimeMeanExecTime > 0 {
+			fmt.Fprintf(&desc, "- Mean since statistics reset: %.2f ms", sq.LifetimeMeanExecTime)
+			if sq.MeanExecTime >= 2*sq.LifetimeMeanExecTime {
+				fmt.Fprintf(&desc, " (now %.1fx slower - likely a recent regression)", sq.MeanExecTime/sq.LifetimeMeanExecTime)
+			}
+			desc.WriteString("\n")
+		}
+		fmt.Fprintf(&desc, "- Max execution time (since statistics reset): %.2f ms\n\n", sq.MaxExecTime)
 
 		desc.WriteString("**Optimization Hints:**\n")
 		if sq.CacheHitRatio < 0.95 {
@@ -87,19 +99,33 @@ func (r *SlowQueryRule) Evaluate(ctx context.Context, analysis *analyzer.Analysi
 			Description:  desc.String(),
 			TargetObject: fmt.Sprintf("queryid:%d", sq.QueryID),
 			Metadata: map[string]any{
-				"queryid":         sq.QueryID,
-				"query":           sq.Query,
-				"mean_time_ms":    sq.MeanExecTime,
-				"max_time_ms":     sq.MaxExecTime,
-				"total_time_ms":   sq.TotalExecTime,
-				"call_count":      sq.Calls,
-				"cache_hit_ratio": sq.CacheHitRatio,
-				"avg_rows":        sq.AvgRows,
+				"queryid":          sq.QueryID,
+				"query":            sq.Query,
+				"mean_time_ms":     sq.MeanExecTime,
+				"max_time_ms":      sq.MaxExecTime,
+				"total_time_ms":    sq.TotalExecTime,
+				"call_count":       sq.Calls,
+				"cache_hit_ratio":  sq.CacheHitRatio,
+				"avg_rows":         sq.AvgRows,
+				"window_seconds":   sq.Window.Seconds(),
+				"lifetime_mean_ms": sq.LifetimeMeanExecTime,
 			},
 		})
 	}
 
 	return suggestions, nil
+}
+
+// formatWindow renders a window as whole hours or days, e.g. "24h" or "7 days".
+func formatWindow(d time.Duration) string {
+	hours := int(d.Round(time.Hour).Hours())
+	if hours >= 48 && hours%24 == 0 {
+		return fmt.Sprintf("%d days", hours/24)
+	}
+	if hours < 1 {
+		return d.Round(time.Minute).String()
+	}
+	return fmt.Sprintf("%dh", hours)
 }
 
 // truncateQuery returns a truncated version of the query for display.

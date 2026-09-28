@@ -397,6 +397,8 @@ func TestDuplicateIndexRule_Evaluate(t *testing.T) {
 						DuplicateOfIdxScan: 1200,
 						IndexSize:          1024 * 1024,
 						SpaceSavings:       1024 * 1024,
+						IndexDef:           "CREATE INDEX idx_orders_user_id_old ON public.orders USING btree (user_id)",
+						DuplicateOfDef:     "CREATE INDEX idx_orders_user_id ON public.orders USING btree (user_id, created_at)",
 					},
 				},
 			},
@@ -448,8 +450,11 @@ func TestDuplicateIndexRule_Evaluate(t *testing.T) {
 			if got := suggestion.Metadata["duplicate_of_idx_scan"]; got != int64(1200) {
 				t.Errorf("Metadata[duplicate_of_idx_scan] = %v, want 1200", got)
 			}
-			if !strings.Contains(suggestion.Description, "heuristic-based") {
-				t.Errorf("Description should mention heuristic-based validation, got %q", suggestion.Description)
+			if !strings.Contains(suggestion.Description, `DROP INDEX CONCURRENTLY "public"."idx_orders_user_id_old";`) {
+				t.Errorf("Description should give quoted concurrent DROP, got %q", suggestion.Description)
+			}
+			if !strings.Contains(suggestion.Description, "CREATE INDEX idx_orders_user_id ON") {
+				t.Errorf("Description should show the retained definition, got %q", suggestion.Description)
 			}
 		})
 	}
@@ -1065,4 +1070,53 @@ func TestSuggester_SkipsRulesWithoutCoverage(t *testing.T) {
 			t.Errorf("active suggestions = %d, want 0", len(active))
 		}
 	})
+}
+
+func TestSlowQueryRule_DescribesWindow(t *testing.T) {
+	rule := rules.NewSlowQueryRule(suggester.DefaultConfig())
+	analysis := &analyzer.AnalysisResult{
+		Coverage: analyzer.FullCoverage(),
+		SlowQueries: []analyzer.SlowQuery{{
+			QueryID: 1, Query: "SELECT 1", MeanExecTime: 1500, Calls: 10,
+			Window: 24 * time.Hour, LifetimeMeanExecTime: 300,
+		}},
+	}
+
+	suggestions, err := rule.Evaluate(context.Background(), analysis)
+	if err != nil || len(suggestions) != 1 {
+		t.Fatalf("Evaluate() = %v, %v", suggestions, err)
+	}
+	desc := suggestions[0].Description
+	for _, want := range []string{"over the last 24h", "Mean since statistics reset: 300.00 ms", "5.0x slower"} {
+		if !strings.Contains(desc, want) {
+			t.Errorf("description missing %q:\n%s", want, desc)
+		}
+	}
+}
+
+func TestUnusedIndexRule_Description(t *testing.T) {
+	rule := rules.NewUnusedIndexRule(suggester.DefaultConfig())
+	analysis := &analyzer.AnalysisResult{
+		Coverage: analyzer.FullCoverage(),
+		IndexIssues: []analyzer.IndexIssue{{
+			SchemaName: "public", TableName: "Orders", IndexName: "Idx_Legacy",
+			IssueType: analyzer.IndexIssueUnused, Severity: suggester.SeverityInfo,
+			IndexSize: 1 << 20, StatsWindow: 45 * 24 * time.Hour,
+			IndexDef: "CREATE INDEX \"Idx_Legacy\" ON public.\"Orders\" USING btree (status)",
+		}},
+	}
+
+	suggestions, err := rule.Evaluate(context.Background(), analysis)
+	if err != nil || len(suggestions) != 1 {
+		t.Fatalf("Evaluate() = %v, %v", suggestions, err)
+	}
+	s := suggestions[0]
+	if s.Severity != suggester.SeverityInfo {
+		t.Errorf("Severity = %s, want the analyzer's %s", s.Severity, suggester.SeverityInfo)
+	}
+	for _, want := range []string{"45 days", "read replicas", `DROP INDEX CONCURRENTLY "public"."Idx_Legacy";`, "USING btree (status)"} {
+		if !strings.Contains(s.Description, want) {
+			t.Errorf("description missing %q:\n%s", want, s.Description)
+		}
+	}
 }

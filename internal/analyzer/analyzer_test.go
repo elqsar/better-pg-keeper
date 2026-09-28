@@ -19,6 +19,7 @@ type mockStorage struct {
 	bloatStats    map[int64][]models.BloatInfo
 	extendedStats map[int64]*models.ExtendedDatabaseStats
 	queryDeltas   []models.QueryStatDelta
+	onDelta       func(from, to int64)
 	queryStatsErr error
 	// coverage optionally overrides which snapshots a collector contributed to,
 	// keyed by domain. Nil means "derive it from the data maps above".
@@ -140,6 +141,9 @@ func (m *mockStorage) GetQueryStats(ctx context.Context, snapshotID int64) ([]mo
 }
 
 func (m *mockStorage) GetQueryStatsDelta(ctx context.Context, fromSnapshotID, toSnapshotID int64) ([]models.QueryStatDelta, error) {
+	if m.onDelta != nil {
+		m.onDelta(fromSnapshotID, toSnapshotID)
+	}
 	return m.queryDeltas, nil
 }
 
@@ -248,6 +252,56 @@ func TestSlowQueryAnalyzer_Analyze(t *testing.T) {
 		if slowQueries[0].CacheHitRatio != expectedRatio {
 			t.Errorf("Expected cache hit ratio %f, got %f", expectedRatio, slowQueries[0].CacheHitRatio)
 		}
+	}
+}
+
+// TestSlowQueryAnalyzer_UsesRecentWindow checks that queries are judged by what
+// they did within the window, not by their mean since statistics were reset.
+func TestSlowQueryAnalyzer_UsesRecentWindow(t *testing.T) {
+	ctx := context.Background()
+	storage := newMockStorage()
+	now := time.Now()
+
+	storage.snapshots[1] = &models.Snapshot{ID: 1, InstanceID: 1, CapturedAt: now.Add(-25 * time.Hour)}
+	storage.snapshots[2] = &models.Snapshot{ID: 2, InstanceID: 1, CapturedAt: now.Add(-2 * time.Hour)}
+	storage.snapshots[3] = &models.Snapshot{ID: 3, InstanceID: 1, CapturedAt: now}
+	for _, id := range []int64{1, 2, 3} {
+		storage.queryStats[id] = []models.QueryStat{
+			{QueryID: 101, Query: "regressed", MeanExecTime: 300, MaxExecTime: 9000},
+			{QueryID: 102, Query: "fixed", MeanExecTime: 2000},
+			{QueryID: 103, Query: "idle", MeanExecTime: 2000},
+		}
+	}
+	storage.queryDeltas = []models.QueryStatDelta{
+		{QueryID: 101, Query: "regressed", DeltaCalls: 10, DeltaTotalTime: 15000, MeanExecTime: 1500},
+		{QueryID: 102, Query: "fixed", DeltaCalls: 1000, DeltaTotalTime: 50000, MeanExecTime: 50},
+		{QueryID: 103, Query: "idle", DeltaCalls: 0},
+	}
+
+	var from, to int64
+	storage.onDelta = func(f, t int64) { from, to = f, t }
+
+	slowQueries, err := NewSlowQueryAnalyzer(storage, DefaultConfig()).Analyze(ctx, 3)
+	if err != nil {
+		t.Fatalf("Analyze failed: %v", err)
+	}
+
+	// The baseline is the newest snapshot at least a window old, not the previous one.
+	if from != 1 || to != 3 {
+		t.Errorf("delta taken over snapshots %d..%d, want 1..3", from, to)
+	}
+	if len(slowQueries) != 1 {
+		t.Fatalf("expected only the regressed query, got %+v", slowQueries)
+	}
+	sq := slowQueries[0]
+	if sq.QueryID != 101 || sq.MeanExecTime != 1500 || sq.Calls != 10 {
+		t.Errorf("got %+v, want query 101 with window mean 1500 over 10 calls", sq)
+	}
+	if sq.Window != 25*time.Hour {
+		t.Errorf("Window = %s, want 25h", sq.Window)
+	}
+	if sq.LifetimeMeanExecTime != 300 || sq.MaxExecTime != 9000 {
+		t.Errorf("lifetime figures = mean %v max %v, want 300 and 9000", sq.LifetimeMeanExecTime, sq.MaxExecTime)
 	}
 }
 
@@ -509,6 +563,7 @@ func TestIndexAnalyzer_UnusedIndex(t *testing.T) {
 			IndexSize:    1024 * 1024,
 			IsUnique:     false,
 			IsPrimary:    false,
+			StatsSince:   daysAgo(45),
 		},
 		{
 			SchemaName:   "public",
@@ -552,6 +607,61 @@ func TestIndexAnalyzer_UnusedIndex(t *testing.T) {
 	}
 }
 
+func daysAgo(days int) *time.Time {
+	t := time.Now().Add(-time.Duration(days) * 24 * time.Hour)
+	return &t
+}
+
+// btreeIndex builds an index on public.orders with the given key tokens.
+func btreeIndex(name string, keys string, scans int64) models.IndexStat {
+	return models.IndexStat{
+		SchemaName: "public", RelName: "orders", IndexRelName: name,
+		IdxScan: scans, IndexSize: 1 << 20, AccessMethod: "btree",
+		KeyColumns: keys, IndexDef: "CREATE INDEX " + name,
+	}
+}
+
+func TestIndexAnalyzer_UnusedIndexGuards(t *testing.T) {
+	base := models.IndexStat{
+		SchemaName: "public", RelName: "orders", IdxScan: 0, IndexSize: 1 << 20,
+	}
+	tests := []struct {
+		name         string
+		mutate       func(*models.IndexStat)
+		wantFlagged  bool
+		wantSeverity string
+	}{
+		{"old enough window", func(s *models.IndexStat) { s.StatsSince = daysAgo(31) }, true, models.SeverityInfo},
+		{"window shorter than unused_index_days", func(s *models.IndexStat) { s.StatsSince = daysAgo(3) }, false, ""},
+		{"unknown stats window", func(s *models.IndexStat) { s.StatsSince = nil }, false, ""},
+		{"backs a foreign key", func(s *models.IndexStat) {
+			s.StatsSince = daysAgo(90)
+			s.BacksForeignKey = true
+		}, false, ""},
+		{"large index is a warning, never critical", func(s *models.IndexStat) {
+			s.StatsSince = daysAgo(90)
+			s.IndexSize = 5 << 30
+		}, true, models.SeverityWarning},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			stat := base
+			stat.IndexRelName = "idx_candidate"
+			tt.mutate(&stat)
+
+			a := NewIndexAnalyzer(newMockStorage(), nil)
+			issues := a.detectUnusedIndexes([]models.IndexStat{stat}, time.Now())
+			if got := len(issues) == 1; got != tt.wantFlagged {
+				t.Fatalf("flagged = %v, want %v (issues: %+v)", got, tt.wantFlagged, issues)
+			}
+			if tt.wantFlagged && issues[0].Severity != tt.wantSeverity {
+				t.Errorf("severity = %s, want %s", issues[0].Severity, tt.wantSeverity)
+			}
+		})
+	}
+}
+
 func TestIndexAnalyzer_DuplicateIndex(t *testing.T) {
 	ctx := context.Background()
 	storage := newMockStorage()
@@ -562,25 +672,12 @@ func TestIndexAnalyzer_DuplicateIndex(t *testing.T) {
 		CapturedAt: time.Now(),
 	}
 
+	// user_id is attnum 2 with int4 opclass 1978; created_at is attnum 4.
 	storage.indexStats[1] = []models.IndexStat{
-		{
-			SchemaName:   "public",
-			RelName:      "orders",
-			IndexRelName: "idx_orders_user_id",
-			IdxScan:      1000,
-			IndexSize:    1024 * 1024,
-			IsUnique:     false,
-			IsPrimary:    false,
-		},
-		{
-			SchemaName:   "public",
-			RelName:      "orders",
-			IndexRelName: "idx_orders_user_id_old", // Similar name pattern
-			IdxScan:      10,                       // Much less used
-			IndexSize:    1024 * 1024,              // Same size
-			IsUnique:     false,
-			IsPrimary:    false,
-		},
+		btreeIndex("idx_orders_user_created", "2:1978:0:0 4:3127:0:0", 1000),
+		btreeIndex("idx_orders_user", "2:1978:0:0", 10),
+		// Name looks like a duplicate but the column differs.
+		btreeIndex("idx_orders_user_old", "3:3126:100:0", 5),
 	}
 
 	analyzer := NewIndexAnalyzer(storage, nil)
@@ -589,25 +686,94 @@ func TestIndexAnalyzer_DuplicateIndex(t *testing.T) {
 		t.Fatalf("Analyze failed: %v", err)
 	}
 
-	// Should find potential duplicate
-	var foundDuplicate bool
+	var dups []IndexIssue
 	for _, issue := range issues {
 		if issue.IssueType == IndexIssueDuplicate {
-			foundDuplicate = true
-			if issue.IndexName != "idx_orders_user_id_old" {
-				t.Errorf("Expected idx_orders_user_id_old as duplicate, got %s", issue.IndexName)
-			}
-			if issue.DuplicateOf != "idx_orders_user_id" {
-				t.Errorf("Expected duplicate_of idx_orders_user_id, got %s", issue.DuplicateOf)
-			}
-			if issue.DuplicateOfIdxScan != 1000 {
-				t.Errorf("Expected duplicate_of_idx_scan 1000, got %d", issue.DuplicateOfIdxScan)
-			}
+			dups = append(dups, issue)
 		}
 	}
+	if len(dups) != 1 {
+		t.Fatalf("expected 1 duplicate issue, got %d: %+v", len(dups), dups)
+	}
+	issue := dups[0]
+	if issue.IndexName != "idx_orders_user" || issue.DuplicateOf != "idx_orders_user_created" {
+		t.Errorf("got %s covered by %s, want idx_orders_user covered by idx_orders_user_created",
+			issue.IndexName, issue.DuplicateOf)
+	}
+	if issue.ExactDuplicate {
+		t.Error("prefix redundancy must not be reported as an exact duplicate")
+	}
+	if issue.DuplicateOfIdxScan != 1000 {
+		t.Errorf("Expected duplicate_of_idx_scan 1000, got %d", issue.DuplicateOfIdxScan)
+	}
+	if issue.DuplicateOfDef != "CREATE INDEX idx_orders_user_created" {
+		t.Errorf("DuplicateOfDef = %q", issue.DuplicateOfDef)
+	}
+}
 
-	if !foundDuplicate {
-		t.Error("Expected to find duplicate index issue")
+// TestIndexAnalyzer_DuplicatesPointAtKeptIndex covers a chain: two identical
+// indexes that are both prefixes of a wider one. Both must be reported against
+// the wider index, never against each other, since that one is dropped too.
+func TestIndexAnalyzer_DuplicatesPointAtKeptIndex(t *testing.T) {
+	a := NewIndexAnalyzer(newMockStorage(), nil)
+	issues := a.detectDuplicateIndexes([]models.IndexStat{
+		btreeIndex("o_user", "2:1978:0:0", 0),
+		btreeIndex("o_user_dup", "2:1978:0:0", 0),
+		btreeIndex("o_user_created", "2:1978:0:0 4:3127:0:0", 0),
+	})
+
+	if len(issues) != 2 {
+		t.Fatalf("expected 2 issues, got %+v", issues)
+	}
+	for _, issue := range issues {
+		if issue.DuplicateOf != "o_user_created" {
+			t.Errorf("%s reported against %s, want o_user_created", issue.IndexName, issue.DuplicateOf)
+		}
+	}
+}
+
+func TestRedundantWith(t *testing.T) {
+	withInclude := func(s models.IndexStat, inc string) models.IndexStat { s.IncludeColumns = inc; return s }
+	withPred := func(s models.IndexStat, p string) models.IndexStat { s.Predicate = p; return s }
+	withAM := func(s models.IndexStat, am string) models.IndexStat { s.AccessMethod = am; return s }
+	unique := func(s models.IndexStat) models.IndexStat { s.IsUnique = true; return s }
+
+	a := btreeIndex("a", "2:1978:0:0", 0)
+	ab := btreeIndex("ab", "2:1978:0:0 4:3127:0:0", 0)
+
+	tests := []struct {
+		name      string
+		candidate models.IndexStat
+		retained  models.IndexStat
+		wantOK    bool
+		wantExact bool
+	}{
+		{"prefix is redundant", a, ab, true, false},
+		{"superset is not redundant", ab, a, false, false},
+		{"exact duplicate, fewer scans dropped", btreeIndex("x", "2:1978:0:0", 1), btreeIndex("y", "2:1978:0:0", 9), true, true},
+		{"exact duplicate, more scans kept", btreeIndex("y", "2:1978:0:0", 9), btreeIndex("x", "2:1978:0:0", 1), false, false},
+		{"exact duplicate tie reports only one", btreeIndex("b", "2:1978:0:0", 0), btreeIndex("a", "2:1978:0:0", 0), true, true},
+		{"exact duplicate tie other direction", btreeIndex("a", "2:1978:0:0", 0), btreeIndex("b", "2:1978:0:0", 0), false, false},
+		{"unique candidate is kept", unique(a), ab, false, false},
+		{"plain duplicate of unique index", a, unique(btreeIndex("u", "2:1978:0:0", 0)), true, true},
+		{"different sort order", a, btreeIndex("desc", "2:1978:0:3", 0), false, false},
+		{"different opclass", a, btreeIndex("ops", "2:3128:0:0", 0), false, false},
+		{"partial vs full", withPred(a, "(status = 'open')"), ab, false, false},
+		{"same predicate prefix", withPred(a, "(x)"), withPred(ab, "(x)"), true, false},
+		{"include column not in retained", withInclude(a, "5"), ab, false, false},
+		{"include column is a retained key", withInclude(a, "4"), ab, true, false},
+		{"include sets compared unordered", withInclude(btreeIndex("b", "2:1978:0:0", 0), "5 6"), withInclude(btreeIndex("a", "2:1978:0:0", 0), "6 5"), true, true},
+		{"prefix only counts for btree", withAM(a, "hash"), withAM(ab, "hash"), false, false},
+		{"different access method", a, withAM(btreeIndex("g", "2:1978:0:0", 0), "gin"), false, false},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			exact, ok := redundantWith(tt.candidate, tt.retained)
+			if ok != tt.wantOK || exact != tt.wantExact {
+				t.Errorf("redundantWith = (exact=%v, ok=%v), want (exact=%v, ok=%v)", exact, ok, tt.wantExact, tt.wantOK)
+			}
+		})
 	}
 }
 
@@ -833,31 +999,6 @@ func TestConfigFromThresholds(t *testing.T) {
 	}
 }
 
-func TestArePotentialDuplicates(t *testing.T) {
-	analyzer := &IndexAnalyzer{}
-
-	tests := []struct {
-		name1    string
-		name2    string
-		expected bool
-	}{
-		{"idx_users_email", "idx_users_email_1", true},   // Common suffix pattern
-		{"idx_users_email", "idx_users_email_old", true}, // Backup pattern
-		{"idx_orders_date", "idx_orders_status", false},  // Different columns
-		{"idx_users_name", "idx_users_name_idx", true},   // Suffix variation
-		{"short", "shorty", false},                       // Too short for contains check
-		{"idx_products_category", "idx_products", true},  // One contains other
-	}
-
-	for _, tt := range tests {
-		result := analyzer.arePotentialDuplicates(tt.name1, tt.name2)
-		if result != tt.expected {
-			t.Errorf("arePotentialDuplicates(%q, %q) = %v, expected %v",
-				tt.name1, tt.name2, result, tt.expected)
-		}
-	}
-}
-
 // TestMainAnalyzer_ResolvesDomainsAcrossSnapshots covers the core scheduling problem:
 // the newest snapshot is usually a partial one cut for the 30s collectors, so reading
 // every domain from it reported tables and indexes as empty on nearly every run.
@@ -877,7 +1018,7 @@ func TestMainAnalyzer_ResolvesDomainsAcrossSnapshots(t *testing.T) {
 		{SchemaName: "public", RelName: "orders", NLiveTup: 100000, SeqScan: 900, IdxScan: 100},
 	}
 	storage.indexStats[1] = []models.IndexStat{
-		{SchemaName: "public", RelName: "orders", IndexRelName: "orders_unused_idx", IdxScan: 0, IndexSize: 1 << 20},
+		{SchemaName: "public", RelName: "orders", IndexRelName: "orders_unused_idx", IdxScan: 0, IndexSize: 1 << 20, StatsSince: daysAgo(60)},
 	}
 	storage.queryStats[2] = []models.QueryStat{
 		{QueryID: 100, Query: "SELECT * FROM orders", MeanExecTime: 2000, Calls: 100, TotalExecTime: 200000},

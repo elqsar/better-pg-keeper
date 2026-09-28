@@ -139,6 +139,14 @@ thresholds:
   # Tip: Set lower for OLTP workloads, higher for analytics
   slow_query_ms: 1000
 
+  # Period a query's mean execution time is judged over
+  # Queries are judged on recent behaviour rather than their mean since
+  # pg_stat_statements was reset, so regressions show up quickly and fixed
+  # queries stop being flagged. Until this much history has been collected, the
+  # mean since reset is used.
+  # Format: Go duration, at least 1h. Default: 24h (covers daily batch jobs)
+  slow_query_window: 24h
+
   # Cache Hit Ratio Warning
   # ----------------------
   # Database cache hit ratio below this triggers a warning
@@ -157,9 +165,13 @@ thresholds:
 
   # Unused Index Detection
   # ---------------------
-  # Indexes with zero scans are flagged (excludes primary keys and unique constraints)
-  # These indexes consume disk space and slow down writes
-  # Note: Value in days is for future reference, currently checks for idx_scan=0
+  # Indexes with zero scans are flagged (excludes primary keys, unique constraints
+  # and indexes that serve foreign-key lookups). These indexes consume disk space
+  # and slow down writes.
+  # An index is only flagged once PostgreSQL has been counting scans for at least
+  # this many days: since the last statistics reset, or since server start when
+  # statistics were never reset (a crash discards them).
+  # Default: 30
   unused_index_days: 30
 
   # Missing Index Suggestions

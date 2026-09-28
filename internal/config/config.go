@@ -71,12 +71,13 @@ type AuthConfig struct {
 
 // ThresholdsConfig contains analysis threshold settings.
 type ThresholdsConfig struct {
-	SlowQueryMs          int     `yaml:"slow_query_ms"`
-	CacheHitRatioWarning float64 `yaml:"cache_hit_ratio_warning"`
-	BloatPercentWarning  int     `yaml:"bloat_percent_warning"`
-	UnusedIndexDays      int     `yaml:"unused_index_days"`
-	SeqScanRatioWarning  float64 `yaml:"seq_scan_ratio_warning"`
-	MinTableSizeForIndex int     `yaml:"min_table_size_for_index"`
+	SlowQueryMs          int      `yaml:"slow_query_ms"`
+	SlowQueryWindow      Duration `yaml:"slow_query_window"`
+	CacheHitRatioWarning float64  `yaml:"cache_hit_ratio_warning"`
+	BloatPercentWarning  int      `yaml:"bloat_percent_warning"`
+	UnusedIndexDays      int      `yaml:"unused_index_days"`
+	SeqScanRatioWarning  float64  `yaml:"seq_scan_ratio_warning"`
+	MinTableSizeForIndex int      `yaml:"min_table_size_for_index"`
 }
 
 // Duration is a wrapper around time.Duration that supports YAML unmarshaling.
@@ -138,6 +139,7 @@ func Default() Config {
 		},
 		Thresholds: ThresholdsConfig{
 			SlowQueryMs:          1000,
+			SlowQueryWindow:      Duration(24 * time.Hour),
 			CacheHitRatioWarning: 0.95,
 			BloatPercentWarning:  20,
 			UnusedIndexDays:      30,

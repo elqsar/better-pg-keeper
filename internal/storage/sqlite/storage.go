@@ -797,8 +797,10 @@ func (s *SQLiteStorage) SaveIndexStats(ctx context.Context, snapshotID int64, st
 	stmt, err := tx.PrepareContext(ctx, `
 		INSERT INTO index_stats (
 			snapshot_id, schemaname, relname, indexrelname, idx_scan,
-			idx_tup_read, idx_tup_fetch, index_size, is_unique, is_primary
-		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+			idx_tup_read, idx_tup_fetch, index_size, is_unique, is_primary,
+			access_method, index_def, key_columns, include_columns, expressions,
+			predicate, backs_foreign_key, stats_since
+		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 	`)
 	if err != nil {
 		return fmt.Errorf("preparing statement: %w", err)
@@ -810,6 +812,8 @@ func (s *SQLiteStorage) SaveIndexStats(ctx context.Context, snapshotID int64, st
 			snapshotID, stat.SchemaName, stat.RelName, stat.IndexRelName,
 			stat.IdxScan, stat.IdxTupRead, stat.IdxTupFetch, stat.IndexSize,
 			stat.IsUnique, stat.IsPrimary,
+			stat.AccessMethod, stat.IndexDef, stat.KeyColumns, stat.IncludeColumns,
+			stat.Expressions, stat.Predicate, stat.BacksForeignKey, stat.StatsSince,
 		)
 		if err != nil {
 			return fmt.Errorf("inserting index stat: %w", err)
@@ -823,7 +827,9 @@ func (s *SQLiteStorage) SaveIndexStats(ctx context.Context, snapshotID int64, st
 func (s *SQLiteStorage) GetIndexStats(ctx context.Context, snapshotID int64) ([]models.IndexStat, error) {
 	rows, err := s.readDB.QueryContext(ctx, `
 		SELECT id, snapshot_id, schemaname, relname, indexrelname, idx_scan,
-			idx_tup_read, idx_tup_fetch, index_size, is_unique, is_primary
+			idx_tup_read, idx_tup_fetch, index_size, is_unique, is_primary,
+			access_method, index_def, key_columns, include_columns, expressions,
+			predicate, backs_foreign_key, stats_since
 		FROM index_stats
 		WHERE snapshot_id = ?
 		ORDER BY index_size DESC
@@ -840,6 +846,8 @@ func (s *SQLiteStorage) GetIndexStats(ctx context.Context, snapshotID int64) ([]
 			&stat.ID, &stat.SnapshotID, &stat.SchemaName, &stat.RelName,
 			&stat.IndexRelName, &stat.IdxScan, &stat.IdxTupRead, &stat.IdxTupFetch,
 			&stat.IndexSize, &stat.IsUnique, &stat.IsPrimary,
+			&stat.AccessMethod, &stat.IndexDef, &stat.KeyColumns, &stat.IncludeColumns,
+			&stat.Expressions, &stat.Predicate, &stat.BacksForeignKey, &stat.StatsSince,
 		)
 		if err != nil {
 			return nil, fmt.Errorf("scanning index stat: %w", err)

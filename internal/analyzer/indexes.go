@@ -5,9 +5,14 @@ import (
 	"fmt"
 	"sort"
 	"strings"
+	"time"
 
 	"github.com/elqsar/pganalyzer/internal/models"
 )
+
+// largeUnusedIndexBytes is the size from which an unused index is worth a
+// warning rather than an informational note.
+const largeUnusedIndexBytes = 100 * 1024 * 1024
 
 // IndexAnalyzer detects issues with indexes such as unused or duplicate indexes.
 type IndexAnalyzer struct {
@@ -37,10 +42,19 @@ func (a *IndexAnalyzer) Analyze(ctx context.Context, snapshotID int64) ([]IndexI
 		return nil, nil
 	}
 
+	snapshot, err := a.storage.GetSnapshotByID(ctx, snapshotID)
+	if err != nil {
+		return nil, err
+	}
+	asOf := time.Now()
+	if snapshot != nil {
+		asOf = snapshot.CapturedAt
+	}
+
 	var issues []IndexIssue
 
 	// Detect unused indexes
-	unusedIssues := a.detectUnusedIndexes(indexStats)
+	unusedIssues := a.detectUnusedIndexes(indexStats, asOf)
 	issues = append(issues, unusedIssues...)
 
 	// Detect duplicate indexes
@@ -55,10 +69,16 @@ func (a *IndexAnalyzer) Analyze(ctx context.Context, snapshotID int64) ([]IndexI
 	return issues, nil
 }
 
-// detectUnusedIndexes finds indexes with zero scans.
-// Excludes primary keys and unique indexes as they serve constraint purposes.
-func (a *IndexAnalyzer) detectUnusedIndexes(stats []models.IndexStat) []IndexIssue {
+// detectUnusedIndexes finds indexes with zero scans over a long enough window.
+//
+// Dropping an index is the most damaging thing this tool recommends, so an index
+// is only reported when idx_scan has been counting for at least UnusedIndexDays.
+// Right after a stats reset or restart every index reads zero, and an unknown
+// window proves nothing. Indexes that enforce constraints or serve foreign-key
+// lookups are skipped, since zero scans does not make them unnecessary.
+func (a *IndexAnalyzer) detectUnusedIndexes(stats []models.IndexStat, asOf time.Time) []IndexIssue {
 	var issues []IndexIssue
+	minWindow := time.Duration(a.config.UnusedIndexDays) * 24 * time.Hour
 
 	for _, stat := range stats {
 		// Skip primary keys and unique indexes - they serve constraint purposes
@@ -71,14 +91,28 @@ func (a *IndexAnalyzer) detectUnusedIndexes(stats []models.IndexStat) []IndexIss
 			continue
 		}
 
+		// Referential checks on the referenced table look rows up through it,
+		// and those lookups are what make deletes fast.
+		if stat.BacksForeignKey {
+			continue
+		}
+
 		// Skip tiny indexes (less than 8KB)
 		if stat.IndexSize < 8192 {
 			continue
 		}
 
-		severity := models.SeverityWarning
-		if stat.IndexSize > 1024*1024 { // > 1MB
-			severity = models.SeverityCritical
+		if stat.StatsSince == nil {
+			continue
+		}
+		window := asOf.Sub(*stat.StatsSince)
+		if window < minWindow {
+			continue
+		}
+
+		severity := models.SeverityInfo
+		if stat.IndexSize >= largeUnusedIndexBytes {
+			severity = models.SeverityWarning
 		}
 
 		issues = append(issues, IndexIssue{
@@ -88,101 +122,104 @@ func (a *IndexAnalyzer) detectUnusedIndexes(stats []models.IndexStat) []IndexIss
 			IssueType:  IndexIssueUnused,
 			Severity:   severity,
 			Description: fmt.Sprintf(
-				"Index has never been used (0 scans). Consider dropping to save %s.",
-				formatBytes(stat.IndexSize),
+				"Index has not been scanned in %d days. Consider dropping to save %s.",
+				int(window.Hours()/24), formatBytes(stat.IndexSize),
 			),
 			IndexSize:    stat.IndexSize,
 			IdxScan:      stat.IdxScan,
 			IsUnique:     stat.IsUnique,
 			IsPrimary:    stat.IsPrimary,
 			SpaceSavings: stat.IndexSize,
+			IndexDef:     stat.IndexDef,
+			StatsWindow:  window,
 		})
 	}
 
 	return issues
 }
 
-// detectDuplicateIndexes finds indexes on the same table that might be redundant.
-// This is a heuristic based on index names and sizes.
-// Note: Full duplicate detection would require index definitions from PostgreSQL.
+// detectDuplicateIndexes finds indexes made redundant by another index on the
+// same table, comparing their definitions: access method, key columns with their
+// opclass, collation and sort order, INCLUDE columns, expressions and predicate.
+//
+// An index is redundant when another index has the same shape and its key columns
+// start with this index's key columns (a strict prefix only counts for btree,
+// which is the only method that can use a leading subset of its keys). Unique and
+// primary-key indexes are never reported, as they enforce constraints. Of two
+// identical non-unique indexes, only the less-scanned one is reported.
 func (a *IndexAnalyzer) detectDuplicateIndexes(stats []models.IndexStat) []IndexIssue {
 	var issues []IndexIssue
 
-	// Group indexes by table
 	tableIndexes := make(map[string][]models.IndexStat)
 	for _, stat := range stats {
+		// Rows collected before definitions were recorded cannot be compared.
+		if stat.KeyColumns == "" {
+			continue
+		}
 		key := stat.SchemaName + "." + stat.RelName
 		tableIndexes[key] = append(tableIndexes[key], stat)
 	}
 
-	// Check each table for potential duplicates
 	for _, indexes := range tableIndexes {
-		if len(indexes) < 2 {
-			continue
-		}
-
-		// Sort by index size descending
+		// Prefer the most-scanned index as the one to keep, so a candidate is
+		// reported against the index queries actually use.
 		sort.Slice(indexes, func(i, j int) bool {
-			return indexes[i].IndexSize > indexes[j].IndexSize
+			if indexes[i].IdxScan != indexes[j].IdxScan {
+				return indexes[i].IdxScan > indexes[j].IdxScan
+			}
+			return indexes[i].IndexRelName < indexes[j].IndexRelName
 		})
 
-		// Check for indexes with similar sizes (potential duplicates)
-		// This is a heuristic - same size doesn't guarantee duplicate
-		// but very similar sizes on same table often indicates redundancy
-		for i := range len(indexes) {
-			for j := i + 1; j < len(indexes); j++ {
-				idx1 := indexes[i]
-				idx2 := indexes[j]
+		// Point each redundant index at one that is itself kept, so the
+		// suggestions never reference an index another suggestion drops.
+		redundant := make(map[string]bool)
+		for _, candidate := range indexes {
+			for _, other := range indexes {
+				if candidate.IndexRelName == other.IndexRelName {
+					continue
+				}
+				if _, ok := redundantWith(candidate, other); ok {
+					redundant[candidate.IndexRelName] = true
+					break
+				}
+			}
+		}
 
-				// Skip if either is primary key
-				if idx1.IsPrimary || idx2.IsPrimary {
+		for _, candidate := range indexes {
+			if !redundant[candidate.IndexRelName] {
+				continue
+			}
+			for _, retained := range indexes {
+				if candidate.IndexRelName == retained.IndexRelName || redundant[retained.IndexRelName] {
+					continue
+				}
+				exact, ok := redundantWith(candidate, retained)
+				if !ok {
 					continue
 				}
 
-				// Check if sizes are within 10% of each other
-				if idx1.IndexSize == 0 || idx2.IndexSize == 0 {
-					continue
-				}
-
-				sizeDiff := float64(idx1.IndexSize-idx2.IndexSize) / float64(idx1.IndexSize)
-				if sizeDiff < 0 {
-					sizeDiff = -sizeDiff
-				}
-
-				// Check for naming patterns that suggest duplicates
-				if a.arePotentialDuplicates(idx1.IndexRelName, idx2.IndexRelName) && sizeDiff < 0.1 {
-					// The less-used one is the candidate for removal
-					lessUsed := idx1
-					moreUsed := idx2
-					if idx1.IdxScan > idx2.IdxScan {
-						lessUsed = idx2
-						moreUsed = idx1
-					}
-
-					// Skip if less-used is a unique constraint
-					if lessUsed.IsUnique {
-						continue
-					}
-
-					issues = append(issues, IndexIssue{
-						SchemaName: lessUsed.SchemaName,
-						TableName:  lessUsed.RelName,
-						IndexName:  lessUsed.IndexRelName,
-						IssueType:  IndexIssueDuplicate,
-						Severity:   models.SeverityInfo,
-						Description: fmt.Sprintf(
-							"Index may be redundant with '%s'. Has %d scans vs %d. Review and consider dropping to save %s.",
-							moreUsed.IndexRelName, lessUsed.IdxScan, moreUsed.IdxScan, formatBytes(lessUsed.IndexSize),
-						),
-						IndexSize:          lessUsed.IndexSize,
-						IdxScan:            lessUsed.IdxScan,
-						IsUnique:           lessUsed.IsUnique,
-						IsPrimary:          lessUsed.IsPrimary,
-						DuplicateOf:        moreUsed.IndexRelName,
-						DuplicateOfIdxScan: moreUsed.IdxScan,
-						SpaceSavings:       lessUsed.IndexSize,
-					})
-				}
+				issues = append(issues, IndexIssue{
+					SchemaName: candidate.SchemaName,
+					TableName:  candidate.RelName,
+					IndexName:  candidate.IndexRelName,
+					IssueType:  IndexIssueDuplicate,
+					Severity:   models.SeverityInfo,
+					Description: fmt.Sprintf(
+						"Index is covered by '%s'. Has %d scans vs %d. Consider dropping to save %s.",
+						retained.IndexRelName, candidate.IdxScan, retained.IdxScan, formatBytes(candidate.IndexSize),
+					),
+					IndexSize:          candidate.IndexSize,
+					IdxScan:            candidate.IdxScan,
+					IsUnique:           candidate.IsUnique,
+					IsPrimary:          candidate.IsPrimary,
+					DuplicateOf:        retained.IndexRelName,
+					DuplicateOfIdxScan: retained.IdxScan,
+					SpaceSavings:       candidate.IndexSize,
+					IndexDef:           candidate.IndexDef,
+					DuplicateOfDef:     retained.IndexDef,
+					ExactDuplicate:     exact,
+				})
+				break
 			}
 		}
 	}
@@ -190,37 +227,76 @@ func (a *IndexAnalyzer) detectDuplicateIndexes(stats []models.IndexStat) []Index
 	return issues
 }
 
-// arePotentialDuplicates checks if two index names suggest they might be duplicates.
-// This is a heuristic based on common naming patterns.
-func (a *IndexAnalyzer) arePotentialDuplicates(name1, name2 string) bool {
-	// Normalize names for comparison
-	n1 := strings.ToLower(name1)
-	n2 := strings.ToLower(name2)
-
-	// Check for common prefixes (after removing common suffixes)
-	suffixes := []string{"_idx", "_index", "_ix", "_1", "_2", "_new", "_old", "_backup", "_v2"}
-
-	clean1 := n1
-	clean2 := n2
-	for _, suffix := range suffixes {
-		clean1 = strings.TrimSuffix(clean1, suffix)
-		clean2 = strings.TrimSuffix(clean2, suffix)
+// redundantWith reports whether candidate can be dropped because retained serves
+// every lookup it does, and whether the two are identical.
+func redundantWith(candidate, retained models.IndexStat) (exact, ok bool) {
+	if candidate.IsPrimary || candidate.IsUnique {
+		return false, false
+	}
+	if candidate.AccessMethod != retained.AccessMethod ||
+		candidate.Expressions != retained.Expressions ||
+		candidate.Predicate != retained.Predicate {
+		return false, false
 	}
 
-	// If cleaned names are identical, they're likely duplicates
-	if clean1 == clean2 && clean1 != n1 && clean2 != n2 {
-		return true
+	candKeys := strings.Fields(candidate.KeyColumns)
+	retKeys := strings.Fields(retained.KeyColumns)
+	if len(candKeys) > len(retKeys) {
+		return false, false
 	}
-
-	// Check if one contains the other (common with legacy indexes)
-	if strings.Contains(n1, n2) || strings.Contains(n2, n1) {
-		// Only if there's significant overlap
-		if min(len(n1), len(n2)) > 5 {
-			return true
+	for i, k := range candKeys {
+		if retKeys[i] != k {
+			return false, false
 		}
 	}
 
-	return false
+	// Columns the retained index carries, so INCLUDE columns the candidate
+	// provides for index-only scans are still available.
+	retCols := make(map[string]bool)
+	for _, k := range retKeys {
+		retCols[strings.SplitN(k, ":", 2)[0]] = true
+	}
+	for _, c := range strings.Fields(retained.IncludeColumns) {
+		retCols[c] = true
+	}
+	for _, c := range strings.Fields(candidate.IncludeColumns) {
+		if !retCols[c] {
+			return false, false
+		}
+	}
+
+	sameKeys := len(candKeys) == len(retKeys)
+	if !sameKeys && (candidate.AccessMethod != "btree" || candidate.Expressions != "") {
+		return false, false
+	}
+
+	exact = sameKeys && sameColumnSet(candidate.IncludeColumns, retained.IncludeColumns)
+	if exact && !retained.IsUnique && !retained.IsPrimary {
+		// Two identical plain indexes: keep the more-scanned one, breaking ties
+		// by name so exactly one of the pair is reported.
+		if candidate.IdxScan > retained.IdxScan ||
+			(candidate.IdxScan == retained.IdxScan && candidate.IndexRelName < retained.IndexRelName) {
+			return false, false
+		}
+	}
+
+	return exact, true
+}
+
+// sameColumnSet compares space-separated column lists ignoring order.
+func sameColumnSet(a, b string) bool {
+	as, bs := strings.Fields(a), strings.Fields(b)
+	if len(as) != len(bs) {
+		return false
+	}
+	sort.Strings(as)
+	sort.Strings(bs)
+	for i := range as {
+		if as[i] != bs[i] {
+			return false
+		}
+	}
+	return true
 }
 
 // formatBytes formats byte count as human-readable string.

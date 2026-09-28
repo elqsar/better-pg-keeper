@@ -487,6 +487,7 @@ func TestIndexStatsOperations(t *testing.T) {
 	})
 
 	t.Run("SaveIndexStats and GetIndexStats", func(t *testing.T) {
+		statsSince := time.Date(2026, 8, 1, 12, 0, 0, 0, time.UTC)
 		stats := []models.IndexStat{
 			{
 				SchemaName:   "public",
@@ -500,13 +501,20 @@ func TestIndexStatsOperations(t *testing.T) {
 				IsPrimary:    true,
 			},
 			{
-				SchemaName:   "public",
-				RelName:      "users",
-				IndexRelName: "idx_users_email",
-				IdxScan:      0, // Unused index
-				IndexSize:    128 * 1024,
-				IsUnique:     false,
-				IsPrimary:    false,
+				SchemaName:      "public",
+				RelName:         "users",
+				IndexRelName:    "idx_users_email",
+				IdxScan:         0, // Unused index
+				IndexSize:       128 * 1024,
+				IsUnique:        false,
+				IsPrimary:       false,
+				AccessMethod:    "btree",
+				IndexDef:        "CREATE INDEX idx_users_email ON public.users USING btree (email) INCLUDE (id)",
+				KeyColumns:      "2:3126:100:0",
+				IncludeColumns:  "1",
+				Predicate:       "(email IS NOT NULL)",
+				BacksForeignKey: true,
+				StatsSince:      &statsSince,
 			},
 		}
 
@@ -520,7 +528,22 @@ func TestIndexStatsOperations(t *testing.T) {
 			t.Fatalf("GetIndexStats failed: %v", err)
 		}
 		if len(retrieved) != 2 {
-			t.Errorf("Expected 2 stats, got %d", len(retrieved))
+			t.Fatalf("Expected 2 stats, got %d", len(retrieved))
+		}
+
+		// Ordered by size, so the unused index comes second.
+		got := retrieved[1]
+		want := stats[1]
+		if got.AccessMethod != want.AccessMethod || got.IndexDef != want.IndexDef ||
+			got.KeyColumns != want.KeyColumns || got.IncludeColumns != want.IncludeColumns ||
+			got.Predicate != want.Predicate || got.BacksForeignKey != want.BacksForeignKey {
+			t.Errorf("index structure not round-tripped: got %+v", got)
+		}
+		if got.StatsSince == nil || !got.StatsSince.Equal(statsSince) {
+			t.Errorf("StatsSince = %v, want %v", got.StatsSince, statsSince)
+		}
+		if retrieved[0].StatsSince != nil {
+			t.Errorf("unset StatsSince should read back as nil, got %v", retrieved[0].StatsSince)
 		}
 	})
 }

@@ -139,6 +139,8 @@ postgres:
 | storage.retention.query_stats | - | 720h | Independent query history retention (30 days) |
 | server.port | - | 8080 | HTTP server port |
 | thresholds.slow_query_ms | - | 1000 | Slow query threshold (ms) |
+| thresholds.slow_query_window | - | 24h | Period slow queries are judged over |
+| thresholds.unused_index_days | - | 30 | Minimum days of scan statistics before flagging an unused index |
 | thresholds.cache_hit_ratio | - | 95.0 | Cache hit ratio warning threshold (%) |
 
 ## Docker Deployment
@@ -331,12 +333,21 @@ PGAnalyzer detects the following issues:
 
 | Rule | Description | Severity |
 |------|-------------|----------|
-| slow_query | Query mean execution time exceeds threshold | Warning/Critical |
-| unused_index | Index with zero scans (excludes PK/unique) | Warning |
+| slow_query | Mean execution time over the last `slow_query_window` (default 24h) exceeds threshold | Warning/Critical |
+| unused_index | No scans for at least `unused_index_days`; skips PK/unique and foreign-key indexes | Info/Warning |
+| duplicate_index | Index identical to, or a leading prefix of, another index on the same table | Info/Warning |
 | missing_index | High sequential scan ratio on large tables | Info/Warning |
 | table_bloat | High dead tuple percentage | Warning/Critical |
 | stale_vacuum | Table not vacuumed recently | Warning |
 | low_cache_hit | Database cache hit ratio below threshold | Warning/Critical |
+| high_temp_usage | Queries spilling to temporary files | Warning/Critical |
+| long_running_query | Queries running longer than expected | Warning/Critical |
+| idle_in_transaction | Sessions holding a transaction open while idle | Warning/Critical |
+| lock_contention | Queries waiting on locks | Warning/Critical |
+| high_deadlocks | Deadlocks detected | Warning/Critical |
+
+Scans on read replicas are not visible to PGAnalyzer, which monitors a single
+server. Check replicas before acting on `unused_index`.
 
 ## Contributing
 

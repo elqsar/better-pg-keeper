@@ -4,6 +4,7 @@ import (
 	"errors"
 	"fmt"
 	"strings"
+	"time"
 )
 
 // ValidationError represents a configuration validation error.
@@ -188,6 +189,13 @@ func validateThresholds(cfg *ThresholdsConfig) ValidationErrors {
 		errs = append(errs, ValidationError{
 			Field:   "thresholds.slow_query_ms",
 			Message: "slow_query_ms must be positive",
+		})
+	}
+
+	if cfg.SlowQueryWindow < Duration(time.Hour) {
+		errs = append(errs, ValidationError{
+			Field:   "thresholds.slow_query_window",
+			Message: fmt.Sprintf("slow_query_window must be at least 1h, got %s", time.Duration(cfg.SlowQueryWindow)),
 		})
 	}
 
