@@ -9,6 +9,8 @@ A PostgreSQL performance analyzer that collects query statistics, detects perfor
 - **Outage Warnings**: Transaction ID wraparound, replication slots retaining WAL, sequences running out,
   forgotten prepared transactions, disk growth and connection saturation
 - **Automated Recommendations**: Generates actionable suggestions for performance improvements
+- **Index Advisor**: Plans the busiest queries hourly and proposes ready-to-run `CREATE INDEX`
+  statements, checked against the planner with hypopg when it is installed
 - **Web Dashboard**: Server-rendered HTML UI for visualizing metrics and suggestions
 - **REST API**: Full API access to all collected data and analysis results
 - **Scheduled Collection**: Automated background collection and analysis at configurable intervals
@@ -156,6 +158,28 @@ postgres:
 | thresholds.cache_hit_ratio | - | 95.0 | Cache hit ratio warning threshold (%) |
 | thresholds.disk_capacity_gb | - | 0 | Size of the data volume; enables the "disk full in N days" forecast |
 
+## Index Advisor
+
+Every hour PGAnalyzer takes the busiest queries of the last 24 hours (by
+execution time, `index_advisor.max_queries`, default 20) and asks PostgreSQL for
+their generic plans. Queries are never executed: they are prepared and explained
+in a read-only transaction with a 2s statement timeout and a 100ms lock timeout.
+
+A sequential scan becomes an `index_recommendation` when its filter can use a
+btree index (equality columns first, then one range column), the table has at
+least `min_table_size_for_index` rows, the filter matches under 20% of them, and
+no existing index already starts with those columns. Proposals from several
+queries on one table are merged when one is a prefix of another.
+
+If the [hypopg](https://github.com/HypoPG/hypopg) extension is installed in the
+monitored database (it is available on RDS, Cloud SQL, Azure and Supabase), each
+proposal is first tried as a hypothetical index, and dropped if the planner would
+not use it. PGAnalyzer never installs extensions.
+
+Planning needs `SELECT` on the tables a query reads; queries the role cannot
+plan are recorded and skipped. The query page shows the latest plan with a
+plain-language summary.
+
 ## Notifications
 
 PGAnalyzer can post to Slack or any webhook, so nobody has to watch the dashboard:
@@ -234,7 +258,8 @@ docker run -d \
 - `GET /api/v1/queries` - List queries with pagination
 - `GET /api/v1/queries/top` - Top N queries by metric
 - `GET /api/v1/queries/:id/history` - Retained query samples; accepts RFC3339 `from`/`to`, `limit`, and `offset`
-- `POST /api/v1/queries/:id/explain` - Get EXPLAIN plan for a query
+- `POST /api/v1/queries/:id/explain` - Get EXPLAIN plan for a query. Without parameter
+  values it returns the generic plan of the normalized query; the query is never executed.
 
 ### Schema
 - `GET /api/v1/schema/tables` - Table statistics
@@ -379,7 +404,8 @@ PGAnalyzer detects the following issues:
 | slow_query | Mean execution time over the last `slow_query_window` (default 24h) exceeds threshold | Warning/Critical |
 | unused_index | No scans for at least `unused_index_days`; skips PK/unique and foreign-key indexes | Info/Warning |
 | duplicate_index | Index identical to, or a leading prefix of, another index on the same table | Info/Warning |
-| missing_index | High sequential scan ratio on large tables | Info/Warning |
+| missing_index | High sequential scan ratio on large tables with no concrete index proposal; explains why busy queries' scans got none | Info/Warning |
+| index_recommendation | Index proposed from the plans of busy queries that read a large table sequentially, with DDL, size estimate and rollback | Info/Warning |
 | table_bloat | High dead tuple percentage | Warning/Critical |
 | stale_vacuum | Table not vacuumed recently | Warning |
 | low_cache_hit | Database cache hit ratio below threshold | Warning/Critical |

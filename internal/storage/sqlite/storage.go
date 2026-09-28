@@ -80,6 +80,11 @@ type Storage interface {
 	SaveExtendedDatabaseStats(ctx context.Context, snapshotID int64, stats *models.ExtendedDatabaseStats) error
 	GetExtendedDatabaseStats(ctx context.Context, snapshotID int64) (*models.ExtendedDatabaseStats, error)
 
+	// Query plan operations
+	SaveQueryPlans(ctx context.Context, snapshotID int64, report *models.QueryPlanReport) error
+	GetQueryPlans(ctx context.Context, snapshotID int64) (*models.QueryPlanReport, error)
+	PurgeOldExplainPlans(ctx context.Context, retention time.Duration) (int64, error)
+
 	// Outage risk operations
 	SaveOutageRisk(ctx context.Context, snapshotID int64, risk *models.OutageRisk) error
 	GetOutageRisk(ctx context.Context, snapshotID int64) (*models.OutageRisk, error)
@@ -1459,7 +1464,7 @@ func (s *SQLiteStorage) SaveExplainPlan(ctx context.Context, plan *models.Explai
 	result, err := s.writeDB.ExecContext(ctx, `
 		INSERT INTO explain_plans (queryid, plan_text, plan_json, captured_at, execution_time)
 		VALUES (?, ?, ?, ?, ?)
-	`, plan.QueryID, plan.PlanText, plan.PlanJSON, plan.CapturedAt, plan.ExecutionTime)
+	`, plan.QueryID, plan.PlanText, plan.PlanJSON, plan.CapturedAt.Round(0), plan.ExecutionTime)
 
 	if err != nil {
 		return 0, fmt.Errorf("saving explain plan: %w", err)

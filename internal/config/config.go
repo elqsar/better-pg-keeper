@@ -14,6 +14,15 @@ type Config struct {
 	Metrics    MetricsConfig    `yaml:"metrics"`
 
 	Notifications NotificationsConfig `yaml:"notifications"`
+	IndexAdvisor  IndexAdvisorConfig  `yaml:"index_advisor"`
+}
+
+// IndexAdvisorConfig controls planning the busiest queries to propose indexes.
+type IndexAdvisorConfig struct {
+	// Enabled runs EXPLAIN (never ANALYZE) on the busiest queries every hour.
+	Enabled bool `yaml:"enabled"`
+	// MaxQueries is how many of the busiest queries are planned.
+	MaxQueries int `yaml:"max_queries"`
 }
 
 // LoggingConfig contains logging settings.
@@ -165,5 +174,9 @@ func Default() Config {
 			Path:    "/metrics",
 		},
 		Notifications: defaultNotifications(),
+		IndexAdvisor: IndexAdvisorConfig{
+			Enabled:    true,
+			MaxQueries: 20,
+		},
 	}
 }

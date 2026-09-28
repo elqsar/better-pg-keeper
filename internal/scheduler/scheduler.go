@@ -20,6 +20,7 @@ type Storage interface {
 	PurgeOldSnapshots(ctx context.Context, retention time.Duration) (int64, error)
 	PurgeOldQueryHistory(ctx context.Context, retention time.Duration) (int64, error)
 	PurgeOldSizeHistory(ctx context.Context, retention time.Duration) (int64, error)
+	PurgeOldExplainPlans(ctx context.Context, retention time.Duration) (int64, error)
 }
 
 // Scheduler coordinates data collection, analysis, and maintenance jobs.

@@ -12,6 +12,7 @@ import (
 
 	"github.com/elqsar/pganalyzer/internal/analyzer"
 	"github.com/elqsar/pganalyzer/internal/models"
+	"github.com/elqsar/pganalyzer/internal/plans"
 	"github.com/elqsar/pganalyzer/internal/postgres"
 )
 
@@ -146,6 +147,8 @@ type ExplainResponse struct {
 	CapturedAt    string   `json:"captured_at"`
 	ExecutionTime *float64 `json:"execution_time,omitempty"`
 	UsedParams    bool     `json:"used_params"`
+	// Summary explains the plan in plain language.
+	Summary []string `json:"summary,omitempty"`
 }
 
 // ExplainRequest represents the request body for parameterized EXPLAIN.
@@ -429,7 +432,9 @@ func (h *QueriesHandler) ExplainQuery(c echo.Context) error {
 		plan, err = h.pgClient.ExplainWithParams(ctx, queryText, params, false)
 		usedParams = err == nil
 	} else {
-		plan, err = h.pgClient.Explain(ctx, queryText, false)
+		// Without values, plan the normalized query generically: plain EXPLAIN
+		// fails on its $n placeholders.
+		plan, err = h.pgClient.ExplainGeneric(ctx, queryText)
 	}
 	if err != nil {
 		c.Logger().Errorf("failed to run EXPLAIN: %v", err)
@@ -456,6 +461,7 @@ func (h *QueriesHandler) ExplainQuery(c echo.Context) error {
 		CapturedAt:    plan.CapturedAt.Format(time.RFC3339),
 		ExecutionTime: plan.ExecutionTime,
 		UsedParams:    usedParams,
+		Summary:       summarizePlan(plan.PlanJSON),
 	})
 }
 
@@ -571,4 +577,14 @@ func convertParamValue(value, typeHint string) any {
 	}
 	// Default: return as string (works for text, varchar, uuid, unknown types)
 	return value
+}
+
+// summarizePlan describes plan JSON in plain language, or returns nil when it
+// does not parse.
+func summarizePlan(planJSON string) []string {
+	root, err := plans.Parse(planJSON)
+	if err != nil {
+		return nil
+	}
+	return plans.Describe(root)
 }

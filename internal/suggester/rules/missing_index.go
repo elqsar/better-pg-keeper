@@ -45,11 +45,21 @@ func (r *MissingIndexRule) Evaluate(ctx context.Context, analysis *analyzer.Anal
 		return nil, nil
 	}
 
+	// With usable query plans, tables that got a concrete index_recommendation
+	// are left to that rule rather than reported twice.
+	var planned *analyzer.QueryPlanAnalysis
+	if analysis.DomainsUsable(analyzer.DomainQueryPlans) {
+		planned = analysis.QueryPlans
+	}
+
 	var suggestions []suggester.Suggestion
 
 	for _, issue := range analysis.TableIssues {
 		// Only handle missing index issues
 		if issue.IssueType != analyzer.TableIssueMissingIndex {
+			continue
+		}
+		if len(planned.RecommendationsFor(issue.SchemaName, issue.TableName)) > 0 {
 			continue
 		}
 
@@ -79,15 +89,21 @@ func (r *MissingIndexRule) Evaluate(ctx context.Context, analysis *analyzer.Anal
 
 		desc.WriteString("**Recommendation:**\n")
 		desc.WriteString("High sequential scan ratio indicates the table is frequently scanned without using indexes.\n\n")
-		desc.WriteString("**To identify missing indexes:**\n")
-		desc.WriteString("1. Identify the most frequent queries on this table\n")
-		desc.WriteString("2. Run EXPLAIN ANALYZE on those queries\n")
-		desc.WriteString("3. Look for sequential scans in the query plan\n")
-		desc.WriteString("4. Add indexes on columns used in WHERE, JOIN, and ORDER BY clauses\n\n")
-
-		desc.WriteString("**Example index creation:**\n")
-		fmt.Fprintf(&desc, "```sql\n-- Analyze query patterns first\nCREATE INDEX idx_%s_<column> ON %s.%s (<column>);\n```\n",
-			issue.TableName, issue.SchemaName, issue.TableName)
+		if scans := skippedScans(planned, issue.SchemaName, issue.TableName); len(scans) > 0 {
+			desc.WriteString("**What the query plans show:**\n")
+			desc.WriteString("Busy queries scan this table, but no index is proposed:\n")
+			for _, line := range scans {
+				fmt.Fprintf(&desc, "- %s\n", line)
+			}
+			desc.WriteString("\n")
+		} else {
+			desc.WriteString("None of the busiest queries PGAnalyzer plans each hour explain these scans; they may come from ")
+			desc.WriteString("less frequent queries, batch jobs, or filters an index cannot serve.\n\n")
+		}
+		desc.WriteString("**To find the cause:**\n")
+		desc.WriteString("1. Open the busiest queries that mention this table on the Queries page\n")
+		desc.WriteString("2. Generate their plans and look for \"Reads every row of\" this table\n")
+		desc.WriteString("3. Index the columns those queries filter on with equality first, then one range column\n")
 
 		suggestions = append(suggestions, suggester.Suggestion{
 			RuleID:       r.ID(),
@@ -110,3 +126,21 @@ func (r *MissingIndexRule) Evaluate(ctx context.Context, analysis *analyzer.Anal
 
 // Ensure MissingIndexRule implements Rule interface.
 var _ suggester.Rule = (*MissingIndexRule)(nil)
+
+// skippedScans describes planned queries that scan the table sequentially but
+// got no index proposal, with the reason.
+func skippedScans(planned *analyzer.QueryPlanAnalysis, schema, table string) []string {
+	if planned == nil || planned.Report == nil {
+		return nil
+	}
+	var lines []string
+	for _, q := range planned.Report.Queries {
+		for _, s := range q.SeqScans {
+			if s.Schema != schema || s.Table != table || s.SkipReason == "" {
+				continue
+			}
+			lines = append(lines, fmt.Sprintf("Query %d (%.0f%% of DB time): %s", q.QueryID, 100*q.TimeShare, s.SkipReason))
+		}
+	}
+	return lines
+}

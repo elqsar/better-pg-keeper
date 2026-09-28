@@ -349,6 +349,8 @@ type QueryDetailPageData struct {
 	BasePageData
 	Query       *PageQueryDetail
 	ExplainPlan *models.ExplainPlan
+	// PlanSummary explains ExplainPlan in plain language.
+	PlanSummary []string
 }
 
 // PageQueryDetail represents detailed query info for the page.
@@ -435,6 +437,9 @@ func (h *PageHandler) QueryDetail(c echo.Context) error {
 		c.Logger().Errorf("failed to get explain plan: %v", err)
 	}
 	data.ExplainPlan = plan
+	if plan != nil {
+		data.PlanSummary = summarizePlan(plan.PlanJSON)
+	}
 
 	return c.Render(http.StatusOK, "query_detail", data)
 }

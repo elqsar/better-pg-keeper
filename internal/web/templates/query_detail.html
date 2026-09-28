@@ -143,6 +143,12 @@
                     </div>
                     <div id="explain-content">
                         {{if .ExplainPlan}}
+                        {{if .PlanSummary}}
+                        <h3 class="font-semibold text-gray-900 mb-2">In plain language</h3>
+                        <ul class="text-gray-700 mb-4" style="list-style: disc; padding-left: 1.25rem;">
+                            {{range .PlanSummary}}<li>{{.}}</li>{{end}}
+                        </ul>
+                        {{end}}
                         <pre class="code-block whitespace-pre-wrap">{{.ExplainPlan.PlanText}}</pre>
                         <p class="text-gray-500 text-sm mt-4">Captured: {{formatTime .ExplainPlan.CapturedAt}}</p>
                         {{else}}
@@ -285,7 +291,13 @@
                 if (data.used_params) {
                     paramNote = '<div class="text-green-600 text-sm mb-3 flex items-center gap-2"><svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 13l4 4L19 7"></path></svg>Plan generated with provided parameter values</div>';
                 }
-                content.innerHTML = paramNote +
+                let summary = '';
+                if (data.summary && data.summary.length > 0) {
+                    summary = '<h3 class="font-semibold text-gray-900 mb-2">In plain language</h3>' +
+                        '<ul class="text-gray-700 mb-4" style="list-style: disc; padding-left: 1.25rem;">' +
+                        data.summary.map(s => '<li>' + escapeHtml(s) + '</li>').join('') + '</ul>';
+                }
+                content.innerHTML = paramNote + summary +
                     '<pre class="code-block whitespace-pre-wrap">' + escapeHtml(data.plan_text) + '</pre>' +
                     '<p class="text-gray-500 text-sm mt-4">Captured: just now</p>';
             }

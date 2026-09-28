@@ -253,6 +253,20 @@ func (a *MainAnalyzer) analyzeOperational(ctx context.Context, coverage map[stri
 		}
 	}
 
+	if id := snapshotFor(coverage, DomainQueryPlans); id != 0 {
+		plans, err := a.analyzeQueryPlans(ctx, id)
+		if err != nil {
+			invalidateDomain(coverage, DomainQueryPlans)
+			result.Errors = append(result.Errors, fmt.Sprintf("query plan analysis: %v", err))
+			result.ErrorCount++
+		} else {
+			result.QueryPlans = plans
+			if plans == nil {
+				invalidateDomain(coverage, DomainQueryPlans)
+			}
+		}
+	}
+
 	if id := snapshotFor(coverage, DomainOutageRisk); id != 0 {
 		risk, err := a.analyzeRisk(ctx, result.InstanceID, id, coverage)
 		if err != nil {

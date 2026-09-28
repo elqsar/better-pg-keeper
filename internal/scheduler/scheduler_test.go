@@ -280,6 +280,18 @@ func (m *mockStorage) SaveExtendedDatabaseStats(ctx context.Context, snapshotID 
 	return nil
 }
 
+func (m *mockStorage) SaveQueryPlans(ctx context.Context, snapshotID int64, report *models.QueryPlanReport) error {
+	return nil
+}
+
+func (m *mockStorage) GetQueryPlans(ctx context.Context, snapshotID int64) (*models.QueryPlanReport, error) {
+	return nil, nil
+}
+
+func (m *mockStorage) PurgeOldExplainPlans(ctx context.Context, retention time.Duration) (int64, error) {
+	return 0, nil
+}
+
 func (m *mockStorage) SaveOutageRisk(ctx context.Context, snapshotID int64, risk *models.OutageRisk) error {
 	return nil
 }
@@ -459,6 +471,10 @@ func (m *mockPGClient) ExplainWithParams(ctx context.Context, query string, para
 }
 
 // Operational stats methods
+func (m *mockPGClient) ExplainGeneric(ctx context.Context, query string) (*models.ExplainPlan, error) {
+	return &models.ExplainPlan{}, nil
+}
+
 func (m *mockPGClient) GetOutageRisk(ctx context.Context) (*models.OutageRisk, error) {
 	return &models.OutageRisk{}, nil
 }

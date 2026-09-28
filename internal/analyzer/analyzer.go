@@ -28,13 +28,14 @@ const (
 	DomainLocks         = "locks"
 	DomainDatabaseStats = "database_stats"
 	DomainOutageRisk    = "outage_risk"
+	DomainQueryPlans    = "query_plans"
 )
 
 // AllDomains lists every domain analysis resolves.
 var AllDomains = []string{
 	DomainQueryStats, DomainTableStats, DomainIndexStats,
 	DomainBloat, DomainActivity, DomainLocks, DomainDatabaseStats,
-	DomainOutageRisk,
+	DomainOutageRisk, DomainQueryPlans,
 }
 
 // DomainCoverage records whether a data domain was actually observed, and how
@@ -85,6 +86,7 @@ type AnalysisResult struct {
 	LockStats        *LockAnalysis        `json:"lock_stats,omitempty"`
 	TransactionStats *TransactionAnalysis `json:"transaction_stats,omitempty"`
 	Risk             *RiskAnalysis        `json:"risk,omitempty"`
+	QueryPlans       *QueryPlanAnalysis   `json:"query_plans,omitempty"`
 	ErrorCount       int                  `json:"error_count"`
 	Errors           []string             `json:"errors,omitempty"`
 	// Coverage records which data domains this result actually observed, keyed by
@@ -339,6 +341,8 @@ type Storage interface {
 	GetLockStats(ctx context.Context, snapshotID int64) (*models.LockStats, error)
 	GetBlockedQueries(ctx context.Context, snapshotID int64) ([]models.BlockedQuery, error)
 	GetExtendedDatabaseStats(ctx context.Context, snapshotID int64) (*models.ExtendedDatabaseStats, error)
+	// Query plans
+	GetQueryPlans(ctx context.Context, snapshotID int64) (*models.QueryPlanReport, error)
 	// Outage risk
 	GetOutageRisk(ctx context.Context, snapshotID int64) (*models.OutageRisk, error)
 	GetSizeHistory(ctx context.Context, instanceID int64, since time.Time) ([]models.SizeSample, error)

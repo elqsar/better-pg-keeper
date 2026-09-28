@@ -99,6 +99,56 @@ Last updated: 2026-09-28. Everything below is committed on `main`.
   - A role without extra privileges collects with no failed checks; sequences it
     can't read are counted and skipped.
 
+### 4. Index advisor (2026-09-28)
+
+- `postgres.ExplainGeneric` plans normalized `pg_stat_statements` text (`$1`)
+  without values or execution:
+  - prepares the query, then runs `EXPLAIN EXECUTE` with NULLs under
+    `force_generic_plan`
+  - read-only transaction with a 2s statement timeout and a 100ms lock timeout
+  - prepared statements and hypopg indexes are session state, so they are removed
+    explicitly and the connection is closed if that fails. Verified no leaks.
+- `internal/plans`, a pure package:
+  - plan walker
+  - filter parser: equality columns first, one range column; OR, functions and
+    patterns give no proposal
+  - DDL helpers
+  - plain-language `Describe`
+- `query_plans` collector, every 1h:
+  - top `index_advisor.max_queries` queries by time over 24h
+  - reuses plans for 24h, but re-checks existing indexes every run
+  - skips small tables, filters matching over 20% of rows, and columns already
+    covered by an index
+  - validates with hypopg when installed
+  - saves plans to `explain_plans` for the query page
+  - fails at startup until query stats exist, so it is retried the next cycle
+  - Migration `019_query_plans.sql`. `explain_plans` is now purged with snapshot
+    retention.
+- New rule `index_recommendation` (20 rules):
+  - `CREATE INDEX CONCURRENTLY` DDL, the queries it serves with links, hypopg
+    cost before and after, estimated size, INVALID-index check, and rollback
+  - warning when the queries hold at least 5% of DB time
+- `missing_index` defers to it for tables with a recommendation. It dropped the
+  placeholder DDL and now explains why busy queries' scans got no proposal.
+- Query page: plain-language plan summary; "Generate" without values uses the
+  generic plan instead of failing on `$1`.
+- Fixes:
+  - the suggestion page kept no line breaks, so markdown descriptions ran together
+    (now `pre-wrap`)
+  - the suggestions API decoded metadata through float64, corrupting 64-bit query
+    ids (now passed through raw)
+- Tests:
+  - unit tests for the parser, describe, collector (fake planner, real SQLite),
+    grouping and rules
+  - `tests/integration/index_advice_test.go` passed on PG14 and PG17 with hypopg:
+    - proposes `(status, created_at)`
+    - UPDATE is not executed
+    - no real index is built
+    - the proposed DDL runs
+    - the proposal retires once the index exists
+  - End to end on PG17: a recommendation with hypopg "5k → 213" appeared 41s after
+    start, and both pages rendered.
+
 ## Known gaps in what's done
 
 - The dashboard and query pages still use lifetime means and a hard-coded 1000 ms
@@ -119,33 +169,37 @@ Last updated: 2026-09-28. Everything below is committed on `main`.
     needs `disk_capacity_gb`. Free space isn't visible from SQL.
   - `SequencesUnreadable` is collected but not shown anywhere yet.
   - The new signals appear only as suggestions. There is no dashboard panel yet.
+- Index advisor:
+  - Only btree proposals from scan filters. Join keys, ORDER BY, expression and
+    partial indexes are not proposed.
+  - Queries recorded as SQL-level `PREPARE name AS ...` are skipped. Protocol-level
+    prepared statements, which drivers use, are fine.
+  - Suggestion descriptions are markdown shown as preformatted text; a renderer
+    would make code blocks and links clickable.
 
 ## Next steps (in order)
 
-1. **Concrete index recommendations.** Derive columns from the plans of queries
-   that seq-scan a table, link table issues to those queries, and optionally
-   validate with HypoPG. Emit ready-to-run DDL with a lock and rollback note.
-   Explain plans in plain language.
-2. **Configuration review.** Check `pg_settings`: `shared_buffers`, `work_mem`,
+1. **Configuration review.** Check `pg_settings`: `shared_buffers`, `work_mem`,
    `random_page_cost`, autovacuum settings, `statement_timeout`,
    `idle_in_transaction_session_timeout`, `log_min_duration_statement`, and a
    too-small `pg_stat_statements.max`.
-3. **Fix verification.** After a suggestion resolves or an index is added,
+2. **Fix verification.** After a suggestion resolves or an index is added,
    compare query history before and after.
-4. **Multi-database support.** Accept a list of targets in config instead of one
+3. **Multi-database support.** Accept a list of targets in config instead of one
    instance per process (`cmd/pganalyzer/main.go:157`).
-5. **Setup and onboarding.**
+4. **Setup and onboarding.**
    - Refuse to start with the default `admin/admin` unless auth is explicitly off.
    - Add a first-run check for `pg_stat_statements`, grants, and how much
      history has been collected.
    - Write setup docs for managed Postgres (RDS/Aurora, Cloud SQL, Supabase).
    - Publish releases, a container image, and a Helm chart.
-6. **Housekeeping.**
+5. **Housekeeping.**
    - Switch the dashboard to windowed query stats (see gaps).
    - Store `resolved_at` on suggestions.
    - Add tests for the collector subpackages.
    - `configs/config.example.yaml` references a missing `docs/postgresql-setup.md`.
    - Add a dashboard panel for outage risk: wraparound %, slots, sequences, disk forecast.
+   - Render suggestion markdown (code blocks, links) on the suggestion page.
 
 ## Dev notes
 

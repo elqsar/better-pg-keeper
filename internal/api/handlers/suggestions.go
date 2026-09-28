@@ -26,15 +26,17 @@ type SuggestionsHandler struct {
 
 // SuggestionResponse represents a suggestion in the API response.
 type SuggestionResponse struct {
-	ID           int64                  `json:"id"`
-	RuleID       string                 `json:"rule_id"`
-	Severity     string                 `json:"severity"`
-	Title        string                 `json:"title"`
-	Description  string                 `json:"description"`
-	TargetObject string                 `json:"target_object"`
-	FirstSeenAt  string                 `json:"first_seen_at"`
-	LastSeenAt   string                 `json:"last_seen_at"`
-	Metadata     map[string]interface{} `json:"metadata,omitempty"`
+	ID           int64  `json:"id"`
+	RuleID       string `json:"rule_id"`
+	Severity     string `json:"severity"`
+	Title        string `json:"title"`
+	Description  string `json:"description"`
+	TargetObject string `json:"target_object"`
+	FirstSeenAt  string `json:"first_seen_at"`
+	LastSeenAt   string `json:"last_seen_at"`
+	// Metadata is passed through as stored. Decoding it into a map would turn
+	// every number into a float64 and corrupt 64-bit query ids.
+	Metadata json.RawMessage `json:"metadata,omitempty"`
 }
 
 // SuggestionsListResponse represents the suggestions list response.
@@ -185,12 +187,8 @@ func suggestionToResponse(sug models.Suggestion) SuggestionResponse {
 		LastSeenAt:   sug.LastSeenAt.Format("2006-01-02T15:04:05Z"),
 	}
 
-	// Parse metadata JSON
-	if sug.Metadata != "" {
-		var metadata map[string]interface{}
-		if err := json.Unmarshal([]byte(sug.Metadata), &metadata); err == nil {
-			resp.Metadata = metadata
-		}
+	if sug.Metadata != "" && json.Valid([]byte(sug.Metadata)) {
+		resp.Metadata = json.RawMessage(sug.Metadata)
 	}
 
 	return resp

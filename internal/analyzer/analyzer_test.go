@@ -22,6 +22,7 @@ type mockStorage struct {
 	onDelta       func(from, to int64)
 	queryStatsErr error
 	outageRisk    map[int64]*models.OutageRisk
+	queryPlans    map[int64]*models.QueryPlanReport
 	sizeHistory   []models.SizeSample
 	connPeak      *models.ConnectionPeak
 	// coverage optionally overrides which snapshots a collector contributed to,
@@ -38,6 +39,7 @@ func newMockStorage() *mockStorage {
 		bloatStats:    make(map[int64][]models.BloatInfo),
 		extendedStats: make(map[int64]*models.ExtendedDatabaseStats),
 		outageRisk:    make(map[int64]*models.OutageRisk),
+		queryPlans:    make(map[int64]*models.QueryPlanReport),
 	}
 }
 
@@ -117,6 +119,8 @@ func (m *mockStorage) covers(snapshotID int64, collector string) bool {
 		return len(m.bloatStats[snapshotID]) > 0
 	case DomainOutageRisk:
 		return m.outageRisk[snapshotID] != nil
+	case DomainQueryPlans:
+		return m.queryPlans[snapshotID] != nil
 	case DomainActivity, DomainLocks, DomainDatabaseStats:
 		// The mock returns nil for these and the analyzers treat nil as
 		// "not collected", so reporting them as covered costs nothing.
@@ -184,6 +188,10 @@ func (m *mockStorage) GetLockStats(ctx context.Context, snapshotID int64) (*mode
 
 func (m *mockStorage) GetBlockedQueries(ctx context.Context, snapshotID int64) ([]models.BlockedQuery, error) {
 	return nil, nil
+}
+
+func (m *mockStorage) GetQueryPlans(ctx context.Context, snapshotID int64) (*models.QueryPlanReport, error) {
+	return m.queryPlans[snapshotID], nil
 }
 
 func (m *mockStorage) GetOutageRisk(ctx context.Context, snapshotID int64) (*models.OutageRisk, error) {

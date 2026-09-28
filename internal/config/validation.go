@@ -56,6 +56,13 @@ func Validate(cfg *Config) error {
 
 	errs = append(errs, validateNotifications(&cfg.Notifications)...)
 
+	if cfg.IndexAdvisor.Enabled && (cfg.IndexAdvisor.MaxQueries < 1 || cfg.IndexAdvisor.MaxQueries > 200) {
+		errs = append(errs, ValidationError{
+			Field:   "index_advisor.max_queries",
+			Message: fmt.Sprintf("max_queries must be between 1 and 200, got %d", cfg.IndexAdvisor.MaxQueries),
+		})
+	}
+
 	if len(errs) > 0 {
 		return errs
 	}

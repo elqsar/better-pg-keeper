@@ -16,6 +16,7 @@ import (
 	"github.com/elqsar/pganalyzer/internal/collector"
 	"github.com/elqsar/pganalyzer/internal/collector/activity"
 	"github.com/elqsar/pganalyzer/internal/collector/locks"
+	"github.com/elqsar/pganalyzer/internal/collector/plans"
 	"github.com/elqsar/pganalyzer/internal/collector/query"
 	"github.com/elqsar/pganalyzer/internal/collector/resource"
 	"github.com/elqsar/pganalyzer/internal/collector/risk"
@@ -217,6 +218,16 @@ func run(ctx context.Context, configPath string) error {
 			InstanceID: instanceID,
 		}),
 	)
+	if cfg.IndexAdvisor.Enabled {
+		coordinator.RegisterCollector(plans.NewCollector(plans.Config{
+			PGClient:     pgClient,
+			Planner:      pgClient,
+			Storage:      storage,
+			InstanceID:   instanceID,
+			MaxQueries:   cfg.IndexAdvisor.MaxQueries,
+			MinTableRows: int64(cfg.Thresholds.MinTableSizeForIndex),
+		}))
+	}
 	slog.Info("collectors registered", "count", len(coordinator.Collectors()))
 
 	// Create analyzer. It needs the registered collectors' intervals to judge how
@@ -234,6 +245,7 @@ func run(ctx context.Context, configPath string) error {
 		rules.NewUnusedIndexRule(suggesterCfg),
 		rules.NewDuplicateIndexRule(suggesterCfg),
 		rules.NewMissingIndexRule(suggesterCfg),
+		rules.NewIndexRecommendationRule(suggesterCfg),
 		rules.NewBloatRule(suggesterCfg),
 		rules.NewVacuumRule(suggesterCfg),
 		rules.NewCacheRule(suggesterCfg),

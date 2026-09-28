@@ -212,6 +212,21 @@ thresholds:
   # disk_capacity_gb: 500
 
 # -----------------------------------------------------------------------------
+# Index Advisor (optional)
+# -----------------------------------------------------------------------------
+# Every hour, plans the busiest queries with EXPLAIN (never EXPLAIN ANALYZE: the
+# queries are not run) and turns sequential scans into concrete CREATE INDEX
+# proposals. Planning uses a read-only transaction with a 2s statement timeout
+# and a 100ms lock timeout.
+# If the hypopg extension is installed in the database, each proposal is checked
+# against the planner with a hypothetical index first. PGAnalyzer never installs it.
+index_advisor:
+  enabled: true
+  # How many of the busiest queries (by execution time over 24h) to plan.
+  # Default: 20
+  max_queries: 20
+
+# -----------------------------------------------------------------------------
 # Notifications (optional)
 # -----------------------------------------------------------------------------
 # Alerts in Slack or any webhook when issues appear, plus a periodic digest.
