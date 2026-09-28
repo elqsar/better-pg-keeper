@@ -1,0 +1,87 @@
+{{define "setup"}}
+<!DOCTYPE html>
+<html lang="en" class="h-full">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>{{.Title}} - PG Analyzer</title>
+    <link rel="stylesheet" href="/static/style.css">
+</head>
+<body class="min-h-full flex flex-col bg-gray-50">
+    <header class="bg-white border-b border-gray-200 sticky top-0 z-50">
+        <div class="max-w-7xl mx-auto px-4 lg:px-6">
+            <div class="flex items-center justify-between h-16">
+                <a href="/" class="text-xl font-semibold text-gray-900 hover:text-primary transition-colors">
+                    PG Analyzer
+                </a>
+                <nav class="flex items-center gap-1">
+                    <a href="/" class="nav-link-inactive">Dashboard</a>
+                    <a href="/queries" class="nav-link-inactive">Queries</a>
+                    <a href="/schema" class="nav-link-inactive">Schema</a>
+                    <a href="/activity" class="nav-link-inactive">Activity</a>
+                    <a href="/suggestions" class="nav-link-inactive">Suggestions</a>
+                </nav>
+            </div>
+        </div>
+    </header>
+
+    <main class="flex-1 py-8 px-4 lg:px-6">
+        <div class="max-w-7xl mx-auto">
+            <div class="mb-8 flex items-center justify-between">
+                <div>
+                    <h1 class="text-2xl font-bold text-gray-900">Setup</h1>
+                    <p class="mt-1 text-gray-500">Whether PGAnalyzer can see what it needs, and how much history it has collected</p>
+                </div>
+                <a href="/setup?refresh=1" class="btn-secondary">Check again</a>
+            </div>
+
+            {{with .Report}}
+            <div class="card overflow-hidden">
+                <div class="px-6 py-4 border-b border-gray-200 bg-gray-50">
+                    <h2 class="font-semibold text-gray-900">Checklist</h2>
+                    <p class="text-sm text-gray-500">Checked {{formatTime .CheckedAt}}. Run <span class="font-mono">pganalyzer -check</span> for the same list in a terminal.</p>
+                </div>
+                <div class="p-6">
+                    <table class="w-full">
+                        <tbody class="divide-y divide-gray-100">
+                            {{range .Checks}}
+                            <tr>
+                                <td class="py-3 pr-4 align-top">
+                                    {{if eq .Status "ok"}}<span class="badge-success">OK</span>
+                                    {{else if eq .Status "fail"}}<span class="badge-warning">Failed</span>
+                                    {{else if eq .Status "warn"}}<span class="badge-warning">Warning</span>
+                                    {{else if eq .Status "pending"}}<span class="badge-info">Collecting</span>
+                                    {{else}}<span class="badge-gray">Info</span>{{end}}
+                                </td>
+                                <td class="py-3">
+                                    <div class="font-medium text-gray-900">{{.Title}}</div>
+                                    <div class="text-sm text-gray-700">{{.Detail}}</div>
+                                    {{if and .Fix (ne .Status "ok")}}
+                                    <pre class="code-block mt-1 whitespace-pre-wrap">{{.Fix}}</pre>
+                                    {{end}}
+                                </td>
+                            </tr>
+                            {{end}}
+                        </tbody>
+                    </table>
+                </div>
+            </div>
+            {{else}}
+            <div class="card p-6 text-gray-700">Setup checks are not enabled in this build.</div>
+            {{end}}
+        </div>
+    </main>
+
+    <footer class="bg-white border-t border-gray-200 py-4 px-4 lg:px-6">
+        <div class="max-w-7xl mx-auto flex items-center gap-4 text-sm text-gray-500">
+            <span>PG Analyzer {{.Version}}</span>
+            {{if not .LastSnapshot.IsZero}}
+            <span class="text-gray-300">|</span>
+            <span>Last snapshot: {{formatTime .LastSnapshot}}</span>
+            {{end}}
+        </div>
+    </footer>
+
+</body>
+</html>
+{{end}}

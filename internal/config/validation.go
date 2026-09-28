@@ -170,7 +170,14 @@ func validateServer(cfg *ServerConfig) ValidationErrors {
 		if cfg.Auth.Password == "" {
 			errs = append(errs, ValidationError{
 				Field:   "server.auth.password",
-				Message: "password is required when auth is enabled",
+				Message: "password is required when auth is enabled; set SERVER_PASSWORD, or server.auth.enabled: false for local use",
+			})
+		} else if cfg.Auth.Username == "admin" && cfg.Auth.Password == "admin" {
+			// Earlier example configs defaulted to admin/admin; refuse to
+			// expose query texts and schema behind a well-known password.
+			errs = append(errs, ValidationError{
+				Field:   "server.auth.password",
+				Message: "the default admin/admin credentials are not allowed; set SERVER_PASSWORD, or server.auth.enabled: false for local use",
 			})
 		}
 	}

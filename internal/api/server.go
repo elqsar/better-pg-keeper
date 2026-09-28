@@ -16,6 +16,7 @@ import (
 	"github.com/elqsar/pganalyzer/internal/config"
 	"github.com/elqsar/pganalyzer/internal/postgres"
 	"github.com/elqsar/pganalyzer/internal/scheduler"
+	"github.com/elqsar/pganalyzer/internal/setup"
 	"github.com/elqsar/pganalyzer/internal/storage/sqlite"
 	"github.com/elqsar/pganalyzer/internal/verify"
 	"github.com/elqsar/pganalyzer/internal/web"
@@ -33,6 +34,7 @@ type Server struct {
 	logger        *log.Logger
 	version       string
 	verifier      *verify.Verifier
+	setup         *setup.Checker
 }
 
 // ServerConfig holds configuration for creating a Server.
@@ -48,6 +50,9 @@ type ServerConfig struct {
 	Version       string
 	// Verifier enables fix verification on resolved suggestions. Optional.
 	Verifier *verify.Verifier
+	// Setup enables the /setup page, the dashboard banner and the health
+	// setup summary. Optional.
+	Setup *setup.Checker
 }
 
 // NewServer creates a new API server.
@@ -135,6 +140,7 @@ func NewServer(cfg ServerConfig) (*Server, error) {
 		logger:        logger,
 		version:       version,
 		verifier:      cfg.Verifier,
+		setup:         cfg.Setup,
 	}
 
 	// Register routes
@@ -146,13 +152,13 @@ func NewServer(cfg ServerConfig) (*Server, error) {
 // registerRoutes sets up all API routes.
 func (s *Server) registerRoutes() {
 	// Create handlers
-	healthHandler := handlers.NewHealthHandler(s.storage, s.pgClient, s.scheduler, s.instanceID)
+	healthHandler := handlers.NewHealthHandler(s.storage, s.pgClient, s.scheduler, s.instanceID).WithSetup(s.setup)
 	dashboardHandler := handlers.NewDashboardHandler(s.storage, s.instanceID)
 	queriesHandler := handlers.NewQueriesHandler(s.storage, s.pgClient, s.instanceID)
 	schemaHandler := handlers.NewSchemaHandler(s.storage, s.instanceID)
 	suggestionsHandler := handlers.NewSuggestionsHandler(s.storage, s.instanceID)
 	snapshotsHandler := handlers.NewSnapshotsHandler(s.storage, s.scheduler, s.instanceID)
-	pageHandler := handlers.NewPageHandler(s.storage, s.instanceID, s.version).WithVerifier(s.verifier)
+	pageHandler := handlers.NewPageHandler(s.storage, s.instanceID, s.version).WithVerifier(s.verifier).WithSetup(s.setup)
 
 	// Health endpoint (no auth required - handled in middleware)
 	s.echo.GET("/health", healthHandler.GetHealth)
@@ -174,6 +180,7 @@ func (s *Server) registerRoutes() {
 	s.echo.GET("/suggestions", pageHandler.Suggestions)
 	s.echo.GET("/suggestions/:id", pageHandler.SuggestionDetail)
 	s.echo.GET("/activity", pageHandler.Activity)
+	s.echo.GET("/setup", pageHandler.Setup)
 
 	// API v1 routes
 	apiV1 := s.echo.Group("/api/v1")

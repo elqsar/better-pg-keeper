@@ -3,6 +3,7 @@ package config
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 )
@@ -406,6 +407,27 @@ server:
 	}
 	if !containsField(err.Error(), "server.auth") {
 		t.Errorf("expected error about server.auth, got: %v", err)
+	}
+}
+
+func TestValidation_DefaultCredentialsRefused(t *testing.T) {
+	base := `
+postgres:
+  host: localhost
+  database: mydb
+  user: myuser
+server:
+  auth:
+`
+	_, err := LoadFromString(base + "    enabled: true\n    username: admin\n    password: admin\n")
+	if err == nil || !strings.Contains(err.Error(), "admin/admin") {
+		t.Errorf("admin/admin with auth enabled: err = %v, want it refused", err)
+	}
+	if _, err := LoadFromString(base + "    enabled: false\n    username: admin\n    password: admin\n"); err != nil {
+		t.Errorf("admin/admin with auth disabled: %v", err)
+	}
+	if _, err := LoadFromString(base + "    enabled: true\n    username: admin\n    password: s3cret\n"); err != nil {
+		t.Errorf("admin with a real password: %v", err)
 	}
 }
 

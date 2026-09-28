@@ -11,6 +11,7 @@ import (
 	"github.com/elqsar/pganalyzer/internal/models"
 	"github.com/elqsar/pganalyzer/internal/postgres"
 	"github.com/elqsar/pganalyzer/internal/scheduler"
+	"github.com/elqsar/pganalyzer/internal/setup"
 )
 
 // HealthStorage defines the storage interface needed by the health handler.
@@ -24,6 +25,7 @@ type HealthHandler struct {
 	pgClient   postgres.Client
 	scheduler  *scheduler.Scheduler
 	instanceID int64
+	setup      *setup.Checker
 }
 
 // HealthResponse represents the health check response.
@@ -31,6 +33,22 @@ type HealthResponse struct {
 	Status       string     `json:"status"`
 	PGConnected  bool       `json:"pg_connected"`
 	LastSnapshot *time.Time `json:"last_snapshot,omitempty"`
+	// Setup counts setup problems; see /setup. It does not affect Status, so
+	// uptime monitors keep meaning "PGAnalyzer is running".
+	Setup *SetupSummary `json:"setup,omitempty"`
+}
+
+// SetupSummary counts setup checks by outcome.
+type SetupSummary struct {
+	Failed  int `json:"failed"`
+	Warned  int `json:"warned"`
+	Pending int `json:"pending"`
+}
+
+// WithSetup adds the setup summary to health responses.
+func (h *HealthHandler) WithSetup(c *setup.Checker) *HealthHandler {
+	h.setup = c
+	return h
 }
 
 // NewHealthHandler creates a new HealthHandler.
@@ -64,9 +82,18 @@ func (h *HealthHandler) GetHealth(c echo.Context) error {
 		status = "degraded"
 	}
 
-	return c.JSON(http.StatusOK, HealthResponse{
+	resp := HealthResponse{
 		Status:       status,
 		PGConnected:  pgConnected,
 		LastSnapshot: lastSnapshot,
-	})
+	}
+	if h.setup != nil {
+		r := h.setup.Report(ctx)
+		resp.Setup = &SetupSummary{
+			Failed:  r.Count(models.SetupFail),
+			Warned:  r.Count(models.SetupWarn),
+			Pending: r.Count(models.SetupPending),
+		}
+	}
+	return c.JSON(http.StatusOK, resp)
 }

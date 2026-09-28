@@ -11,6 +11,7 @@ import (
 	"github.com/labstack/echo/v4"
 
 	"github.com/elqsar/pganalyzer/internal/models"
+	"github.com/elqsar/pganalyzer/internal/setup"
 	"github.com/elqsar/pganalyzer/internal/verify"
 )
 
@@ -39,6 +40,13 @@ type PageHandler struct {
 	instanceID int64
 	version    string
 	verifier   *verify.Verifier
+	setup      *setup.Checker
+}
+
+// WithSetup enables the /setup page and the dashboard setup banner.
+func (h *PageHandler) WithSetup(c *setup.Checker) *PageHandler {
+	h.setup = c
+	return h
 }
 
 // WithVerifier enables fix verification on resolved suggestion pages.
@@ -67,6 +75,9 @@ type BasePageData struct {
 // DashboardPageData contains data for the dashboard page.
 type DashboardPageData struct {
 	BasePageData
+	// Setup is the setup checklist, shown as a banner when something needs
+	// attention or history is still being collected.
+	Setup             *SetupBanner
 	CacheHitRatio     float64
 	TotalQueries      int64
 	SlowQueriesCount  int
@@ -110,6 +121,10 @@ func (h *PageHandler) Dashboard(c echo.Context) error {
 		},
 		TopQueries:        []DashboardQuery{},
 		RecentSuggestions: []DashboardSuggestion{},
+	}
+
+	if h.setup != nil {
+		data.Setup = newSetupBanner(h.setup.Report(ctx))
 	}
 
 	// Get latest snapshot (for metadata only)

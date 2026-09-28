@@ -4,6 +4,7 @@ import (
 	"context"
 	"flag"
 	"fmt"
+	"io"
 	"log/slog"
 	"net/http"
 	"os"
@@ -29,6 +30,7 @@ import (
 	"github.com/elqsar/pganalyzer/internal/notifier"
 	"github.com/elqsar/pganalyzer/internal/postgres"
 	"github.com/elqsar/pganalyzer/internal/scheduler"
+	"github.com/elqsar/pganalyzer/internal/setup"
 	"github.com/elqsar/pganalyzer/internal/storage/sqlite"
 	"github.com/elqsar/pganalyzer/internal/suggester"
 	"github.com/elqsar/pganalyzer/internal/suggester/rules"
@@ -48,6 +50,7 @@ func main() {
 		showVersion = flag.Bool("version", false, "Print version information and exit")
 		configPath  = flag.String("config", "configs/config.yaml", "Path to configuration file")
 		notifyTest  = flag.Bool("notify-test", false, "Send a test message to the configured notification channels and exit")
+		setupCheck  = flag.Bool("check", false, "Check the PostgreSQL setup (extension, privileges, collected history) and exit; non-zero on failure")
 	)
 	flag.Parse()
 
@@ -89,6 +92,18 @@ func main() {
 			os.Exit(1)
 		}
 		slog.Info("test notification sent")
+		return
+	}
+
+	if *setupCheck {
+		ok, err := runSetupCheck(ctx, *configPath, os.Stdout)
+		if err != nil {
+			slog.Error("setup check failed", "error", err)
+			os.Exit(1)
+		}
+		if !ok {
+			os.Exit(1)
+		}
 		return
 	}
 
@@ -158,17 +173,26 @@ func run(ctx context.Context, configPath string) error {
 	)
 
 	// Get or create instance record
-	instanceName := fmt.Sprintf("%s:%d/%s", cfg.Postgres.Host, cfg.Postgres.Port, cfg.Postgres.Database)
-	instanceID, err := storage.GetOrCreateInstance(ctx, &models.Instance{
-		Name:     instanceName,
-		Host:     cfg.Postgres.Host,
-		Port:     cfg.Postgres.Port,
-		Database: cfg.Postgres.Database,
-	})
+	instance := instanceRecord(cfg)
+	instanceName := instance.Name
+	instanceID, err := storage.GetOrCreateInstance(ctx, instance)
 	if err != nil {
 		return fmt.Errorf("getting/creating instance: %w", err)
 	}
 	slog.Info("instance ready", "id", instanceID, "name", instanceName)
+
+	// Report setup problems once at startup; the dashboard shows them too.
+	setupOpts := setupOptions(cfg, pgClient)
+	setupOpts.Storage, setupOpts.InstanceID = storage, instanceID
+	setupChecker := setup.New(setupOpts)
+	for _, check := range setupChecker.Report(ctx).Checks {
+		switch check.Status {
+		case models.SetupFail, models.SetupWarn:
+			slog.Warn("setup: "+check.Title, "status", check.Status, "detail", check.Detail, "fix", check.Fix)
+		case models.SetupPending:
+			slog.Info("setup: "+check.Title, "detail", check.Detail)
+		}
+	}
 
 	// Create coordinator and register collectors
 	coordinator := collector.NewCoordinator(collector.CoordinatorConfig{
@@ -338,6 +362,7 @@ func run(ctx context.Context, configPath string) error {
 		InstanceID:    instanceID,
 		Version:       version,
 		Verifier:      verifier,
+		Setup:         setupChecker,
 	})
 	if err != nil {
 		return fmt.Errorf("creating api server: %w", err)
@@ -391,4 +416,76 @@ func sendTestNotification(ctx context.Context, configPath string) error {
 	}
 	instance := fmt.Sprintf("%s:%d/%s", cfg.Postgres.Host, cfg.Postgres.Port, cfg.Postgres.Database)
 	return notifier.SendTest(ctx, channels, instance, cfg.Notifications.DashboardURL)
+}
+
+// runSetupCheck prints the setup checklist and reports whether nothing failed.
+// It reads collected history only when the storage file already exists, so a
+// check before the first run creates nothing.
+func runSetupCheck(ctx context.Context, configPath string, out io.Writer) (bool, error) {
+	cfg, err := config.Load(configPath)
+	if err != nil {
+		return false, fmt.Errorf("loading config: %w", err)
+	}
+	pgClient, err := postgres.NewClient(postgres.ClientConfig{
+		Host:     cfg.Postgres.Host,
+		Port:     cfg.Postgres.Port,
+		Database: cfg.Postgres.Database,
+		User:     cfg.Postgres.User,
+		Password: cfg.Postgres.Password,
+		SSLMode:  cfg.Postgres.SSLMode,
+	})
+	if err != nil {
+		return false, fmt.Errorf("creating postgres client: %w", err)
+	}
+	var pg setup.PGChecker = pgClient
+	if err := pgClient.Connect(ctx); err != nil {
+		pg = failedChecker{err}
+	} else {
+		defer pgClient.Close()
+	}
+
+	opts := setupOptions(cfg, pg)
+	if _, err := os.Stat(cfg.Storage.Path); err == nil {
+		storage, err := sqlite.NewStorage(cfg.Storage.Path)
+		if err != nil {
+			return false, fmt.Errorf("opening storage: %w", err)
+		}
+		defer storage.Close()
+		instanceID, err := storage.GetOrCreateInstance(ctx, instanceRecord(cfg))
+		if err != nil {
+			return false, fmt.Errorf("finding instance: %w", err)
+		}
+		opts.Storage, opts.InstanceID = storage, instanceID
+	}
+
+	report := setup.New(opts).Run(ctx)
+	fmt.Fprintf(out, "PGAnalyzer setup check for %s\n\n", instanceRecord(cfg).Name)
+	setup.WriteText(out, report)
+	if opts.Storage == nil {
+		fmt.Fprintf(out, "\nNo data collected yet (%s does not exist), so history readiness is not shown.\n", cfg.Storage.Path)
+	}
+	return report.Count(models.SetupFail) == 0, nil
+}
+
+// failedChecker reports a connection failure as the only check.
+type failedChecker struct{ err error }
+
+func (f failedChecker) CheckSetup(context.Context) (*models.SetupReport, error) { return nil, f.err }
+
+func setupOptions(cfg *config.Config, pg setup.PGChecker) setup.Options {
+	return setup.Options{
+		PG:              pg,
+		SlowQueryWindow: time.Duration(cfg.Thresholds.SlowQueryWindow),
+		UnusedIndexDays: cfg.Thresholds.UnusedIndexDays,
+		IndexAdvisor:    cfg.IndexAdvisor.Enabled,
+	}
+}
+
+func instanceRecord(cfg *config.Config) *models.Instance {
+	return &models.Instance{
+		Name:     fmt.Sprintf("%s:%d/%s", cfg.Postgres.Host, cfg.Postgres.Port, cfg.Postgres.Database),
+		Host:     cfg.Postgres.Host,
+		Port:     cfg.Postgres.Port,
+		Database: cfg.Postgres.Database,
+	}
 }

@@ -88,7 +88,24 @@ postgres:
   sslmode: prefer
 ```
 
-### 3. Run PGAnalyzer
+### 3. Check the setup
+
+```bash
+task check -- -config configs/config.yaml
+# or: ./bin/pganalyzer -check -config configs/config.yaml
+```
+
+This prints a checklist with a fix for each problem:
+- PostgreSQL version (14 or later)
+- `pg_stat_statements` preloaded and created in the database
+- `pg_monitor` (or equivalent) for the monitoring role
+- hypopg (optional)
+- once data exists, how much history has been collected
+
+It exits non-zero if a check fails. The same list is on the `/setup` page, and
+the dashboard shows a banner while something needs attention.
+
+### 4. Run PGAnalyzer
 
 #### Using Task (recommended)
 
@@ -118,13 +135,13 @@ task docker:build
 task docker:run
 ```
 
-### 4. Access the Dashboard
+### 5. Access the Dashboard
 
-Open http://localhost:8080 in your browser.
-
-Default credentials (if auth is enabled):
-- Username: `admin`
-- Password: `admin`
+Open http://localhost:8080 in your browser and log in with the configured
+`server.auth` credentials (username `admin` by default, password from
+`SERVER_PASSWORD`). There is no default password: PGAnalyzer refuses to start
+with auth enabled and no password, or with `admin`/`admin`. For local
+development only, set `server.auth.enabled: false`.
 
 ## Configuration
 
@@ -259,13 +276,14 @@ docker run -d \
   -v ./data:/app/data \
   -v ./configs/config.yaml:/app/configs/config.yaml:ro \
   -e POSTGRES_PASSWORD=your_password \
+  -e SERVER_PASSWORD=choose_a_password \
   pganalyzer:latest
 ```
 
 ## API Endpoints
 
 ### Health Check
-- `GET /health` - Returns service health status (no auth required)
+- `GET /health` - Returns service health status (no auth required), with a `setup` count of failed, warned and pending setup checks. The count doesn't change `status`.
 
 ### Dashboard
 - `GET /api/v1/dashboard` - Overview statistics
@@ -297,6 +315,7 @@ docker run -d \
 - `/queries/:id` - Query detail with execution plan
 - `/schema` - Tables, indexes, and bloat information
 - `/suggestions` - Performance recommendations
+- `/setup` - Setup checklist (extension, privileges, collected history)
 
 ## Development
 

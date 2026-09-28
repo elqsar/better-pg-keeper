@@ -114,9 +114,9 @@ server:
     # Username for basic auth
     username: ${SERVER_USERNAME:-admin}
 
-    # Password for basic auth
-    # IMPORTANT: Change this in production and use env variable!
-    password: ${SERVER_PASSWORD:-admin}
+    # Password for basic auth. Required when auth is enabled; PGAnalyzer
+    # refuses to start with admin/admin. Set it through the environment.
+    password: ${SERVER_PASSWORD}
 
   # Request timeout (optional)
   # timeout: 30s

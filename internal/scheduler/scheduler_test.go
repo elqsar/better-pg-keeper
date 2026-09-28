@@ -491,6 +491,10 @@ func (m *mockPGClient) GetServerSettings(ctx context.Context) (*models.ServerSet
 	return &models.ServerSettings{}, nil
 }
 
+func (m *mockPGClient) CheckSetup(ctx context.Context) (*models.SetupReport, error) {
+	return &models.SetupReport{}, nil
+}
+
 func (m *mockPGClient) GetConnectionActivity(ctx context.Context) (*models.ConnectionActivity, error) {
 	return nil, nil
 }

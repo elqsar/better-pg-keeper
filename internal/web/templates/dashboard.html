@@ -32,6 +32,22 @@
                 <p class="mt-1 text-gray-500">PostgreSQL performance overview</p>
             </div>
 
+            {{with .Setup}}
+            {{if .NeedsAttention}}
+            <div class="mb-6 rounded-lg border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-900">
+                <span class="font-semibold">{{if .Failed}}{{.Failed}} setup check(s) failed{{else}}{{.Warned}} setup warning(s){{end}}.</span>
+                {{.Headline}}
+                <a href="/setup" class="underline hover:text-amber-900">See setup</a>
+            </div>
+            {{else}}
+            <div class="mb-6 rounded-lg border border-blue-200 bg-blue-50 px-4 py-3 text-sm text-blue-800">
+                <span class="font-semibold">Still collecting history.</span>
+                {{.Headline}}
+                <a href="/setup" class="underline hover:text-blue-900">See setup</a>
+            </div>
+            {{end}}
+            {{end}}
+
             <!-- Stats Cards - Row 1 -->
             <div class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-6 mb-6">
                 <div class="stat-card">

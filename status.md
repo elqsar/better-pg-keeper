@@ -262,6 +262,56 @@ Last updated: 2026-09-28. Everything below is committed.
   keeps `slot:old` active while a fixed sequence resolves. The suggester test
   fails with the guard removed.
 
+### 8. Setup checks and safe defaults (2026-09-28)
+
+- **Breaking: no default dashboard password.** With auth enabled,
+  PGAnalyzer refuses to start without a password or with `admin`/`admin`. The
+  message says to set `SERVER_PASSWORD` or `server.auth.enabled: false`. The
+  example config no longer defaults the password.
+- **`postgres.CheckSetup`** (`internal/postgres/setup.go`). Each check is
+  independent and comes with its fix:
+  - version ≥ 14
+  - `pg_stat_statements` created in the database and loaded. This is detected
+    by reading the view, which works for any role, unlike reading
+    `shared_preload_libraries`.
+  - `pg_monitor` (or `pg_read_all_stats` + `pg_read_all_settings`), else a
+    warning with `GRANT pg_monitor TO ...`
+  - hypopg: info only, and left out when the index advisor is off
+  - It also returns when index statistics started counting.
+- **`internal/setup`** adds history readiness from storage:
+  - slow-query window
+  - `unused_index_days` since the statistics reset
+  - 24h of size history for the disk forecast
+  - Each item says "ready in ~N hours/days".
+  - Reports are cached for 10 minutes; `Refresh` bypasses the cache.
+  - `track_io_timing` and `pg_stat_statements.max` are left to the
+    configuration rules rather than repeated here.
+- **Where it shows:**
+  - `pganalyzer -check` / `task check -- -config <file>`: prints a checklist
+    and exits non-zero on a failure. It reads history only if the storage file
+    already exists.
+  - startup logs: warn/fail once, pending as info
+  - `/setup` page, with "Check again" (`?refresh=1`)
+  - a dashboard banner: amber when something failed or warned, blue while only
+    history is pending
+  - a `setup` count on `/health`, which doesn't change `status`
+- `task check` rebuilt `static/style.css` through the `css` dependency, so it
+  now includes the classes used by the new templates.
+- Tests:
+  - unit tests for readiness math, caching, connection failure, credential
+    validation, banner and page rendering
+  - `tests/integration/setup_test.go` passed on PG14 and PG17: superuser all
+    OK, a plain role warns with the GRANT fix, a database without the
+    extension fails with `CREATE EXTENSION`
+  - End to end on PG17 without preload:
+    - `task check` printed the preload fix and exited non-zero
+    - startup logged it
+    - `/health` showed `failed: 1`
+    - the dashboard showed the amber banner
+    - after restarting Postgres with the library preloaded, "Check again" showed
+      OK and the banner switched to "still collecting history"
+    - `admin/admin` was refused at startup
+
 ## Known gaps in what's done
 
 - The dashboard and query pages still use lifetime means and a hard-coded 1000 ms
@@ -311,27 +361,19 @@ Last updated: 2026-09-28. Everything below is committed.
 
 ## Next steps (in order)
 
-1. **Setup checks and safe defaults.**
-   - Refuse to start with `admin/admin` while auth is enabled (breaking, `feat!:`).
-   - Add `postgres.CheckSetup`: version, `pg_stat_statements` preloaded and
-     created, `pg_monitor` or equivalent grants, `track_io_timing`, hypopg
-     (optional). Each check comes with its fix.
-   - History readiness ("windowed advice ready in ~N hours").
-   - Show it all through `pganalyzer -check` / `task check`, startup logs, a
-     `/setup` page with a dashboard banner, and a `setup` field on `/health`.
-2. **Setup docs**: `docs/postgresql-setup.md` (fixes the broken link in
+1. **Setup docs**: `docs/postgresql-setup.md` (fixes the broken link in
    `configs/config.example.yaml`), with RDS/Aurora, Cloud SQL and Supabase
    sections.
-3. **Dashboard catches up with the analyzer.**
+2. **Dashboard catches up with the analyzer.**
    - Windowed slow-query stats and the configured threshold (see gaps).
    - An outage-risk panel, including `SequencesUnreadable`.
    - Rendered suggestion markdown.
-4. **Housekeeping.**
+3. **Housekeeping.**
    - Delete the stale root `migrations/sqlite/`.
    - Run golangci-lint.
    - Add collector subpackage tests.
    - Merge `feat/config-review` into `main`.
-5. **Releases.**
+4. **Releases.**
    - CI: unit, lint, and integration tests on PG14/PG17.
    - Goreleaser and a multi-arch image (the Dockerfile hard-codes amd64).
    - A Helm chart.
