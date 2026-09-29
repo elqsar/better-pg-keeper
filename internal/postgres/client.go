@@ -37,6 +37,12 @@ type Client interface {
 	// Outage risk (wraparound, replication slots, sequences, prepared xacts, size)
 	GetOutageRisk(ctx context.Context) (*models.OutageRisk, error)
 
+	// Server configuration review (pg_settings, pg_stat_statements capacity)
+	GetServerSettings(ctx context.Context) (*models.ServerSettings, error)
+
+	// Setup checklist (extension, privileges, version)
+	CheckSetup(ctx context.Context) (*models.SetupReport, error)
+
 	// Query analysis
 	Explain(ctx context.Context, query string, analyze bool) (*models.ExplainPlan, error)
 	ExplainWithParams(ctx context.Context, query string, params []any, analyze bool) (*models.ExplainPlan, error)

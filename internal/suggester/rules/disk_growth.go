@@ -118,5 +118,10 @@ func (r *DiskGrowthRule) Evaluate(ctx context.Context, analysis *analyzer.Analys
 	}}, nil
 }
 
+// UnobservedTargets reports the disk forecast when database sizes could not be read.
+func (r *DiskGrowthRule) UnobservedTargets(analysis *analyzer.AnalysisResult) []string {
+	return unobservedTargets(riskUnavailable(analysis), map[string]string{"size": "instance:disk"})
+}
+
 // Ensure DiskGrowthRule implements Rule interface.
 var _ suggester.Rule = (*DiskGrowthRule)(nil)

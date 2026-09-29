@@ -54,6 +54,8 @@ type Item struct {
 	Target           string `json:"target"`
 	Title            string `json:"title"`
 	URL              string `json:"url,omitempty"`
+	// Outcome is what fixing a resolved issue did, e.g. "3.2s → 40ms (99% faster)".
+	Outcome string `json:"outcome,omitempty"`
 }
 
 // Digest summarises a period.
@@ -162,6 +164,9 @@ func itemLine(it Item, f format) string {
 	}
 	switch it.Event {
 	case EventResolved:
+		if it.Outcome != "" {
+			return "✅ Resolved: " + title + " — " + f.esc(it.Outcome)
+		}
 		return "✅ Resolved: " + title
 	case EventDowngraded:
 		return fmt.Sprintf("✅ Now %s: %s", it.Severity, title)

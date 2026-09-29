@@ -31,6 +31,10 @@ A PostgreSQL performance analyzer that collects query statistics, detects perfor
 
 ### 1. Enable pg_stat_statements in PostgreSQL
 
+[docs/postgresql-setup.md](docs/postgresql-setup.md) has the full guide: a
+monitoring role, optional extras, and steps for Amazon RDS/Aurora, Google Cloud
+SQL and Supabase. For a self-managed server, the short version:
+
 Add to your `postgresql.conf`:
 
 ```ini
@@ -88,7 +92,24 @@ postgres:
   sslmode: prefer
 ```
 
-### 3. Run PGAnalyzer
+### 3. Check the setup
+
+```bash
+task check -- -config configs/config.yaml
+# or: ./bin/pganalyzer -check -config configs/config.yaml
+```
+
+This prints a checklist with a fix for each problem:
+- PostgreSQL version (14 or later)
+- `pg_stat_statements` preloaded and created in the database
+- `pg_monitor` (or equivalent) for the monitoring role
+- hypopg (optional)
+- once data exists, how much history has been collected
+
+It exits non-zero if a check fails. The same list is on the `/setup` page, and
+the dashboard shows a banner while something needs attention.
+
+### 4. Run PGAnalyzer
 
 #### Using Task (recommended)
 
@@ -118,13 +139,13 @@ task docker:build
 task docker:run
 ```
 
-### 4. Access the Dashboard
+### 5. Access the Dashboard
 
-Open http://localhost:8080 in your browser.
-
-Default credentials (if auth is enabled):
-- Username: `admin`
-- Password: `admin`
+Open http://localhost:8080 in your browser and log in with the configured
+`server.auth` credentials (username `admin` by default, password from
+`SERVER_PASSWORD`). There is no default password: PGAnalyzer refuses to start
+with auth enabled and no password, or with `admin`/`admin`. For local
+development only, set `server.auth.enabled: false`.
 
 ## Configuration
 
@@ -157,6 +178,7 @@ postgres:
 | thresholds.unused_index_days | - | 30 | Minimum days of scan statistics before flagging an unused index |
 | thresholds.cache_hit_ratio | - | 95.0 | Cache hit ratio warning threshold (%) |
 | thresholds.disk_capacity_gb | - | 0 | Size of the data volume; enables the "disk full in N days" forecast |
+| thresholds.server_memory_gb | - | 0 | RAM of the PostgreSQL server; enables memory-setting checks |
 
 ## Index Advisor
 
@@ -192,7 +214,7 @@ PGAnalyzer can post to Slack or any webhook, so nobody has to watch the dashboar
   `collection_stale_after`, and a message when it recovers.
 - **Digest** (weekly by default): active issues by severity, issues that
   appeared or were resolved in the period, and the queries that used the most
-  database time.
+  database time. Resolved query issues show what the fix did (see below).
 
 ```yaml
 notifications:
@@ -209,6 +231,21 @@ Check the setup with `pganalyzer -config configs/config.yaml -notify-test` (or
 
 Alerts come from PGAnalyzer itself, so they stop if PGAnalyzer stops. Point an
 uptime monitor at `/health` to cover that.
+
+## Fix Verification
+
+When a `slow_query` or `index_recommendation` suggestion resolves, PGAnalyzer
+compares the mean time of its queries before and after, from query history:
+"index on orders(status, created_at): 3.2s → 40ms (99% faster)". The result is
+shown on the suggestion page and next to the issue in the digest.
+
+- Each side covers up to `thresholds.slow_query_window` (default 24h). A slow
+  query resolves only once its trailing-window mean drops, up to a window after
+  the fix, so its "before" period ends a window earlier.
+- Verdicts: faster (at least 20% lower), slower (at least 20% higher), no
+  significant change, no longer running, or waiting for data. A verdict needs at
+  least 1h and 10 calls after the resolution.
+- History older than `storage.retention.query_stats` can't be compared.
 
 ## Docker Deployment
 
@@ -243,13 +280,14 @@ docker run -d \
   -v ./data:/app/data \
   -v ./configs/config.yaml:/app/configs/config.yaml:ro \
   -e POSTGRES_PASSWORD=your_password \
+  -e SERVER_PASSWORD=choose_a_password \
   pganalyzer:latest
 ```
 
 ## API Endpoints
 
 ### Health Check
-- `GET /health` - Returns service health status (no auth required)
+- `GET /health` - Returns service health status (no auth required), with a `setup` count of failed, warned and pending setup checks. The count doesn't change `status`.
 
 ### Dashboard
 - `GET /api/v1/dashboard` - Overview statistics
@@ -281,6 +319,7 @@ docker run -d \
 - `/queries/:id` - Query detail with execution plan
 - `/schema` - Tables, indexes, and bloat information
 - `/suggestions` - Performance recommendations
+- `/setup` - Setup checklist (extension, privileges, collected history)
 
 ## Development
 
@@ -421,6 +460,8 @@ PGAnalyzer detects the following issues:
 | prepared_transaction | Prepared transaction left open for over 1h (critical after 24h) | Warning/Critical |
 | disk_growth | Disk forecast to fill within 30 days (critical within 7) given `disk_capacity_gb`; otherwise size doubling within 90 days | Info/Warning/Critical |
 | connection_saturation | Peak connections over the last 24h above 80% of `max_connections` (critical at 95%) | Warning/Critical |
+| configuration | Server settings review: autovacuum or `track_counts` off (critical), tables with `autovacuum_enabled=false` (critical over 1GB), no idle-in-transaction or statement timeout, slow-query/lock-wait logging off, untuned `shared_buffers`, `work_mem` x `max_connections` over RAM (given `server_memory_gb`), `random_page_cost` for spinning disks, settings waiting for a restart | Info/Warning/Critical |
+| stat_statements_capacity | pg_stat_statements at 90% of `pg_stat_statements.max` or evicting statements in the last 24h, so query history is incomplete; `pg_stat_statements.track = none` | Warning |
 
 Scans on read replicas are not visible to PGAnalyzer, which monitors a single
 server. Check replicas before acting on `unused_index`.

@@ -4,6 +4,7 @@ package web
 import (
 	"embed"
 	"fmt"
+	"github.com/elqsar/pganalyzer/internal/verify"
 	"html/template"
 	"io"
 	"strings"
@@ -47,6 +48,10 @@ func NewTemplateRenderer() (*TemplateRenderer, error) {
 		"dict":                dict,
 		"eq":                  eq,
 		"formatDurationSec":   formatDurationSec,
+		"formatMs":            verify.FormatMs,
+		"formatSpan":          formatSpan,
+		"formatFraction":      formatFraction,
+		"markdown":            renderMarkdown,
 	}
 
 	tmpl, err := template.New("").Funcs(funcMap).ParseFS(templatesFS, "templates/*.html")
@@ -287,4 +292,21 @@ func dict(values ...interface{}) map[string]interface{} {
 // eq compares two values for equality.
 func eq(a, b interface{}) bool {
 	return a == b
+}
+
+// formatSpan renders a window length in whole hours or days, e.g. "24h" or "7 days".
+func formatSpan(d time.Duration) string {
+	d = d.Round(time.Hour)
+	if d >= 48*time.Hour {
+		return fmt.Sprintf("%d days", int(d.Hours()/24))
+	}
+	return fmt.Sprintf("%dh", int(d.Hours()))
+}
+
+// formatFraction renders a 0-1 fraction as a percentage, with a decimal below 10%.
+func formatFraction(f float64) string {
+	if f < 0.1 {
+		return fmt.Sprintf("%.1f%%", 100*f)
+	}
+	return fmt.Sprintf("%.0f%%", 100*f)
 }

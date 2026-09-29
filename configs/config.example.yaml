@@ -114,9 +114,9 @@ server:
     # Username for basic auth
     username: ${SERVER_USERNAME:-admin}
 
-    # Password for basic auth
-    # IMPORTANT: Change this in production and use env variable!
-    password: ${SERVER_PASSWORD:-admin}
+    # Password for basic auth. Required when auth is enabled; PGAnalyzer
+    # refuses to start with admin/admin. Set it through the environment.
+    password: ${SERVER_PASSWORD}
 
   # Request timeout (optional)
   # timeout: 30s
@@ -210,6 +210,13 @@ thresholds:
   # Without it, growth is reported for information only.
   # For RDS/Cloud SQL use the allocated storage. Default: 0 (unknown)
   # disk_capacity_gb: 500
+
+  # RAM of the PostgreSQL server, in GB. SQL cannot see it, so with this set the
+  # configuration review checks shared_buffers against it (15-40% is typical)
+  # and warns when work_mem x max_connections could exhaust it. Without it, only
+  # an untuned default shared_buffers on a large database is flagged.
+  # For RDS/Cloud SQL use the instance class memory. Default: 0 (unknown)
+  # server_memory_gb: 16
 
 # -----------------------------------------------------------------------------
 # Index Advisor (optional)

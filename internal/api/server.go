@@ -16,7 +16,9 @@ import (
 	"github.com/elqsar/pganalyzer/internal/config"
 	"github.com/elqsar/pganalyzer/internal/postgres"
 	"github.com/elqsar/pganalyzer/internal/scheduler"
+	"github.com/elqsar/pganalyzer/internal/setup"
 	"github.com/elqsar/pganalyzer/internal/storage/sqlite"
+	"github.com/elqsar/pganalyzer/internal/verify"
 	"github.com/elqsar/pganalyzer/internal/web"
 )
 
@@ -31,6 +33,10 @@ type Server struct {
 	instanceID    int64
 	logger        *log.Logger
 	version       string
+	verifier      *verify.Verifier
+	setup         *setup.Checker
+	queries       handlers.QueryWindowConfig
+	risk          handlers.OutageRiskConfig
 }
 
 // ServerConfig holds configuration for creating a Server.
@@ -44,6 +50,17 @@ type ServerConfig struct {
 	InstanceID    int64
 	Logger        *log.Logger
 	Version       string
+	// Verifier enables fix verification on resolved suggestions. Optional.
+	Verifier *verify.Verifier
+	// SlowQueryWindow and SlowQueryMs make dashboard query figures match the
+	// analyzer's. Zero values fall back to 24h and 1000ms.
+	SlowQueryWindow time.Duration
+	SlowQueryMs     float64
+	// DiskCapacityBytes enables the dashboard's "disk full in N days"; 0 means unknown.
+	DiskCapacityBytes int64
+	// Setup enables the /setup page, the dashboard banner and the health
+	// setup summary. Optional.
+	Setup *setup.Checker
 }
 
 // NewServer creates a new API server.
@@ -130,6 +147,14 @@ func NewServer(cfg ServerConfig) (*Server, error) {
 		instanceID:    cfg.InstanceID,
 		logger:        logger,
 		version:       version,
+		verifier:      cfg.Verifier,
+		setup:         cfg.Setup,
+		queries: handlers.QueryWindowConfig{
+			Storage:     cfg.Storage,
+			Window:      cfg.SlowQueryWindow,
+			SlowQueryMs: cfg.SlowQueryMs,
+		},
+		risk: handlers.OutageRiskConfig{Storage: cfg.Storage, DiskCapacityBytes: cfg.DiskCapacityBytes},
 	}
 
 	// Register routes
@@ -141,13 +166,13 @@ func NewServer(cfg ServerConfig) (*Server, error) {
 // registerRoutes sets up all API routes.
 func (s *Server) registerRoutes() {
 	// Create handlers
-	healthHandler := handlers.NewHealthHandler(s.storage, s.pgClient, s.scheduler, s.instanceID)
-	dashboardHandler := handlers.NewDashboardHandler(s.storage, s.instanceID)
+	healthHandler := handlers.NewHealthHandler(s.storage, s.pgClient, s.scheduler, s.instanceID).WithSetup(s.setup)
+	dashboardHandler := handlers.NewDashboardHandler(s.storage, s.instanceID).WithQueryWindow(s.queries)
 	queriesHandler := handlers.NewQueriesHandler(s.storage, s.pgClient, s.instanceID)
 	schemaHandler := handlers.NewSchemaHandler(s.storage, s.instanceID)
 	suggestionsHandler := handlers.NewSuggestionsHandler(s.storage, s.instanceID)
 	snapshotsHandler := handlers.NewSnapshotsHandler(s.storage, s.scheduler, s.instanceID)
-	pageHandler := handlers.NewPageHandler(s.storage, s.instanceID, s.version)
+	pageHandler := handlers.NewPageHandler(s.storage, s.instanceID, s.version).WithVerifier(s.verifier).WithSetup(s.setup).WithQueryWindow(s.queries).WithOutageRisk(s.risk)
 
 	// Health endpoint (no auth required - handled in middleware)
 	s.echo.GET("/health", healthHandler.GetHealth)
@@ -169,6 +194,7 @@ func (s *Server) registerRoutes() {
 	s.echo.GET("/suggestions", pageHandler.Suggestions)
 	s.echo.GET("/suggestions/:id", pageHandler.SuggestionDetail)
 	s.echo.GET("/activity", pageHandler.Activity)
+	s.echo.GET("/setup", pageHandler.Setup)
 
 	// API v1 routes
 	apiV1 := s.echo.Group("/api/v1")

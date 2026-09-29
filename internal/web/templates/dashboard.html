@@ -32,6 +32,22 @@
                 <p class="mt-1 text-gray-500">PostgreSQL performance overview</p>
             </div>
 
+            {{with .Setup}}
+            {{if .NeedsAttention}}
+            <div class="mb-6 rounded-lg border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-900">
+                <span class="font-semibold">{{if .Failed}}{{.Failed}} setup check(s) failed{{else}}{{.Warned}} setup warning(s){{end}}.</span>
+                {{.Headline}}
+                <a href="/setup" class="underline hover:text-amber-900">See setup</a>
+            </div>
+            {{else}}
+            <div class="mb-6 rounded-lg border border-blue-200 bg-blue-50 px-4 py-3 text-sm text-blue-800">
+                <span class="font-semibold">Still collecting history.</span>
+                {{.Headline}}
+                <a href="/setup" class="underline hover:text-blue-900">See setup</a>
+            </div>
+            {{end}}
+            {{end}}
+
             <!-- Stats Cards - Row 1 -->
             <div class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-6 mb-6">
                 <div class="stat-card">
@@ -47,12 +63,12 @@
                 <div class="stat-card">
                     <div class="stat-label">Total Queries</div>
                     <div class="stat-value text-gray-900">{{formatNumber .TotalQueries}}</div>
-                    <div class="stat-hint">Tracked in pg_stat_statements</div>
+                    <div class="stat-hint">{{if .QueryWindow}}Ran in the last {{formatSpan .QueryWindow}}{{else}}Tracked since statistics reset{{end}}</div>
                 </div>
                 <div class="stat-card">
                     <div class="stat-label">Slow Queries</div>
                     <div class="stat-value {{if gt .SlowQueriesCount 0}}text-severity-warning{{else}}text-gray-900{{end}}">{{.SlowQueriesCount}}</div>
-                    <div class="stat-hint">Mean exec time &gt;1s · <a href="/queries?filter=slow&sort=mean_time&order=desc" class="text-primary hover:text-primary-hover">View all</a></div>
+                    <div class="stat-hint">Mean &ge; {{formatMs .SlowQueryMs}} {{if .QueryWindow}}over the last {{formatSpan .QueryWindow}}{{else}}since statistics reset{{end}} · <a href="/queries?filter=slow&sort=mean_time&order=desc" class="text-primary hover:text-primary-hover">View all</a></div>
                 </div>
                 <div class="stat-card">
                     <div class="stat-label">Active Suggestions</div>
@@ -95,11 +111,55 @@
                 </div>
             </div>
 
+            {{with .Risk}}
+            <!-- Outage Risk -->
+            <div class="card overflow-hidden mb-8">
+                <div class="px-6 py-4 border-b border-gray-200 flex items-center justify-between">
+                    <h2 class="font-semibold text-gray-900">Outage risk <span class="text-sm font-medium text-gray-500">as of {{formatTime .CollectedAt}}{{if .InRecovery}} · standby{{end}}</span></h2>
+                    <a href="/suggestions" class="text-sm text-primary hover:text-primary-hover font-medium">Suggestions</a>
+                </div>
+                <div class="p-6">
+                    <table class="w-full">
+                        <tbody class="divide-y divide-gray-100">
+                            <tr>
+                                <td class="py-3 text-gray-500">Transaction ID wraparound</td>
+                                <td class="py-3 text-gray-900">{{formatFraction .XIDFraction}} of the limit{{if .XIDDatabase}} (oldest: {{.XIDDatabase}}){{end}} · multixact {{formatFraction .MXIDFraction}}</td>
+                                <td class="py-3 text-right">{{template "riskIssues" .XIDIssues}}</td>
+                            </tr>
+                            <tr>
+                                <td class="py-3 text-gray-500">Replication</td>
+                                <td class="py-3 text-gray-900">{{if .Slots}}{{.Slots}} slot(s){{if .InactiveSlots}}, {{.InactiveSlots}} inactive{{end}}, {{formatBytes .RetainedWALBytes}} WAL retained{{else}}No replication slots{{end}}{{if .MaxReplayLagSecs}} · replay lag {{formatDurationSec .MaxReplayLagSecs}}{{end}}</td>
+                                <td class="py-3 text-right">{{template "riskIssues" .SlotIssues}}</td>
+                            </tr>
+                            <tr>
+                                <td class="py-3 text-gray-500">Sequences</td>
+                                <td class="py-3 text-gray-900">{{with .TopSequence}}Highest: <span class="font-mono">{{.SchemaName}}.{{.SequenceName}}</span> at {{formatFraction .UsedFraction}}{{else}}No sequences in use{{end}}{{if .SequencesOverHalf}} · {{.SequencesOverHalf}} over 50%{{end}}{{if .SequencesUnreadable}} · <span class="text-amber-700">{{.SequencesUnreadable}} not readable by the monitoring role</span>{{end}}</td>
+                                <td class="py-3 text-right">{{template "riskIssues" .SequenceIssues}}</td>
+                            </tr>
+                            <tr>
+                                <td class="py-3 text-gray-500">Prepared transactions</td>
+                                <td class="py-3 text-gray-900">{{if .PreparedXacts}}{{.PreparedXacts}} open{{else}}None{{end}}</td>
+                                <td class="py-3 text-right">{{template "riskIssues" .PreparedIssues}}</td>
+                            </tr>
+                            <tr>
+                                <td class="py-3 text-gray-500">Disk</td>
+                                <td class="py-3 text-gray-900">{{formatBytes .ClusterBytes}}{{if .CapacityBytes}} of {{formatBytes .CapacityBytes}}{{end}}{{if .HasTrend}} · {{if .Shrinking}}shrinking {{else}}+{{end}}{{formatBytes .GrowthBytes}}/day{{if ge .DaysToFull 0.0}} · full in ~{{printf "%.0f" .DaysToFull}} days{{end}}{{else}} · growth trend after 24h of history{{end}}{{if not .CapacityBytes}} · set <span class="font-mono">thresholds.disk_capacity_gb</span> for a forecast{{end}}</td>
+                                <td class="py-3 text-right">{{template "riskIssues" .DiskIssues}}</td>
+                            </tr>
+                        </tbody>
+                    </table>
+                    {{if .Unavailable}}
+                    <p class="mt-4 text-sm text-amber-700">Checks that could not run: {{range $i, $c := .Unavailable}}{{if $i}}, {{end}}{{$c}}{{end}}. Their rows may be incomplete; see <a href="/setup" class="underline">setup</a>.</p>
+                    {{end}}
+                </div>
+            </div>
+            {{end}}
+
             <div class="grid grid-cols-1 lg:grid-cols-2 gap-6">
                 <!-- Top Queries -->
                 <div class="card overflow-hidden">
                     <div class="px-6 py-4 border-b border-gray-200 flex items-center justify-between">
-                        <h2 class="font-semibold text-gray-900">Top Queries by Total Time</h2>
+                        <h2 class="font-semibold text-gray-900">Top Queries by Total Time <span class="text-sm font-medium text-gray-500">{{if .QueryWindow}}last {{formatSpan .QueryWindow}}{{else}}since statistics reset{{end}}</span></h2>
                         <a href="/queries?sort=total_time" class="text-sm text-primary hover:text-primary-hover font-medium">
                             View All
                         </a>
@@ -191,3 +251,5 @@
 </body>
 </html>
 {{end}}
+
+{{define "riskIssues"}}{{if .}}<a href="/suggestions" class="badge-warning">{{.}} active</a>{{else}}<span class="badge-success">OK</span>{{end}}{{end}}

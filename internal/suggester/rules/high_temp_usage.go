@@ -70,7 +70,11 @@ func (r *HighTempUsageRule) Evaluate(ctx context.Context, analysis *analyzer.Ana
 	desc.WriteString("- May indicate undersized work_mem setting\n\n")
 
 	desc.WriteString("**Recommendations:**\n")
-	desc.WriteString("- Consider increasing `work_mem` for sorting and hash operations\n")
+	if st, ok := analysis.Settings.GetSetting("work_mem"); ok {
+		fmt.Fprintf(&desc, "- `work_mem` is %s. Consider raising it for the roles or sessions that run the large sorts and hashes (`ALTER ROLE ... SET work_mem`), rather than server-wide\n", st.Display())
+	} else {
+		desc.WriteString("- Consider increasing `work_mem` for sorting and hash operations\n")
+	}
 	desc.WriteString("- Review queries doing large sorts, hash joins, or aggregations\n")
 	desc.WriteString("- Add appropriate indexes to reduce sorting needs\n")
 	desc.WriteString("- Consider partitioning large tables\n")

@@ -34,6 +34,7 @@ type SuggestionResponse struct {
 	TargetObject string `json:"target_object"`
 	FirstSeenAt  string `json:"first_seen_at"`
 	LastSeenAt   string `json:"last_seen_at"`
+	ResolvedAt   string `json:"resolved_at,omitempty"`
 	// Metadata is passed through as stored. Decoding it into a map would turn
 	// every number into a float64 and corrupt 64-bit query ids.
 	Metadata json.RawMessage `json:"metadata,omitempty"`
@@ -183,8 +184,11 @@ func suggestionToResponse(sug models.Suggestion) SuggestionResponse {
 		Title:        sug.Title,
 		Description:  sug.Description,
 		TargetObject: sug.TargetObject,
-		FirstSeenAt:  sug.FirstSeenAt.Format("2006-01-02T15:04:05Z"),
-		LastSeenAt:   sug.LastSeenAt.Format("2006-01-02T15:04:05Z"),
+		FirstSeenAt:  sug.FirstSeenAt.UTC().Format("2006-01-02T15:04:05Z"),
+		LastSeenAt:   sug.LastSeenAt.UTC().Format("2006-01-02T15:04:05Z"),
+	}
+	if sug.ResolvedAt != nil {
+		resp.ResolvedAt = sug.ResolvedAt.UTC().Format("2006-01-02T15:04:05Z")
 	}
 
 	if sug.Metadata != "" && json.Valid([]byte(sug.Metadata)) {

@@ -147,6 +147,8 @@ type Suggestion struct {
 	FirstSeenAt  time.Time  `json:"first_seen_at"`
 	LastSeenAt   time.Time  `json:"last_seen_at"`
 	DismissedAt  *time.Time `json:"dismissed_at,omitempty"`
+	// ResolvedAt is when the issue was last resolved; nil while active.
+	ResolvedAt *time.Time `json:"resolved_at,omitempty"`
 }
 
 // Severity constants for suggestions.

@@ -88,7 +88,7 @@
                                 <span class="font-medium text-gray-900">{{.Title}}</span>
                             </div>
                             <div class="text-sm font-mono text-gray-500 mb-2">{{.TargetObject}}</div>
-                            <div class="text-sm text-gray-600 mb-4">{{.Description}}</div>
+                            <div class="markdown text-sm text-gray-600 mb-4">{{markdown .Description}}</div>
                             <div class="flex flex-wrap gap-4 text-xs text-gray-400">
                                 <span>Rule: {{.RuleID}}</span>
                                 <span>First seen: {{formatTimeShort .FirstSeenAt}}</span>

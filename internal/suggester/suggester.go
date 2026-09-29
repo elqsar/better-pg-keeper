@@ -90,6 +90,7 @@ func (s *Suggester) Suggest(ctx context.Context, analysis *analyzer.AnalysisResu
 	// resolves live issues on every collection gap.
 	var allSuggestions []Suggestion
 	resolvableRules := make(map[string]bool, len(s.rules))
+	unobserved := make(map[string][]string)
 
 	for _, rule := range s.rules {
 		if !analysis.DomainsUsable(rule.RequiredDomains()...) {
@@ -109,6 +110,12 @@ func (s *Suggester) Suggest(ctx context.Context, analysis *analyzer.AnalysisResu
 			continue
 		}
 		allSuggestions = append(allSuggestions, suggestions...)
+		if partial, ok := rule.(PartiallyObserved); ok {
+			if prefixes := partial.UnobservedTargets(analysis); len(prefixes) > 0 {
+				unobserved[rule.ID()] = prefixes
+				s.logger.Printf("Rule %s: not resolving targets %v, their data was not observed", rule.ID(), prefixes)
+			}
+		}
 	}
 
 	result.TotalSuggestions = len(allSuggestions)
@@ -159,7 +166,7 @@ func (s *Suggester) Suggest(ctx context.Context, analysis *analyzer.AnalysisResu
 	// skipped or failed rule, "not detected" means "not looked for".
 	for key, sug := range existingMap {
 		if !stillActive[key] {
-			if !resolvableRules[sug.RuleID] {
+			if !resolvableRules[sug.RuleID] || hasAnyPrefix(sug.TargetObject, unobserved[sug.RuleID]) {
 				continue
 			}
 			// This issue is no longer detected, mark as resolved
@@ -190,6 +197,15 @@ func describeCoverage(analysis *analyzer.AnalysisResult, domains []string) strin
 		}
 	}
 	return strings.Join(parts, ", ")
+}
+
+func hasAnyPrefix(s string, prefixes []string) bool {
+	for _, p := range prefixes {
+		if strings.HasPrefix(s, p) {
+			return true
+		}
+	}
+	return false
 }
 
 // suggestionKey creates a unique key for deduplication.

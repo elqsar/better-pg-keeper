@@ -300,6 +300,14 @@ func (m *mockStorage) GetOutageRisk(ctx context.Context, snapshotID int64) (*mod
 	return nil, nil
 }
 
+func (m *mockStorage) SaveServerSettings(ctx context.Context, snapshotID int64, settings *models.ServerSettings) error {
+	return nil
+}
+
+func (m *mockStorage) GetServerSettings(ctx context.Context, snapshotID int64) (*models.ServerSettings, error) {
+	return nil, nil
+}
+
 func (m *mockStorage) RecordSize(ctx context.Context, instanceID int64, at time.Time, clusterBytes int64) error {
 	return nil
 }
@@ -477,6 +485,14 @@ func (m *mockPGClient) ExplainGeneric(ctx context.Context, query string) (*model
 
 func (m *mockPGClient) GetOutageRisk(ctx context.Context) (*models.OutageRisk, error) {
 	return &models.OutageRisk{}, nil
+}
+
+func (m *mockPGClient) GetServerSettings(ctx context.Context) (*models.ServerSettings, error) {
+	return &models.ServerSettings{}, nil
+}
+
+func (m *mockPGClient) CheckSetup(ctx context.Context) (*models.SetupReport, error) {
+	return &models.SetupReport{}, nil
 }
 
 func (m *mockPGClient) GetConnectionActivity(ctx context.Context) (*models.ConnectionActivity, error) {

@@ -73,6 +73,12 @@ tasks:
     cmds:
       - "{{.BUILD_DIR}}/{{.BINARY_NAME}} -notify-test {{.CLI_ARGS}}"
 
+  check:
+    desc: Check the PostgreSQL setup and collected history (task check -- -config path)
+    deps: [build]
+    cmds:
+      - "{{.BUILD_DIR}}/{{.BINARY_NAME}} -check {{.CLI_ARGS}}"
+
   test:
     desc: Run tests
     cmds:

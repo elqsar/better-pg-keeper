@@ -87,6 +87,12 @@ func (a *MainAnalyzer) analyzeRisk(ctx context.Context, instanceID, snapshotID i
 	return analysis, nil
 }
 
+// FitSizeTrend fits a growth trend to size history, as the analyzer does. It
+// returns nil when the samples span less than MinSizeTrendSpan.
+func FitSizeTrend(samples []models.SizeSample) *SizeTrend {
+	return fitSizeTrend(samples)
+}
+
 // fitSizeTrend fits a least-squares line through the samples. It returns nil
 // when they span less than MinSizeTrendSpan.
 func fitSizeTrend(samples []models.SizeSample) *SizeTrend {

@@ -170,7 +170,14 @@ func validateServer(cfg *ServerConfig) ValidationErrors {
 		if cfg.Auth.Password == "" {
 			errs = append(errs, ValidationError{
 				Field:   "server.auth.password",
-				Message: "password is required when auth is enabled",
+				Message: "password is required when auth is enabled; set SERVER_PASSWORD, or server.auth.enabled: false for local use",
+			})
+		} else if cfg.Auth.Username == "admin" && cfg.Auth.Password == "admin" {
+			// Earlier example configs defaulted to admin/admin; refuse to
+			// expose query texts and schema behind a well-known password.
+			errs = append(errs, ValidationError{
+				Field:   "server.auth.password",
+				Message: "the default admin/admin credentials are not allowed; set SERVER_PASSWORD, or server.auth.enabled: false for local use",
 			})
 		}
 	}
@@ -254,6 +261,13 @@ func validateThresholds(cfg *ThresholdsConfig) ValidationErrors {
 		errs = append(errs, ValidationError{
 			Field:   "thresholds.disk_capacity_gb",
 			Message: "disk_capacity_gb must not be negative (0 means unknown)",
+		})
+	}
+
+	if cfg.ServerMemoryGB < 0 {
+		errs = append(errs, ValidationError{
+			Field:   "thresholds.server_memory_gb",
+			Message: "server_memory_gb must not be negative (0 means unknown)",
 		})
 	}
 

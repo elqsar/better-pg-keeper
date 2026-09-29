@@ -104,5 +104,10 @@ func formatAge(d time.Duration) string {
 	return fmt.Sprintf("%dm", int(d.Minutes()))
 }
 
+// UnobservedTargets reports prepared transactions when their check failed.
+func (r *PreparedTransactionRule) UnobservedTargets(analysis *analyzer.AnalysisResult) []string {
+	return unobservedTargets(riskUnavailable(analysis), map[string]string{"prepared_xacts": "prepared:"})
+}
+
 // Ensure PreparedTransactionRule implements Rule interface.
 var _ suggester.Rule = (*PreparedTransactionRule)(nil)

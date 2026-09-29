@@ -11,6 +11,8 @@ import (
 	"github.com/labstack/echo/v4"
 
 	"github.com/elqsar/pganalyzer/internal/models"
+	"github.com/elqsar/pganalyzer/internal/setup"
+	"github.com/elqsar/pganalyzer/internal/verify"
 )
 
 // PageStorage defines the storage interface needed by page handlers.
@@ -37,6 +39,35 @@ type PageHandler struct {
 	storage    PageStorage
 	instanceID int64
 	version    string
+	verifier   *verify.Verifier
+	setup      *setup.Checker
+	queries    *QueryWindowConfig
+	risk       *OutageRiskConfig
+}
+
+// WithOutageRisk adds the outage-risk panel to the dashboard.
+func (h *PageHandler) WithOutageRisk(cfg OutageRiskConfig) *PageHandler {
+	h.risk = &cfg
+	return h
+}
+
+// WithQueryWindow makes the dashboard's query figures cover the slow-query
+// window and use the configured slow-query threshold.
+func (h *PageHandler) WithQueryWindow(cfg QueryWindowConfig) *PageHandler {
+	h.queries = &cfg
+	return h
+}
+
+// WithSetup enables the /setup page and the dashboard setup banner.
+func (h *PageHandler) WithSetup(c *setup.Checker) *PageHandler {
+	h.setup = c
+	return h
+}
+
+// WithVerifier enables fix verification on resolved suggestion pages.
+func (h *PageHandler) WithVerifier(v *verify.Verifier) *PageHandler {
+	h.verifier = v
+	return h
 }
 
 // NewPageHandler creates a new PageHandler.
@@ -59,9 +90,18 @@ type BasePageData struct {
 // DashboardPageData contains data for the dashboard page.
 type DashboardPageData struct {
 	BasePageData
-	CacheHitRatio     float64
-	TotalQueries      int64
-	SlowQueriesCount  int
+	// Setup is the setup checklist, shown as a banner when something needs
+	// attention or history is still being collected.
+	Setup *SetupBanner
+	// Risk summarises the outage-risk signals; nil before the first collection.
+	Risk             *RiskPanel
+	CacheHitRatio    float64
+	TotalQueries     int64
+	SlowQueriesCount int
+	// QueryWindow is the span the query figures cover; 0 means lifetime
+	// statistics, before a slow-query window of history exists.
+	QueryWindow       time.Duration
+	SlowQueryMs       float64
 	ActiveSuggestions int
 	TopQueries        []DashboardQuery
 	RecentSuggestions []DashboardSuggestion
@@ -104,6 +144,10 @@ func (h *PageHandler) Dashboard(c echo.Context) error {
 		RecentSuggestions: []DashboardSuggestion{},
 	}
 
+	if h.setup != nil {
+		data.Setup = newSetupBanner(h.setup.Report(ctx))
+	}
+
 	// Get latest snapshot (for metadata only)
 	snapshot, err := h.storage.GetLatestSnapshot(ctx, h.instanceID)
 	if err != nil {
@@ -127,33 +171,18 @@ func (h *PageHandler) Dashboard(c echo.Context) error {
 	if err != nil {
 		c.Logger().Errorf("failed to get current query stats: %v", err)
 	} else {
-		data.TotalQueries = int64(len(stats))
-
-		// Count slow queries (mean_exec_time > 1000ms)
-		for _, stat := range stats {
-			if stat.MeanExecTime > 1000 {
-				data.SlowQueriesCount++
-			}
+		summary, err := summarizeQueries(ctx, h.queries, h.instanceID, stats, 5)
+		if err != nil {
+			c.Logger().Errorf("failed to get recent query stats: %v", err)
 		}
-
-		// Sort by total time and get top 5
-		sort.Slice(stats, func(i, j int) bool {
-			return stats[i].TotalExecTime > stats[j].TotalExecTime
-		})
-		limit := 5
-		if len(stats) < limit {
-			limit = len(stats)
-		}
-		for i := 0; i < limit; i++ {
-			stat := stats[i]
-			data.TopQueries = append(data.TopQueries, DashboardQuery{
-				QueryID:         stat.QueryID,
-				QueryPreview:    truncateString(stat.Query, 80),
-				Calls:           stat.Calls,
-				MeanExecTimeMs:  stat.MeanExecTime,
-				TotalExecTimeMs: stat.TotalExecTime,
-			})
-		}
+		data.TotalQueries = int64(summary.Total)
+		data.SlowQueriesCount = summary.Slow
+		data.QueryWindow = summary.Window
+		data.TopQueries = append(data.TopQueries, summary.Top...)
+	}
+	data.SlowQueryMs = defaultSlowQueryMs
+	if h.queries != nil && h.queries.SlowQueryMs > 0 {
+		data.SlowQueryMs = h.queries.SlowQueryMs
 	}
 
 	// Get active suggestions
@@ -162,6 +191,11 @@ func (h *PageHandler) Dashboard(c echo.Context) error {
 		c.Logger().Errorf("failed to get suggestions: %v", err)
 	} else {
 		data.ActiveSuggestions = len(suggestions)
+		if risk, err := buildRiskPanel(ctx, h.risk, h.instanceID, suggestions); err != nil {
+			c.Logger().Errorf("failed to build outage-risk panel: %v", err)
+		} else {
+			data.Risk = risk
+		}
 
 		// Recent 5 suggestions
 		limit := 5
@@ -304,9 +338,13 @@ func (h *PageHandler) Queries(c echo.Context) error {
 
 	// Apply slow filter if requested
 	if filter == "slow" {
+		slowMs := float64(defaultSlowQueryMs)
+		if h.queries != nil && h.queries.SlowQueryMs > 0 {
+			slowMs = h.queries.SlowQueryMs
+		}
 		var filtered []models.QueryStat
 		for _, s := range stats {
-			if s.MeanExecTime > 1000 {
+			if s.MeanExecTime >= slowMs {
 				filtered = append(filtered, s)
 			}
 		}
@@ -678,6 +716,9 @@ type SuggestionDetailPageData struct {
 	BasePageData
 	Suggestion     *models.Suggestion
 	DuplicateIndex *DuplicateIndexSuggestionDetails
+	// Verification compares query history before and after a resolved
+	// suggestion; nil when the suggestion is not resolved or not about queries.
+	Verification *verify.Result
 }
 
 // DuplicateIndexSuggestionDetails contains structured duplicate-index metadata for the UI.
@@ -729,6 +770,14 @@ func (h *PageHandler) SuggestionDetail(c echo.Context) error {
 			c.Logger().Errorf("failed to parse duplicate index suggestion metadata: %v", err)
 		} else {
 			data.DuplicateIndex = details
+		}
+	}
+	if h.verifier != nil {
+		result, err := h.verifier.Verify(ctx, *suggestion, time.Now())
+		if err != nil {
+			c.Logger().Errorf("failed to verify suggestion %d: %v", suggestion.ID, err)
+		} else {
+			data.Verification = result
 		}
 	}
 
