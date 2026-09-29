@@ -10,10 +10,11 @@ import (
 	"strings"
 	"time"
 
-	"github.com/elqsar/pganalyzer/internal/models"
-	"github.com/elqsar/pganalyzer/internal/plans"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
+
+	"github.com/elqsar/pganalyzer/internal/models"
+	"github.com/elqsar/pganalyzer/internal/plans"
 )
 
 // Planning limits. Planning takes ACCESS SHARE locks on every table in the

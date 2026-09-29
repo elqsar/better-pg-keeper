@@ -2,6 +2,7 @@
 package api
 
 import (
+	"errors"
 	"net/http"
 
 	"github.com/labstack/echo/v4"
@@ -100,7 +101,8 @@ func CustomHTTPErrorHandler(err error, c echo.Context) {
 		errCode = ErrCodeInternalError
 	)
 
-	if he, ok := err.(*echo.HTTPError); ok {
+	var he *echo.HTTPError
+	if errors.As(err, &he) {
 		code = he.Code
 		if m, ok := he.Message.(string); ok {
 			message = m
@@ -120,5 +122,7 @@ func CustomHTTPErrorHandler(err error, c echo.Context) {
 	}
 
 	c.Logger().Error(err)
-	c.JSON(code, NewErrorResponse(message, errCode))
+	if err := c.JSON(code, NewErrorResponse(message, errCode)); err != nil {
+		c.Logger().Error(err)
+	}
 }

@@ -6,6 +6,7 @@ import (
 	"io/fs"
 	"log"
 	"net/http"
+	"os"
 	"time"
 
 	"github.com/labstack/echo/v4"
@@ -118,8 +119,16 @@ func NewServer(cfg ServerConfig) (*Server, error) {
 	if cfg.LoggingConfig != nil && cfg.LoggingConfig.Requests {
 		e.Use(middleware.RequestLoggerWithConfig(true, "/health"))
 	} else {
-		e.Use(echomiddleware.LoggerWithConfig(echomiddleware.LoggerConfig{
-			Format: "${time_rfc3339} ${method} ${uri} ${status} ${latency_human}\n",
+		e.Use(echomiddleware.RequestLoggerWithConfig(echomiddleware.RequestLoggerConfig{
+			LogMethod:  true,
+			LogURI:     true,
+			LogStatus:  true,
+			LogLatency: true,
+			LogValuesFunc: func(c echo.Context, v echomiddleware.RequestLoggerValues) error {
+				fmt.Fprintf(os.Stdout, "%s %s %s %d %s\n",
+					v.StartTime.Format(time.RFC3339), v.Method, v.URI, v.Status, v.Latency)
+				return nil
+			},
 		}))
 	}
 

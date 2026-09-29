@@ -4,8 +4,9 @@ import (
 	"context"
 	"fmt"
 
-	"github.com/elqsar/pganalyzer/internal/models"
 	"github.com/jackc/pgx/v5"
+
+	"github.com/elqsar/pganalyzer/internal/models"
 )
 
 // reviewedSettings are the pg_settings rows the configuration review reads.

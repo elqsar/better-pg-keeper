@@ -5,6 +5,7 @@ import (
 	"context"
 	"database/sql"
 	"embed"
+	"errors"
 	"fmt"
 	"io/fs"
 	"path/filepath"
@@ -251,7 +252,7 @@ func Rollback(ctx context.Context, db *sql.DB) error {
 	// Find the last applied migration
 	var lastVersion int
 	err = db.QueryRowContext(ctx, `SELECT version FROM _migrations ORDER BY version DESC LIMIT 1`).Scan(&lastVersion)
-	if err == sql.ErrNoRows {
+	if errors.Is(err, sql.ErrNoRows) {
 		return nil // Nothing to rollback
 	}
 	if err != nil {

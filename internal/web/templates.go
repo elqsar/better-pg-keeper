@@ -4,11 +4,12 @@ package web
 import (
 	"embed"
 	"fmt"
-	"github.com/elqsar/pganalyzer/internal/verify"
 	"html/template"
 	"io"
 	"strings"
 	"time"
+
+	"github.com/elqsar/pganalyzer/internal/verify"
 
 	"github.com/labstack/echo/v4"
 )

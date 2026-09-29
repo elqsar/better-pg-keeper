@@ -58,5 +58,4 @@ data/
 .claude/
 
 # Generated
-docs/
 suggestions.md

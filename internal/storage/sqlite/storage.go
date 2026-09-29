@@ -3,6 +3,7 @@ package sqlite
 import (
 	"context"
 	"database/sql"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -295,7 +296,7 @@ func (s *SQLiteStorage) GetInstance(ctx context.Context, id int64) (*models.Inst
 		FROM instances WHERE id = ?
 	`, id).Scan(&inst.ID, &inst.Name, &inst.Host, &inst.Port, &inst.Database, &inst.CreatedAt)
 
-	if err == sql.ErrNoRows {
+	if errors.Is(err, sql.ErrNoRows) {
 		return nil, nil
 	}
 	if err != nil {
@@ -313,7 +314,7 @@ func (s *SQLiteStorage) GetInstanceByName(ctx context.Context, name string) (*mo
 		FROM instances WHERE name = ?
 	`, name).Scan(&inst.ID, &inst.Name, &inst.Host, &inst.Port, &inst.Database, &inst.CreatedAt)
 
-	if err == sql.ErrNoRows {
+	if errors.Is(err, sql.ErrNoRows) {
 		return nil, nil
 	}
 	if err != nil {
@@ -348,7 +349,7 @@ func (s *SQLiteStorage) GetOrCreateInstance(ctx context.Context, inst *models.In
 	if err == nil {
 		return id, nil
 	}
-	if err != sql.ErrNoRows {
+	if !errors.Is(err, sql.ErrNoRows) {
 		return 0, fmt.Errorf("checking existing instance: %w", err)
 	}
 
@@ -407,7 +408,7 @@ func (s *SQLiteStorage) GetSnapshotByID(ctx context.Context, id int64) (*models.
 		FROM snapshots WHERE id = ?
 	`, id).Scan(&snap.ID, &snap.InstanceID, &snap.CapturedAt, &snap.PGVersion, &snap.StatsReset, &snap.CacheHitRatio, &snap.CreatedAt)
 
-	if err == sql.ErrNoRows {
+	if errors.Is(err, sql.ErrNoRows) {
 		return nil, nil
 	}
 	if err != nil {
@@ -428,7 +429,7 @@ func (s *SQLiteStorage) GetLatestSnapshot(ctx context.Context, instanceID int64)
 		LIMIT 1
 	`, instanceID).Scan(&snap.ID, &snap.InstanceID, &snap.CapturedAt, &snap.PGVersion, &snap.StatsReset, &snap.CacheHitRatio, &snap.CreatedAt)
 
-	if err == sql.ErrNoRows {
+	if errors.Is(err, sql.ErrNoRows) {
 		return nil, nil
 	}
 	if err != nil {
@@ -489,7 +490,7 @@ func (s *SQLiteStorage) GetLatestSnapshotWithCollector(ctx context.Context, inst
 		&snap.StatsReset, &snap.CacheHitRatio, &snap.CreatedAt,
 	)
 
-	if err == sql.ErrNoRows {
+	if errors.Is(err, sql.ErrNoRows) {
 		return nil, nil
 	}
 	if err != nil {
@@ -981,7 +982,7 @@ func (s *SQLiteStorage) GetConnectionActivity(ctx context.Context, snapshotID in
 		&activity.TotalConnections, &activity.MaxConnections,
 	)
 
-	if err == sql.ErrNoRows {
+	if errors.Is(err, sql.ErrNoRows) {
 		return nil, nil
 	}
 	if err != nil {
@@ -1169,7 +1170,7 @@ func (s *SQLiteStorage) GetLockStats(ctx context.Context, snapshotID int64) (*mo
 		&stats.ExclusiveLocks,
 	)
 
-	if err == sql.ErrNoRows {
+	if errors.Is(err, sql.ErrNoRows) {
 		return nil, nil
 	}
 	if err != nil {
@@ -1308,7 +1309,7 @@ func (s *SQLiteStorage) GetExtendedDatabaseStats(ctx context.Context, snapshotID
 		&stats.ConflLock, &stats.ConflSnapshot,
 	)
 
-	if err == sql.ErrNoRows {
+	if errors.Is(err, sql.ErrNoRows) {
 		return nil, nil
 	}
 	if err != nil {
@@ -1421,7 +1422,7 @@ func (s *SQLiteStorage) GetSuggestionByID(ctx context.Context, id int64) (*model
 		&sug.FirstSeenAt, &sug.LastSeenAt, &sug.DismissedAt, &sug.ResolvedAt,
 	)
 
-	if err == sql.ErrNoRows {
+	if errors.Is(err, sql.ErrNoRows) {
 		return nil, nil
 	}
 	if err != nil {
@@ -1495,7 +1496,7 @@ func (s *SQLiteStorage) GetExplainPlan(ctx context.Context, queryID int64) (*mod
 		&plan.CapturedAt, &plan.ExecutionTime,
 	)
 
-	if err == sql.ErrNoRows {
+	if errors.Is(err, sql.ErrNoRows) {
 		return nil, nil
 	}
 	if err != nil {
@@ -1573,7 +1574,7 @@ func (s *SQLiteStorage) GetCurrentConnectionActivity(ctx context.Context, instan
 		&activity.TotalConnections, &activity.MaxConnections,
 	)
 
-	if err == sql.ErrNoRows {
+	if errors.Is(err, sql.ErrNoRows) {
 		return nil, nil
 	}
 	if err != nil {
@@ -1626,7 +1627,7 @@ func (s *SQLiteStorage) GetCurrentLockStats(ctx context.Context, instanceID int6
 		&stats.ExclusiveLocks,
 	)
 
-	if err == sql.ErrNoRows {
+	if errors.Is(err, sql.ErrNoRows) {
 		return nil, nil
 	}
 	if err != nil {
@@ -1684,7 +1685,7 @@ func (s *SQLiteStorage) GetCurrentDatabaseStats(ctx context.Context, instanceID 
 		&stats.ConflSnapshot, &cacheHitRatio,
 	)
 
-	if err == sql.ErrNoRows {
+	if errors.Is(err, sql.ErrNoRows) {
 		return nil, nil, nil
 	}
 	if err != nil {

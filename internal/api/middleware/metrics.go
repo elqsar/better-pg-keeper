@@ -1,6 +1,7 @@
 package middleware
 
 import (
+	"errors"
 	"strconv"
 	"time"
 
@@ -34,7 +35,8 @@ func Metrics() echo.MiddlewareFunc {
 			if err != nil {
 				// The error handler has not run yet, so derive the status the way
 				// Echo will: an HTTPError carries its own code, anything else is a 500.
-				if he, ok := err.(*echo.HTTPError); ok {
+				var he *echo.HTTPError
+				if errors.As(err, &he) {
 					status = he.Code
 				} else {
 					status = 500
