@@ -129,14 +129,14 @@ go build -o pganalyzer ./cmd/pganalyzer
 ./pganalyzer
 ```
 
-#### Using Docker
+#### Using a container (podman)
 
 ```bash
 # Build image
-task docker:build
+task image:build
 
 # Run container
-task docker:run
+task image:run
 ```
 
 ### 5. Access the Dashboard
@@ -253,16 +253,16 @@ shown on the suggestion page and next to the issue in the digest.
 
 ```bash
 # Start pganalyzer with a test PostgreSQL instance
-task docker:up
+task compose:up
 
 # Or start pganalyzer only (connects to external PostgreSQL)
-task docker:up:standalone
+task compose:up:standalone
 
 # View logs
-task docker:logs
+task compose:logs
 
 # Stop services
-task docker:down
+task compose:down
 ```
 
 ### Building the Docker Image
@@ -371,19 +371,22 @@ task css:watch
 
 ### Running Integration Tests
 
-Integration tests require a running PostgreSQL instance with `pg_stat_statements` enabled:
+The simplest way is `task test:integration:pg`, which starts a throwaway PostgreSQL
+container with podman (`pg_stat_statements` preloaded, hypopg installed, and the
+settings the tests look for), runs the suite and removes the container:
 
 ```bash
-# Start test PostgreSQL
-task docker:up:postgres
+task test:integration:pg -- 14
+task test:integration:pg -- 17
+```
 
-# Run integration tests
+To run against your own server, point the tests at a database with
+`pg_stat_statements` enabled:
+
+```bash
 POSTGRES_HOST=localhost POSTGRES_PORT=5432 POSTGRES_USER=postgres \
 POSTGRES_PASSWORD=postgres POSTGRES_DATABASE=testdb \
 go test -v -tags=integration ./tests/integration/...
-
-# Or use the task command
-task test:integration:docker
 ```
 
 ## Architecture

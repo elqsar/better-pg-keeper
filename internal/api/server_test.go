@@ -13,7 +13,6 @@ import (
 
 	"github.com/elqsar/pganalyzer/internal/config"
 	"github.com/elqsar/pganalyzer/internal/models"
-	"github.com/elqsar/pganalyzer/internal/scheduler"
 )
 
 // mockStorage implements all storage interfaces needed for testing.
@@ -348,13 +347,6 @@ func (m *mockPGClient) GetBlockedQueries(ctx context.Context) ([]models.BlockedQ
 
 func (m *mockPGClient) GetExtendedDatabaseStats(ctx context.Context) (*models.ExtendedDatabaseStats, error) {
 	return nil, nil
-}
-
-// mockScheduler creates a minimal scheduler for testing.
-func createMockScheduler(t *testing.T, storage *mockStorage) *scheduler.Scheduler {
-	// We can't easily mock the scheduler, so we'll skip scheduler-dependent tests
-	// or test them differently
-	return nil
 }
 
 // Helper to create a test request with Basic Auth.
@@ -723,7 +715,9 @@ func TestDismissSuggestionEndpoint(t *testing.T) {
 			return c.JSON(http.StatusNotFound, map[string]string{"error": "not found"})
 		}
 
-		storage.DismissSuggestion(ctx, id)
+		if err := storage.DismissSuggestion(ctx, id); err != nil {
+			return err
+		}
 		sug, _ = storage.GetSuggestionByID(ctx, id)
 
 		dismissedAt := ""

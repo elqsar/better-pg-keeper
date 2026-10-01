@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"time"
 
@@ -32,7 +33,7 @@ func (s *SQLiteStorage) SaveOutageRisk(ctx context.Context, snapshotID int64, ri
 func (s *SQLiteStorage) GetOutageRisk(ctx context.Context, snapshotID int64) (*models.OutageRisk, error) {
 	var payload string
 	err := s.readDB.QueryRowContext(ctx, `SELECT payload FROM outage_risk WHERE snapshot_id = ?`, snapshotID).Scan(&payload)
-	if err == sql.ErrNoRows {
+	if errors.Is(err, sql.ErrNoRows) {
 		return nil, nil
 	}
 	if err != nil {
@@ -111,7 +112,7 @@ func (s *SQLiteStorage) GetConnectionPeak(ctx context.Context, instanceID int64,
 	`, instanceID, since.Round(0), until.Round(0)).Scan(
 		&peak.CapturedAt, &peak.TotalConnections, &peak.IdleCount, &peak.MaxConnections,
 	)
-	if err == sql.ErrNoRows {
+	if errors.Is(err, sql.ErrNoRows) {
 		return nil, nil
 	}
 	if err != nil {

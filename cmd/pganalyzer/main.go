@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"errors"
 	"flag"
 	"fmt"
 	"io"
@@ -316,7 +317,11 @@ func run(ctx context.Context, configPath string) error {
 	if err := sched.Start(ctx); err != nil {
 		return fmt.Errorf("starting scheduler: %w", err)
 	}
-	defer sched.Stop()
+	defer func() {
+		if err := sched.Stop(); err != nil {
+			slog.Warn("stopping scheduler", "error", err)
+		}
+	}()
 	slog.Info("scheduler started",
 		"snapshot_interval", cfg.Scheduler.SnapshotInterval,
 		"analysis_interval", cfg.Scheduler.AnalysisInterval,
@@ -380,7 +385,7 @@ func run(ctx context.Context, configPath string) error {
 			"host", cfg.Server.Host,
 			"port", cfg.Server.Port,
 		)
-		if err := server.Start(); err != nil && err != http.ErrServerClosed {
+		if err := server.Start(); err != nil && !errors.Is(err, http.ErrServerClosed) {
 			serverErr <- err
 		}
 	}()

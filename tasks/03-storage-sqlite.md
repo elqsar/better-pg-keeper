@@ -14,7 +14,7 @@ Location: `internal/storage/sqlite/migrations.go`
 - [ ] Support rollback (optional for v1)
 
 ### 3.2 Create Schema Migrations
-Location: `migrations/sqlite/`
+Location: `internal/storage/sqlite/migrations/` (embedded)
 
 - [ ] `001_create_instances.sql` - instances table
 - [ ] `002_create_snapshots.sql` - snapshots table with index

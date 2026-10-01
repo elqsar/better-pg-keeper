@@ -86,7 +86,7 @@ services:
 
   # PostgreSQL with pg_stat_statements for testing/development
   postgres:
-    image: postgres:16-alpine
+    image: docker.io/library/postgres:16-alpine
     container_name: pganalyzer-postgres
     restart: unless-stopped
     ports:

@@ -1,5 +1,7 @@
 version: '3'
 
+silent: true
+
 vars:
   BINARY_NAME: pganalyzer
   BUILD_DIR: ./bin
@@ -15,7 +17,7 @@ tasks:
   default:
     desc: Show available tasks
     cmds:
-      - task --list-all
+      - task --list
 
   css:
     desc: Build CSS with Tailwind
@@ -23,6 +25,7 @@ tasks:
       - ./scripts/build-css.sh
     sources:
       - internal/web/templates/**/*.html
+      - internal/web/*.go
       - internal/web/tailwind/**/*
     generates:
       - internal/web/static/style.css
@@ -124,59 +127,59 @@ tasks:
       - echo "Commit:" {{.COMMIT}}
       - echo "Build Date:" {{.BUILD_DATE}}
 
-  docker:build:
-    desc: Build Docker image
+  image:build:
+    desc: Build the container image with podman
     cmds:
-      - docker build
+      - podman build
           --build-arg VERSION={{.VERSION}}
           --build-arg COMMIT={{.COMMIT}}
           --build-arg BUILD_DATE={{.BUILD_DATE}}
           -t {{.BINARY_NAME}}:{{.VERSION}}
           -t {{.BINARY_NAME}}:latest .
 
-  docker:run:
-    desc: Run Docker container (standalone)
+  image:run:
+    desc: Run the container image with podman (standalone)
     cmds:
-      - docker run --rm -p 8080:8080
+      - podman run --rm -p 8080:8080
           -v $(pwd)/data:/app/data
           -v $(pwd)/configs/config.yaml:/app/configs/config.yaml:ro
           {{.BINARY_NAME}}:{{.VERSION}}
 
-  docker:up:
-    desc: Start all services with docker-compose (pganalyzer + postgres)
+  compose:up:
+    desc: Start all compose services (pganalyzer + postgres)
     cmds:
-      - docker compose --profile full up -d
+      - podman-compose --profile full up -d
 
-  docker:up:standalone:
+  compose:up:standalone:
     desc: Start pganalyzer only (connects to external postgres)
     cmds:
-      - docker compose --profile standalone up -d
+      - podman-compose --profile standalone up -d
 
-  docker:up:postgres:
+  compose:up:postgres:
     desc: Start only PostgreSQL for development
     cmds:
-      - docker compose --profile postgres-only up -d
+      - podman-compose --profile postgres-only up -d
 
-  docker:down:
-    desc: Stop all docker-compose services
+  compose:down:
+    desc: Stop all compose services
     cmds:
-      - docker compose --profile full --profile standalone --profile postgres-only down
+      - podman-compose --profile full --profile standalone --profile postgres-only down
 
-  docker:logs:
-    desc: View docker-compose logs
+  compose:logs:
+    desc: View compose logs (task compose:logs -- service)
     cmds:
-      - docker compose logs -f {{.CLI_ARGS}}
+      - podman-compose logs -f {{.CLI_ARGS}}
 
-  docker:clean:
-    desc: Remove docker volumes and images
+  compose:clean:
+    desc: Remove compose volumes and images
     cmds:
-      - docker compose --profile full --profile standalone --profile postgres-only down -v
-      - docker rmi {{.BINARY_NAME}}:{{.VERSION}} {{.BINARY_NAME}}:latest 2>/dev/null || true
+      - podman-compose --profile full --profile standalone --profile postgres-only down -v
+      - podman rmi {{.BINARY_NAME}}:{{.VERSION}} {{.BINARY_NAME}}:latest 2>/dev/null || true
 
   install:tools:
     desc: Install development tools
     cmds:
-      - go install github.com/golangci/golangci-lint/cmd/golangci-lint@latest
+      - go install github.com/golangci/golangci-lint/v2/cmd/golangci-lint@v2.14.0
       - go install golang.org/x/tools/cmd/goimports@latest
 
   test:integration:
@@ -184,13 +187,10 @@ tasks:
     cmds:
       - go test -v -tags=integration ./tests/integration/...
 
-  test:integration:docker:
-    desc: Run integration tests with docker postgres
+  test:integration:pg:
+    desc: Run integration tests against a throwaway podman PostgreSQL (task test:integration:pg -- 14)
     cmds:
-      - task: docker:up:postgres
-      - defer: { task: docker:down }
-      - sleep 5  # Wait for postgres to be ready
-      - POSTGRES_HOST=localhost POSTGRES_PORT=5432 POSTGRES_USER=postgres POSTGRES_PASSWORD=postgres POSTGRES_DATABASE=testdb go test -v -tags=integration ./tests/integration/...
+      - ./scripts/integration-pg.sh {{.CLI_ARGS}}
 
   migrate:
     desc: Run database migrations manually

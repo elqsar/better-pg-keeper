@@ -1,0 +1,72 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  unit:
+    name: Unit tests
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-go@v6
+        with:
+          go-version-file: go.mod
+      - run: go build ./...
+      - run: go vet ./...
+      - run: go test -race ./...
+
+  lint:
+    name: Lint
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-go@v6
+        with:
+          go-version-file: go.mod
+      - uses: golangci/golangci-lint-action@v8
+        with:
+          # Keep in step with install:tools in Taskfile.yaml.
+          version: v2.14.0
+          args: --build-tags integration
+
+  css:
+    name: CSS is up to date
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      # Tailwind purges classes it can't find in templates or internal/web/*.go,
+      # so a stale style.css silently drops styling.
+      - run: ./scripts/build-css.sh
+      - name: Check for changes
+        run: |
+          if ! git diff --exit-code -- internal/web/static/style.css; then
+            echo "::error::internal/web/static/style.css is stale. Run 'task css' and commit it."
+            exit 1
+          fi
+
+  integration:
+    name: Integration (PostgreSQL ${{ matrix.pg }})
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        # The minimum supported version and the newest release.
+        pg: ["14", "17"]
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-go@v6
+        with:
+          go-version-file: go.mod
+      - run: ./scripts/integration-pg.sh ${{ matrix.pg }}
+        env:
+          CONTAINER_ENGINE: docker

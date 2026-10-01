@@ -3,6 +3,7 @@ package postgres
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log"
 	"net"
@@ -11,9 +12,10 @@ import (
 	"strings"
 	"time"
 
-	"github.com/elqsar/pganalyzer/internal/models"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
+
+	"github.com/elqsar/pganalyzer/internal/models"
 )
 
 // PgxClient implements the Client interface using pgx.
@@ -798,7 +800,7 @@ func (c *PgxClient) GetStatsResetTime(ctx context.Context) (*time.Time, error) {
 			return nil, nil
 		}
 		// Handle case where stats have never been reset
-		if err == pgx.ErrNoRows {
+		if errors.Is(err, pgx.ErrNoRows) {
 			return nil, nil
 		}
 		return nil, fmt.Errorf("postgres: failed to get stats reset time: %w", err)

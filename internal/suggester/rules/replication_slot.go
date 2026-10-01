@@ -71,11 +71,11 @@ func (r *ReplicationSlotRule) evaluateSlot(slot models.ReplicationSlot) *suggest
 
 	var severity string
 	var reasons []string
-	switch {
-	case slot.WALStatus == "unreserved":
+	switch slot.WALStatus {
+	case "unreserved":
 		severity = suggester.SeverityCritical
 		reasons = append(reasons, "WAL it needs is past `max_slot_wal_keep_size` and will be removed at the next checkpoint (`wal_status = unreserved`)")
-	case slot.WALStatus == "lost":
+	case "lost":
 		severity = suggester.SeverityWarning
 		reasons = append(reasons, "the WAL it needs has already been removed (`wal_status = lost`), so its consumer can no longer catch up")
 	}

@@ -4,7 +4,7 @@ Goal: make PGAnalyzer useful for teams without a dedicated DBA. It should diagno
 problems, tell people when something breaks, and warn before an outage, rather
 than show numbers that need an expert to read.
 
-Last updated: 2026-09-28. Everything below is committed.
+Last updated: 2026-09-29. Everything below is committed.
 
 ## Done
 
@@ -371,6 +371,49 @@ Last updated: 2026-09-28. Everything below is committed.
   banner, the panel with "1 active" on sequences, the rendered suggestion
   page, and the list with severity styling.
 
+### 11. Housekeeping and CI (2026-09-29)
+
+- **The setup guide was never committed.** `.gitignore` ignored `docs/`, so
+  `docs/postgresql-setup.md` (section 9) existed only locally, and the README and
+  example-config links were broken on GitHub. `docs/` is now tracked.
+- Deleted the stale root `migrations/sqlite/` and the merged
+  `feat/config-review` branch (merged as PR #1).
+- **Taskfile:**
+  - `silent: true`, and `default` runs `task --list`.
+  - The `docker:*` tasks became `image:*` (podman) and `compose:*`
+    (podman-compose).
+  - `css` also rebuilds when `internal/web/*.go` changes.
+- **`task test:integration:pg -- <14|17>`** (`scripts/integration-pg.sh`)
+  replaces `test:integration:docker`. It starts a throwaway `pgk-ci-<ver>`
+  container on port `155<ver>` with the settings the tests check for and
+  hypopg installed, runs the suite, and removes the container.
+  `CONTAINER_ENGINE=docker` selects docker, which CI uses.
+- **Lint:** `.golangci.yml` (v2) with the standard linters plus `bodyclose`,
+  `errorlint`, `misspell`, `unparam`, and gofmt/goimports. golangci-lint is
+  pinned to v2.14.0 in `install:tools` and CI. Fixes:
+  - `==` comparisons against sentinel errors changed to `errors.Is`/`errors.As`.
+    None was wrapped in practice.
+  - echo's deprecated `LoggerWithConfig` replaced with `RequestLoggerWithConfig`,
+    in the same format.
+  - Scheduler `Stop` and error-response write errors are now logged.
+  - Unchecked setup calls in storage tests.
+  - Unused test helpers removed.
+  - Excluded on purpose: unchecked `Close`/`Fprintf` (the `std-error-handling`
+    preset) and `Tx.Rollback` on error paths.
+- **Collector tests** for `activity`, `locks`, `risk` and `settings`. They cover
+  saving to real SQLite (historical and current tables, size history), logging
+  unavailable checks, and error propagation. `internal/collector/collectortest`
+  holds the shared storage setup.
+- **CI** (`.github/workflows/ci.yml`, push to main and PRs):
+  - unit: build, vet, `test -race`
+  - lint
+  - CSS drift: rebuilds `style.css` and fails if it differs
+  - integration on PG14 and PG17
+- Verified locally: lint 0 issues, unit tests pass, `task
+  test:integration:pg` passes on PG14 and PG17 with no prerequisite skips,
+  actionlint clean, and the committed CSS matches a fresh build. CI hasn't run
+  on GitHub yet.
+
 ## Known gaps in what's done
 
 - The queries list (`/queries`) still sorts and shows lifetime
@@ -393,7 +436,6 @@ Last updated: 2026-09-28. Everything below is committed.
     data yet.
 - A persistently failing single collector (e.g. a missing permission) counts as
   a collection failure and alerts. This is intended, but it can surprise people.
-- `golangci-lint` isn't installed locally, so `task lint` hasn't been run.
 - Outage risk:
   - Per-table wraparound ages and sequences cover only the connected database.
     Other databases get only a database-level age and a SQL snippet.
@@ -411,36 +453,25 @@ Last updated: 2026-09-28. Everything below is committed.
     not judged yet. Per-table bloat and vacuum rules cover the effects.
   - A default install gets about 4 info findings (timeouts, diagnostics,
     `random_page_cost`). This is intended but can look noisy.
-- The repo-root `migrations/sqlite/` is a stale 001–007 copy. The real
-  migrations are in `internal/storage/sqlite/migrations/`, and only old
-  `tasks/*.md` files reference the copy.
 
 ## Next steps (in order)
 
-1. **Housekeeping.**
-   - Delete the stale root `migrations/sqlite/`.
-   - Run golangci-lint.
-   - Add collector subpackage tests.
-   - Merge `feat/config-review` into `main`.
-2. **Releases.**
-   - CI: unit, lint, and integration tests on PG14/PG17.
-   - Goreleaser and a multi-arch image (the Dockerfile hard-codes amd64).
-   - A Helm chart.
+1. **Releases.**
+   - Goreleaser for binaries and a changelog from tags.
+   - A multi-arch image (linux/amd64 and arm64): drop the hard-coded
+     `GOARCH=amd64` in `Dockerfile`. Registry not chosen yet.
+2. **A Helm chart.**
 
 Deferred: **multi-database support** (a list of targets in config instead of
 one instance per process, `cmd/pganalyzer/main.go:157`).
 
 ## Dev notes
 
-- Integration tests run against throwaway podman containers:
-  ```bash
-  podman run -d --rm --name pgk-it-17 -p 15417:5432 -e POSTGRES_PASSWORD=postgres \
-    -e POSTGRES_DB=testdb docker.io/library/postgres:17 -c shared_preload_libraries=pg_stat_statements \
-    -c max_prepared_transactions=10
-  podman exec pgk-it-17 psql -U postgres -d testdb -c 'CREATE EXTENSION pg_stat_statements'
-  POSTGRES_HOST=localhost POSTGRES_PORT=15417 POSTGRES_USER=postgres POSTGRES_PASSWORD=postgres \
-    POSTGRES_DATABASE=testdb go test -count=1 -tags=integration ./tests/integration/...
-  ```
+- Integration tests: `task test:integration:pg -- 14` (or `17`) runs the whole
+  suite against a throwaway podman container (`scripts/integration-pg.sh`).
+  To use your own server, set `POSTGRES_HOST`, `POSTGRES_PORT`,
+  `POSTGRES_USER`, `POSTGRES_PASSWORD`, `POSTGRES_DATABASE` and run
+  `go test -count=1 -tags=integration ./tests/integration/...`.
 - Minimum supported server is PostgreSQL 14 (raised from 13 on 2026-09-28), so
   catalog SQL must work there (e.g. `indnkeyatts` is fine; `last_idx_scan` from
   PG16 is not). Run integration tests on PG14 and the newest release.

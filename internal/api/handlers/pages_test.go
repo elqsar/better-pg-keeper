@@ -2,7 +2,6 @@ package handlers
 
 import (
 	"context"
-	"io"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -94,19 +93,6 @@ func (m *mockPageStorage) GetCurrentIdleInTransaction(ctx context.Context, insta
 
 func (m *mockPageStorage) GetCurrentDatabaseStats(ctx context.Context, instanceID int64) (*models.ExtendedDatabaseStats, *float64, error) {
 	return nil, m.cacheHitRatio, m.err
-}
-
-// mockRenderer implements echo.Renderer for testing.
-type mockRenderer struct {
-	lastTemplate string
-	lastData     interface{}
-}
-
-func (r *mockRenderer) Render(w io.Writer, name string, data interface{}, c echo.Context) error {
-	r.lastTemplate = name
-	r.lastData = data
-	_, err := w.Write([]byte("rendered"))
-	return err
 }
 
 func setupTestEcho() *echo.Echo {

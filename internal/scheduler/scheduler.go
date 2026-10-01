@@ -3,6 +3,7 @@ package scheduler
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log"
 	"sync"
@@ -236,7 +237,7 @@ func (s *Scheduler) TriggerSnapshot(ctx context.Context) (*TriggerResult, error)
 	collResult, err := s.coordinator.CollectAll(ctx)
 	collDuration := time.Since(collStart)
 	result.CollectionResult = collResult
-	if err == collector.ErrCollectionInProgress {
+	if errors.Is(err, collector.ErrCollectionInProgress) {
 		return nil, err
 	}
 

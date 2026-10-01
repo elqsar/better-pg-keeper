@@ -544,7 +544,7 @@ func (m *mockCollector) Collect(ctx context.Context, snapshotID int64) error {
 }
 
 // Test helper to create a scheduler with mocks
-func createTestScheduler(t *testing.T) (*scheduler.Scheduler, *mockStorage, *mockPGClient) {
+func createTestScheduler(t *testing.T) (*scheduler.Scheduler, *mockStorage) {
 	t.Helper()
 
 	storage := newMockStorage()
@@ -590,7 +590,7 @@ func createTestScheduler(t *testing.T) (*scheduler.Scheduler, *mockStorage, *moc
 		t.Fatalf("Failed to create scheduler: %v", err)
 	}
 
-	return sched, storage, pgClient
+	return sched, storage
 }
 
 func TestNewScheduler_RequiredFields(t *testing.T) {
@@ -655,7 +655,7 @@ func TestNewScheduler_RequiredFields(t *testing.T) {
 }
 
 func TestScheduler_StartStop(t *testing.T) {
-	sched, _, _ := createTestScheduler(t)
+	sched, _ := createTestScheduler(t)
 
 	// Should not be running initially
 	if sched.IsRunning() {
@@ -696,7 +696,7 @@ func TestScheduler_StartStop(t *testing.T) {
 }
 
 func TestScheduler_CollectionLoop(t *testing.T) {
-	sched, storage, _ := createTestScheduler(t)
+	sched, storage := createTestScheduler(t)
 
 	ctx := context.Background()
 	if err := sched.Start(ctx); err != nil {
@@ -719,7 +719,7 @@ func TestScheduler_CollectionLoop(t *testing.T) {
 }
 
 func TestScheduler_TriggerSnapshot(t *testing.T) {
-	sched, storage, _ := createTestScheduler(t)
+	sched, storage := createTestScheduler(t)
 
 	ctx := context.Background()
 
@@ -752,7 +752,7 @@ func TestScheduler_TriggerSnapshot(t *testing.T) {
 }
 
 func TestScheduler_TriggerSnapshot_SequentialCalls(t *testing.T) {
-	sched, storage, _ := createTestScheduler(t)
+	sched, storage := createTestScheduler(t)
 
 	ctx := context.Background()
 
@@ -781,7 +781,7 @@ func TestScheduler_TriggerSnapshot_SequentialCalls(t *testing.T) {
 }
 
 func TestScheduler_GetHealth(t *testing.T) {
-	sched, _, _ := createTestScheduler(t)
+	sched, _ := createTestScheduler(t)
 
 	// Initial health status
 	health := sched.GetHealth()
@@ -824,7 +824,7 @@ func TestScheduler_GetHealth(t *testing.T) {
 }
 
 func TestScheduler_GracefulShutdown(t *testing.T) {
-	sched, _, _ := createTestScheduler(t)
+	sched, _ := createTestScheduler(t)
 
 	ctx := context.Background()
 	if err := sched.Start(ctx); err != nil {
@@ -846,7 +846,7 @@ func TestScheduler_GracefulShutdown(t *testing.T) {
 }
 
 func TestScheduler_ContextCancellation(t *testing.T) {
-	sched, _, _ := createTestScheduler(t)
+	sched, _ := createTestScheduler(t)
 
 	ctx, cancel := context.WithCancel(context.Background())
 
@@ -926,7 +926,7 @@ func TestScheduler_MaintenanceRuns(t *testing.T) {
 }
 
 func TestHealthSnapshot_Fields(t *testing.T) {
-	sched, _, _ := createTestScheduler(t)
+	sched, _ := createTestScheduler(t)
 
 	// Trigger a snapshot to populate health data
 	ctx := context.Background()
@@ -948,7 +948,7 @@ func TestHealthSnapshot_Fields(t *testing.T) {
 }
 
 func TestScheduler_RestartAfterStop(t *testing.T) {
-	sched, storage, _ := createTestScheduler(t)
+	sched, storage := createTestScheduler(t)
 	ctx := context.Background()
 
 	// Start scheduler

@@ -3,6 +3,7 @@ package sqlite
 import (
 	"context"
 	"database/sql"
+	"errors"
 	"fmt"
 	"time"
 
@@ -71,7 +72,7 @@ func (s *SQLiteStorage) GetNotifierTime(ctx context.Context, instanceID int64, k
 	err = s.readDB.QueryRowContext(ctx, `
 		SELECT value FROM notifier_meta WHERE instance_id = ? AND key = ?
 	`, instanceID, key).Scan(&value)
-	if err == sql.ErrNoRows {
+	if errors.Is(err, sql.ErrNoRows) {
 		return time.Time{}, false, nil
 	}
 	if err != nil {
@@ -111,7 +112,7 @@ func (s *SQLiteStorage) GetEarliestSnapshotWithCollector(ctx context.Context, in
 		&snap.ID, &snap.InstanceID, &snap.CapturedAt, &snap.PGVersion,
 		&snap.StatsReset, &snap.CacheHitRatio, &snap.CreatedAt,
 	)
-	if err == sql.ErrNoRows {
+	if errors.Is(err, sql.ErrNoRows) {
 		return nil, nil
 	}
 	if err != nil {

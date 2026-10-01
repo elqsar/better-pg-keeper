@@ -5,8 +5,9 @@ import (
 	"fmt"
 	"sort"
 
-	"github.com/elqsar/pganalyzer/internal/models"
 	"github.com/jackc/pgx/v5"
+
+	"github.com/elqsar/pganalyzer/internal/models"
 )
 
 // maxReportedSequences bounds how many sequences are kept per snapshot; only the

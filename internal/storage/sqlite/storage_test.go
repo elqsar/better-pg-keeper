@@ -140,7 +140,9 @@ func TestInstanceOperations(t *testing.T) {
 			Port:     5434,
 			Database: "nameddb",
 		}
-		storage.CreateInstance(ctx, inst)
+		if _, err := storage.CreateInstance(ctx, inst); err != nil {
+			t.Fatal(err)
+		}
 
 		retrieved, err := storage.GetInstanceByName(ctx, "named-instance")
 		if err != nil {
@@ -253,18 +255,22 @@ func TestSnapshotOperations(t *testing.T) {
 
 	t.Run("GetLatestSnapshot", func(t *testing.T) {
 		// Create older snapshot
-		storage.CreateSnapshot(ctx, &models.Snapshot{
+		if _, err := storage.CreateSnapshot(ctx, &models.Snapshot{
 			InstanceID: instanceID,
 			CapturedAt: time.Now().Add(-1 * time.Hour),
 			PGVersion:  "old",
-		})
+		}); err != nil {
+			t.Fatal(err)
+		}
 
 		// Create newer snapshot
-		storage.CreateSnapshot(ctx, &models.Snapshot{
+		if _, err := storage.CreateSnapshot(ctx, &models.Snapshot{
 			InstanceID: instanceID,
 			CapturedAt: time.Now(),
 			PGVersion:  "latest",
-		})
+		}); err != nil {
+			t.Fatal(err)
+		}
 
 		latest, err := storage.GetLatestSnapshot(ctx, instanceID)
 		if err != nil {
@@ -358,7 +364,9 @@ func TestQueryStatsOperations(t *testing.T) {
 				SharedBlksRead: 200,
 			},
 		}
-		storage.SaveQueryStats(ctx, snapID2, stats2)
+		if err := storage.SaveQueryStats(ctx, snapID2, stats2); err != nil {
+			t.Fatal(err)
+		}
 
 		deltas, err := storage.GetQueryStatsDelta(ctx, snapID, snapID2)
 		if err != nil {
@@ -400,15 +408,19 @@ func TestQueryStatsOperations(t *testing.T) {
 				MeanExecTime:  5.0,
 			},
 		}
-		storage.SaveQueryStats(ctx, snapID3, statsReset)
+		if err := storage.SaveQueryStats(ctx, snapID3, statsReset); err != nil {
+			t.Fatal(err)
+		}
 
 		// Create a high-value snapshot to compare against
 		snapID4, _ := storage.CreateSnapshot(ctx, &models.Snapshot{
 			InstanceID: instID, CapturedAt: time.Now().Add(3 * time.Hour), PGVersion: "15",
 		})
-		storage.SaveQueryStats(ctx, snapID4, []models.QueryStat{
+		if err := storage.SaveQueryStats(ctx, snapID4, []models.QueryStat{
 			{QueryID: 12345, Query: "SELECT * FROM users", Calls: 500, TotalExecTime: 2500.0},
-		})
+		}); err != nil {
+			t.Fatal(err)
+		}
 
 		// Delta from high to low should detect reset and use current values
 		deltas, err := storage.GetQueryStatsDelta(ctx, snapID4, snapID3)
@@ -637,7 +649,9 @@ func TestSuggestionOperations(t *testing.T) {
 			Description:  "Query takes > 1000ms",
 			TargetObject: "query:12345",
 		}
-		storage.UpsertSuggestion(ctx, sug)
+		if err := storage.UpsertSuggestion(ctx, sug); err != nil {
+			t.Fatal(err)
+		}
 
 		active, _ := storage.GetSuggestionsByStatus(ctx, instID, models.StatusActive)
 		var slowQueryID int64
@@ -648,10 +662,14 @@ func TestSuggestionOperations(t *testing.T) {
 			}
 		}
 
-		storage.ResolveSuggestion(ctx, slowQueryID)
+		if err := storage.ResolveSuggestion(ctx, slowQueryID); err != nil {
+			t.Fatal(err)
+		}
 
 		// Upserting again should reactivate
-		storage.UpsertSuggestion(ctx, sug)
+		if err := storage.UpsertSuggestion(ctx, sug); err != nil {
+			t.Fatal(err)
+		}
 
 		reactivated, _ := storage.GetSuggestionByID(ctx, slowQueryID)
 		if reactivated.Status != models.StatusActive {
@@ -661,18 +679,24 @@ func TestSuggestionOperations(t *testing.T) {
 
 	t.Run("GetSuggestionsByStatus orders by severity", func(t *testing.T) {
 		// Create suggestions with different severities
-		storage.UpsertSuggestion(ctx, &models.Suggestion{
+		if err := storage.UpsertSuggestion(ctx, &models.Suggestion{
 			InstanceID: instID, RuleID: "info_rule", Severity: models.SeverityInfo,
 			Title: "Info", Description: "Info desc", TargetObject: "target1",
-		})
-		storage.UpsertSuggestion(ctx, &models.Suggestion{
+		}); err != nil {
+			t.Fatal(err)
+		}
+		if err := storage.UpsertSuggestion(ctx, &models.Suggestion{
 			InstanceID: instID, RuleID: "critical_rule", Severity: models.SeverityCritical,
 			Title: "Critical", Description: "Critical desc", TargetObject: "target2",
-		})
-		storage.UpsertSuggestion(ctx, &models.Suggestion{
+		}); err != nil {
+			t.Fatal(err)
+		}
+		if err := storage.UpsertSuggestion(ctx, &models.Suggestion{
 			InstanceID: instID, RuleID: "warning_rule", Severity: models.SeverityWarning,
 			Title: "Warning", Description: "Warning desc", TargetObject: "target3",
-		})
+		}); err != nil {
+			t.Fatal(err)
+		}
 
 		active, _ := storage.GetSuggestionsByStatus(ctx, instID, models.StatusActive)
 		if len(active) < 3 {
@@ -720,13 +744,17 @@ func TestExplainPlanOperations(t *testing.T) {
 
 	t.Run("GetExplainPlan returns latest", func(t *testing.T) {
 		// Save older plan
-		storage.SaveExplainPlan(ctx, &models.ExplainPlan{
+		if _, err := storage.SaveExplainPlan(ctx, &models.ExplainPlan{
 			QueryID: 99999, PlanText: "old plan", CapturedAt: time.Now().Add(-time.Hour),
-		})
+		}); err != nil {
+			t.Fatal(err)
+		}
 		// Save newer plan
-		storage.SaveExplainPlan(ctx, &models.ExplainPlan{
+		if _, err := storage.SaveExplainPlan(ctx, &models.ExplainPlan{
 			QueryID: 99999, PlanText: "new plan", CapturedAt: time.Now(),
-		})
+		}); err != nil {
+			t.Fatal(err)
+		}
 
 		retrieved, _ := storage.GetExplainPlan(ctx, 99999)
 		if retrieved.PlanText != "new plan" {
@@ -751,18 +779,22 @@ func TestPurgeOldSnapshots(t *testing.T) {
 			PGVersion:  "15",
 		})
 		// Add some stats
-		storage.SaveQueryStats(ctx, snapID, []models.QueryStat{
+		if err := storage.SaveQueryStats(ctx, snapID, []models.QueryStat{
 			{QueryID: int64(i), Query: "SELECT 1", Calls: 1, TotalExecTime: 1, MeanExecTime: 1},
-		})
+		}); err != nil {
+			t.Fatal(err)
+		}
 	}
 
 	// Create new snapshots
 	for i := 0; i < 3; i++ {
-		storage.CreateSnapshot(ctx, &models.Snapshot{
+		if _, err := storage.CreateSnapshot(ctx, &models.Snapshot{
 			InstanceID: instID,
 			CapturedAt: time.Now().Add(-time.Duration(i) * time.Hour), // 0-2 hours old
 			PGVersion:  "15",
-		})
+		}); err != nil {
+			t.Fatal(err)
+		}
 	}
 
 	// Purge snapshots older than 7 days
@@ -838,15 +870,21 @@ func TestCascadeDeletes(t *testing.T) {
 	})
 
 	// Add related data
-	storage.SaveQueryStats(ctx, snapID, []models.QueryStat{
+	if err := storage.SaveQueryStats(ctx, snapID, []models.QueryStat{
 		{QueryID: 1, Query: "SELECT 1", Calls: 1, TotalExecTime: 1, MeanExecTime: 1},
-	})
-	storage.SaveTableStats(ctx, snapID, []models.TableStat{
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if err := storage.SaveTableStats(ctx, snapID, []models.TableStat{
 		{SchemaName: "public", RelName: "test"},
-	})
-	storage.SaveIndexStats(ctx, snapID, []models.IndexStat{
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if err := storage.SaveIndexStats(ctx, snapID, []models.IndexStat{
 		{SchemaName: "public", RelName: "test", IndexRelName: "test_pkey"},
-	})
+	}); err != nil {
+		t.Fatal(err)
+	}
 
 	// Purge should cascade delete all related stats
 	deleted, err := storage.PurgeOldSnapshots(ctx, 24*time.Hour)

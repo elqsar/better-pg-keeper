@@ -20,7 +20,6 @@ Initialize the Go project structure with dependencies and basic scaffolding.
   internal/api/
   internal/web/templates/
   pkg/models/
-  migrations/sqlite/
   configs/
   ```
 
@@ -71,6 +70,5 @@ Initialize the Go project structure with dependencies and basic scaffolding.
 │   ├── storage/sqlite/
 │   ├── suggester/
 │   └── web/templates/
-├── migrations/sqlite/
 └── pkg/models/
 ```

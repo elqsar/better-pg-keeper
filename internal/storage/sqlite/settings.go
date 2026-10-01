@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"encoding/json"
+	"errors"
 	"fmt"
 
 	"github.com/elqsar/pganalyzer/internal/models"
@@ -31,7 +32,7 @@ func (s *SQLiteStorage) SaveServerSettings(ctx context.Context, snapshotID int64
 func (s *SQLiteStorage) GetServerSettings(ctx context.Context, snapshotID int64) (*models.ServerSettings, error) {
 	var payload string
 	err := s.readDB.QueryRowContext(ctx, `SELECT payload FROM server_settings WHERE snapshot_id = ?`, snapshotID).Scan(&payload)
-	if err == sql.ErrNoRows {
+	if errors.Is(err, sql.ErrNoRows) {
 		return nil, nil
 	}
 	if err != nil {

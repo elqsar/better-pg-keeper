@@ -1,0 +1,34 @@
+version: "2"
+
+linters:
+  # The standard set (errcheck, govet, ineffassign, staticcheck, unused) plus
+  # checks for bugs this codebase is prone to: wrapped errors compared with ==,
+  # unclosed HTTP bodies (notifier), and typos in user-facing advice.
+  enable:
+    - bodyclose
+    - errorlint
+    - misspell
+    - unparam
+  settings:
+    errcheck:
+      exclude-functions:
+        # Rolled back on an error path; the original error is the one returned.
+        - (*database/sql.Tx).Rollback
+  exclusions:
+    # Unchecked Close, Rollback and Fprintf on cleanup paths, where there is
+    # nothing useful to do with the error.
+    presets:
+      - std-error-handling
+
+formatters:
+  enable:
+    - gofmt
+    - goimports
+  settings:
+    goimports:
+      local-prefixes:
+        - github.com/elqsar/pganalyzer
+
+issues:
+  max-issues-per-linter: 0
+  max-same-issues: 0

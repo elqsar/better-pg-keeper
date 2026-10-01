@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"time"
 
@@ -32,7 +33,7 @@ func (s *SQLiteStorage) SaveQueryPlans(ctx context.Context, snapshotID int64, re
 func (s *SQLiteStorage) GetQueryPlans(ctx context.Context, snapshotID int64) (*models.QueryPlanReport, error) {
 	var payload string
 	err := s.readDB.QueryRowContext(ctx, `SELECT payload FROM query_plans WHERE snapshot_id = ?`, snapshotID).Scan(&payload)
-	if err == sql.ErrNoRows {
+	if errors.Is(err, sql.ErrNoRows) {
 		return nil, nil
 	}
 	if err != nil {

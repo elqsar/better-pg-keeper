@@ -70,7 +70,7 @@ func (s *SettingsAnalysis) GetSetting(name string) (models.Setting, bool) {
 	if s == nil {
 		return models.Setting{}, false
 	}
-	return s.ServerSettings.Get(name)
+	return s.Get(name)
 }
 
 func sameReset(a, b *time.Time) bool {

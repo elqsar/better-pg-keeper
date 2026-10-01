@@ -5,8 +5,9 @@ import (
 	"testing"
 	"time"
 
-	"github.com/elqsar/pganalyzer/internal/models"
 	"github.com/jackc/pgx/v5/pgxpool"
+
+	"github.com/elqsar/pganalyzer/internal/models"
 )
 
 func TestDefaultClientConfig(t *testing.T) {
