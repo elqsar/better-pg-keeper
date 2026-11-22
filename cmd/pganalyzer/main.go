@@ -280,6 +280,7 @@ func run(ctx context.Context, configPath string) error {
 		rules.NewIndexRecommendationRule(suggesterCfg),
 		rules.NewBloatRule(suggesterCfg),
 		rules.NewVacuumRule(suggesterCfg),
+		rules.NewMaintenanceRule(),
 		rules.NewCacheRule(suggesterCfg),
 		// Operational state rules
 		rules.NewLongRunningQueryRule(suggesterCfg),

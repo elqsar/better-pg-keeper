@@ -75,13 +75,16 @@ func FullCoverage() map[string]DomainCoverage {
 
 // AnalysisResult contains all analysis findings from a snapshot.
 type AnalysisResult struct {
-	SnapshotID  int64          `json:"snapshot_id"`
-	InstanceID  int64          `json:"instance_id"`
-	AnalyzedAt  time.Time      `json:"analyzed_at"`
-	SlowQueries []SlowQuery    `json:"slow_queries"`
-	CacheStats  *CacheAnalysis `json:"cache_stats"`
-	TableIssues []TableIssue   `json:"table_issues"`
-	IndexIssues []IndexIssue   `json:"index_issues"`
+	SnapshotID                   int64          `json:"snapshot_id"`
+	InstanceID                   int64          `json:"instance_id"`
+	AnalyzedAt                   time.Time      `json:"analyzed_at"`
+	SlowQueries                  []SlowQuery    `json:"slow_queries"`
+	CacheStats                   *CacheAnalysis `json:"cache_stats"`
+	TableIssues                  []TableIssue   `json:"table_issues"`
+	MaintenanceIssues            []TableIssue   `json:"maintenance_issues,omitempty"`
+	MaintenanceBaselineObserved  bool           `json:"maintenance_baseline_observed"`
+	MaintenanceUnobservedTargets []string       `json:"-"`
+	IndexIssues                  []IndexIssue   `json:"index_issues"`
 	// Operational state analysis
 	ActivityStats    *ActivityAnalysis    `json:"activity_stats,omitempty"`
 	LockStats        *LockAnalysis        `json:"lock_stats,omitempty"`
@@ -159,27 +162,38 @@ type PoorCacheQuery struct {
 
 // TableIssue represents a detected issue with a table.
 type TableIssue struct {
-	SchemaName   string     `json:"schema_name"`
-	TableName    string     `json:"table_name"`
-	IssueType    string     `json:"issue_type"` // "high_bloat", "stale_vacuum", "stale_analyze", "missing_index"
-	Severity     string     `json:"severity"`   // "critical", "warning", "info"
-	CurrentValue float64    `json:"current_value"`
-	Threshold    float64    `json:"threshold"`
-	Description  string     `json:"description"`
-	LastVacuum   *time.Time `json:"last_vacuum,omitempty"`
-	LastAnalyze  *time.Time `json:"last_analyze,omitempty"`
-	NDeadTup     int64      `json:"n_dead_tup,omitempty"`
-	NLiveTup     int64      `json:"n_live_tup,omitempty"`
-	TableSize    int64      `json:"table_size,omitempty"`
-	SeqScanRatio float64    `json:"seq_scan_ratio,omitempty"`
+	SchemaName        string     `json:"schema_name"`
+	TableName         string     `json:"table_name"`
+	IssueType         string     `json:"issue_type"` // "high_bloat", "stale_vacuum", "stale_analyze", "missing_index"
+	Severity          string     `json:"severity"`   // "critical", "warning", "info"
+	CurrentValue      float64    `json:"current_value"`
+	Threshold         float64    `json:"threshold"`
+	Description       string     `json:"description"`
+	LastVacuum        *time.Time `json:"last_vacuum,omitempty"`
+	LastAnalyze       *time.Time `json:"last_analyze,omitempty"`
+	NDeadTup          int64      `json:"n_dead_tup,omitempty"`
+	NLiveTup          int64      `json:"n_live_tup,omitempty"`
+	TableSize         int64      `json:"table_size,omitempty"`
+	HeapBytes         int64      `json:"heap_bytes,omitempty"`
+	DeadTupleBytes    *int64     `json:"dead_tuple_bytes,omitempty"`
+	FreeBytes         *int64     `json:"free_bytes,omitempty"`
+	MeasurementSource string     `json:"measurement_source,omitempty"`
+	VacuumTrigger     *float64   `json:"vacuum_trigger,omitempty"`
+	AnalyzeTrigger    *float64   `json:"analyze_trigger,omitempty"`
+	NModSinceAnalyze  int64      `json:"n_mod_since_analyze,omitempty"`
+	VacuumScaleFactor *float64   `json:"vacuum_scale_factor,omitempty"`
+	SeqScanRatio      float64    `json:"seq_scan_ratio,omitempty"`
 }
 
 // TableIssueType constants.
 const (
-	TableIssueHighBloat    = "high_bloat"
-	TableIssueStaleVacuum  = "stale_vacuum"
-	TableIssueStaleAnalyze = "stale_analyze"
-	TableIssueMissingIndex = "missing_index"
+	TableIssueHighBloat        = "high_bloat"
+	TableIssueStaleVacuum      = "stale_vacuum"
+	TableIssueStaleAnalyze     = "stale_analyze"
+	TableIssueMissingIndex     = "missing_index"
+	TableIssueVacuumBacklog    = "vacuum_backlog"
+	TableIssueAnalyzeBacklog   = "analyze_backlog"
+	TableIssueAutovacuumTuning = "autovacuum_tuning"
 )
 
 // IndexIssue represents a detected issue with an index.

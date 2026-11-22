@@ -4,9 +4,39 @@ Goal: make PGAnalyzer useful for teams without a dedicated DBA. It should diagno
 problems, tell people when something breaks, and warn before an outage, rather
 than show numbers that need an expert to read.
 
-Last updated: 2026-09-29. Everything below is committed.
+Last updated: 2026-11-22. The autovacuum and space changes below are on branch `feat/table-diagnostics`; earlier entries are committed.
 
 ## Done
+
+### Autovacuum and heap space diagnostics (2026-10-18, review fixes 2026-11-22)
+
+- Table samples record effective vacuum and analyze triggers, maintenance counters,
+  modifications since analyze, heap size, and the most recent automatic analyze.
+  The triggers include global settings and table reloptions.
+- The hourly space collector keeps a rough dead-tuple footprint for candidate
+  heaps and measures up to ten large heaps with `pgstattuple_approx` when the
+  extension and permission are available. Each measurement has a timeout and
+  falls back to the estimate when it cannot complete.
+- Sustained vacuum and analyze backlog findings require two samples at least
+  one hour apart without a maintenance count increase. Large-table trigger
+  tuning is informational. The Schema page and API expose the new values.
+- Migration 022 preserves old samples with unknown measurements. Ordinary
+  VACUUM advice replaces unconditional `VACUUM FULL` advice.
+- Review fixes (2026-11-22):
+  - The vacuum trigger honours PostgreSQL 18's `autovacuum_vacuum_max_threshold`
+    (server setting and table option, `-1` = no cap). Without it, tables over
+    ~500M rows got an overstated trigger, so tuning advice quoted the wrong
+    number and backlog warnings fired late.
+  - Tables autovacuum won't act on (autovacuum or `track_counts` off
+    server-wide, or `autovacuum_enabled=false`) are flagged as
+    `autovacuum_disabled` (migration 023). They get no backlog or tuning
+    finding, since the `configuration` rule already reports the cause, and the
+    Schema page shows "off" for their triggers.
+  - The space collector logs "bloat detected" only for tables over the
+    dead-row threshold, not every large heap it keeps.
+  - Lint fixes in `internal/postgres/space.go`.
+- Unit tests and the PostgreSQL integration suite pass on PG14, PG17 and PG18.
+  The PG18 run checks the table-level cap. PG18 was added to the CI matrix.
 
 ### 1. Accurate advice (2026-09-27)
 
@@ -420,7 +450,9 @@ Last updated: 2026-09-29. Everything below is committed.
   `pg_stat_statements` figures; only its slow filter uses the configured
   threshold.
 - Per-query cache analysis (`internal/analyzer/cache.go`) uses lifetime counters.
-- "Bloat" is the dead-tuple ratio, not an estimate of reclaimable space.
+- The historical `bloat_percent` API field remains the estimated dead/live
+  tuple ratio. Heap dead bytes are measured only when `pgstattuple` is available;
+  otherwise they are a rough estimate. Index and TOAST space are not measured.
 - Alerts stop if the pganalyzer process dies. The README recommends an uptime
   monitor on `/health`.
 - Fix verification:
@@ -449,8 +481,8 @@ Last updated: 2026-09-29. Everything below is committed.
 - Configuration review:
   - RAM isn't visible from SQL. Without `server_memory_gb`, only the untuned
     128MB `shared_buffers` default is flagged, and `work_mem` isn't checked.
-  - Autovacuum tuning (scale factors, cost limits, worker count) is collected but
-    not judged yet. Per-table bloat and vacuum rules cover the effects.
+  - Large-table vacuum triggers are reviewed, but cost limits and worker count
+    are still not judged.
   - A default install gets about 4 info findings (timeouts, diagnostics,
     `random_page_cost`). This is intended but can look noisy.
 
@@ -474,4 +506,5 @@ one instance per process, `cmd/pganalyzer/main.go:157`).
   `go test -count=1 -tags=integration ./tests/integration/...`.
 - Minimum supported server is PostgreSQL 14 (raised from 13 on 2026-09-28), so
   catalog SQL must work there (e.g. `indnkeyatts` is fine; `last_idx_scan` from
-  PG16 is not). Run integration tests on PG14 and the newest release.
+  PG16 is not). Run integration tests on PG14 and the newest release
+  (`task test:integration:pg -- 18`). CI runs PG14, PG17 and PG18.

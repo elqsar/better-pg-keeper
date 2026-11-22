@@ -15,6 +15,7 @@ var reviewedSettings = []string{
 	"shared_buffers", "effective_cache_size", "work_mem", "maintenance_work_mem",
 	"max_connections", "random_page_cost", "effective_io_concurrency",
 	"autovacuum", "track_counts", "autovacuum_max_workers", "autovacuum_naptime",
+	"autovacuum_vacuum_threshold", "autovacuum_analyze_threshold", "autovacuum_analyze_scale_factor",
 	"autovacuum_vacuum_scale_factor", "autovacuum_vacuum_cost_limit", "autovacuum_vacuum_cost_delay",
 	"statement_timeout", "idle_in_transaction_session_timeout", "lock_timeout",
 	"log_min_duration_statement", "log_lock_waits", "log_temp_files", "track_io_timing",

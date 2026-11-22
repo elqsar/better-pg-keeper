@@ -76,17 +76,23 @@ func (c *BloatCollector) Collect(ctx context.Context, snapshotID int64) error {
 		return err
 	}
 
-	// Filter tables with significant bloat
+	// Keep tables with material dead rows or large heaps. Large, recently
+	// vacuumed heaps can still contain substantial reusable free space.
 	var significantBloat []models.BloatInfo
+	deadOverThreshold := 0
 	for _, info := range bloatInfo {
-		if info.NDeadTup >= c.minDeadTuples {
+		if info.NDeadTup >= c.minDeadTuples || info.HeapBytes >= 64<<20 {
 			significantBloat = append(significantBloat, info)
+		}
+		if info.NDeadTup >= c.minDeadTuples {
+			deadOverThreshold++
 			c.Logf("bloat detected: %s.%s - %d dead tuples (%.2f%%)",
 				info.SchemaName, info.RelName, info.NDeadTup, info.BloatPercent)
 		}
 	}
 
-	c.Logf("collected %d total tables, %d with significant bloat", len(bloatInfo), len(significantBloat))
+	c.Logf("collected %d total tables, %d with significant bloat, %d kept for space diagnostics",
+		len(bloatInfo), deadOverThreshold, len(significantBloat))
 
 	// Store significant bloat in SQLite (historical)
 	if err := c.Storage().SaveBloatStats(ctx, snapshotID, significantBloat); err != nil {

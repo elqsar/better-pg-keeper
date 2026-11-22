@@ -741,8 +741,11 @@ func (s *SQLiteStorage) SaveTableStats(ctx context.Context, snapshotID int64, st
 		INSERT INTO table_stats (
 			snapshot_id, schemaname, relname, seq_scan, seq_tup_read, idx_scan,
 			idx_tup_fetch, n_live_tup, n_dead_tup, last_vacuum, last_autovacuum,
-			last_analyze, table_size, index_size
-		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+			last_analyze, table_size, index_size, last_autoanalyze, heap_bytes,
+			rel_tuples, n_mod_since_analyze, vacuum_count, autovacuum_count,
+			analyze_count, autoanalyze_count, vacuum_trigger, analyze_trigger,
+			vacuum_scale_factor, autovacuum_disabled
+		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 	`)
 	if err != nil {
 		return fmt.Errorf("preparing statement: %w", err)
@@ -754,7 +757,10 @@ func (s *SQLiteStorage) SaveTableStats(ctx context.Context, snapshotID int64, st
 			snapshotID, stat.SchemaName, stat.RelName, stat.SeqScan, stat.SeqTupRead,
 			stat.IdxScan, stat.IdxTupFetch, stat.NLiveTup, stat.NDeadTup,
 			stat.LastVacuum, stat.LastAutovacuum, stat.LastAnalyze,
-			stat.TableSize, stat.IndexSize,
+			stat.TableSize, stat.IndexSize, stat.LastAutoanalyze, stat.HeapBytes,
+			stat.RelTuples, stat.NModSinceAnalyze, stat.VacuumCount, stat.AutovacuumCount,
+			stat.AnalyzeCount, stat.AutoanalyzeCount, stat.VacuumTrigger, stat.AnalyzeTrigger,
+			stat.VacuumScaleFactor, stat.AutovacuumDisabled,
 		)
 		if err != nil {
 			return fmt.Errorf("inserting table stat: %w", err)
@@ -769,7 +775,10 @@ func (s *SQLiteStorage) GetTableStats(ctx context.Context, snapshotID int64) ([]
 	rows, err := s.readDB.QueryContext(ctx, `
 		SELECT id, snapshot_id, schemaname, relname, seq_scan, seq_tup_read, idx_scan,
 			idx_tup_fetch, n_live_tup, n_dead_tup, last_vacuum, last_autovacuum,
-			last_analyze, table_size, index_size
+			last_analyze, table_size, index_size, last_autoanalyze, heap_bytes,
+			rel_tuples, n_mod_since_analyze, vacuum_count, autovacuum_count,
+			analyze_count, autoanalyze_count, vacuum_trigger, analyze_trigger,
+			vacuum_scale_factor, autovacuum_disabled
 		FROM table_stats
 		WHERE snapshot_id = ?
 		ORDER BY table_size DESC
@@ -786,7 +795,11 @@ func (s *SQLiteStorage) GetTableStats(ctx context.Context, snapshotID int64) ([]
 			&stat.ID, &stat.SnapshotID, &stat.SchemaName, &stat.RelName,
 			&stat.SeqScan, &stat.SeqTupRead, &stat.IdxScan, &stat.IdxTupFetch,
 			&stat.NLiveTup, &stat.NDeadTup, &stat.LastVacuum, &stat.LastAutovacuum,
-			&stat.LastAnalyze, &stat.TableSize, &stat.IndexSize,
+			&stat.LastAnalyze, &stat.TableSize, &stat.IndexSize, &stat.LastAutoanalyze,
+			&stat.HeapBytes, &stat.RelTuples, &stat.NModSinceAnalyze,
+			&stat.VacuumCount, &stat.AutovacuumCount, &stat.AnalyzeCount,
+			&stat.AutoanalyzeCount, &stat.VacuumTrigger, &stat.AnalyzeTrigger,
+			&stat.VacuumScaleFactor, &stat.AutovacuumDisabled,
 		)
 		if err != nil {
 			return nil, fmt.Errorf("scanning table stat: %w", err)
@@ -893,8 +906,9 @@ func (s *SQLiteStorage) SaveBloatStats(ctx context.Context, snapshotID int64, st
 
 	stmt, err := tx.PrepareContext(ctx, `
 		INSERT INTO bloat_stats (
-			snapshot_id, schemaname, relname, n_dead_tup, n_live_tup, bloat_percent
-		) VALUES (?, ?, ?, ?, ?, ?)
+			snapshot_id, schemaname, relname, n_dead_tup, n_live_tup, bloat_percent,
+			heap_bytes, dead_tuple_bytes, free_bytes, measurement_source, measured_at
+		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 	`)
 	if err != nil {
 		return fmt.Errorf("preparing statement: %w", err)
@@ -904,7 +918,8 @@ func (s *SQLiteStorage) SaveBloatStats(ctx context.Context, snapshotID int64, st
 	for _, stat := range stats {
 		_, err := stmt.ExecContext(ctx,
 			snapshotID, stat.SchemaName, stat.RelName,
-			stat.NDeadTup, stat.NLiveTup, stat.BloatPercent,
+			stat.NDeadTup, stat.NLiveTup, stat.BloatPercent, stat.HeapBytes,
+			stat.DeadTupleBytes, stat.FreeBytes, stat.MeasurementSource, stat.MeasuredAt,
 		)
 		if err != nil {
 			return fmt.Errorf("inserting bloat stat: %w", err)
@@ -917,7 +932,8 @@ func (s *SQLiteStorage) SaveBloatStats(ctx context.Context, snapshotID int64, st
 // GetBloatStats retrieves bloat statistics for a snapshot.
 func (s *SQLiteStorage) GetBloatStats(ctx context.Context, snapshotID int64) ([]models.BloatInfo, error) {
 	rows, err := s.readDB.QueryContext(ctx, `
-		SELECT schemaname, relname, n_dead_tup, n_live_tup, bloat_percent
+		SELECT schemaname, relname, n_dead_tup, n_live_tup, bloat_percent,
+			heap_bytes, dead_tuple_bytes, free_bytes, measurement_source, measured_at
 		FROM bloat_stats
 		WHERE snapshot_id = ?
 		ORDER BY bloat_percent DESC
@@ -932,7 +948,8 @@ func (s *SQLiteStorage) GetBloatStats(ctx context.Context, snapshotID int64) ([]
 		var stat models.BloatInfo
 		err := rows.Scan(
 			&stat.SchemaName, &stat.RelName,
-			&stat.NDeadTup, &stat.NLiveTup, &stat.BloatPercent,
+			&stat.NDeadTup, &stat.NLiveTup, &stat.BloatPercent, &stat.HeapBytes,
+			&stat.DeadTupleBytes, &stat.FreeBytes, &stat.MeasurementSource, &stat.MeasuredAt,
 		)
 		if err != nil {
 			return nil, fmt.Errorf("scanning bloat stat: %w", err)
@@ -2055,8 +2072,11 @@ func (s *SQLiteStorage) SaveCurrentTableStats(ctx context.Context, instanceID in
 		INSERT INTO current_table_stats (
 			instance_id, schemaname, relname, seq_scan, seq_tup_read, idx_scan,
 			idx_tup_fetch, n_live_tup, n_dead_tup, last_vacuum, last_autovacuum,
-			last_analyze, table_size, index_size, updated_at
-		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+			last_analyze, table_size, index_size, last_autoanalyze, heap_bytes,
+			rel_tuples, n_mod_since_analyze, vacuum_count, autovacuum_count,
+			analyze_count, autoanalyze_count, vacuum_trigger, analyze_trigger,
+			vacuum_scale_factor, autovacuum_disabled, updated_at
+		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 		ON CONFLICT(instance_id, schemaname, relname) DO UPDATE SET
 			seq_scan = excluded.seq_scan,
 			seq_tup_read = excluded.seq_tup_read,
@@ -2069,6 +2089,18 @@ func (s *SQLiteStorage) SaveCurrentTableStats(ctx context.Context, instanceID in
 			last_analyze = excluded.last_analyze,
 			table_size = excluded.table_size,
 			index_size = excluded.index_size,
+			last_autoanalyze = excluded.last_autoanalyze,
+			heap_bytes = excluded.heap_bytes,
+			rel_tuples = excluded.rel_tuples,
+			n_mod_since_analyze = excluded.n_mod_since_analyze,
+			vacuum_count = excluded.vacuum_count,
+			autovacuum_count = excluded.autovacuum_count,
+			analyze_count = excluded.analyze_count,
+			autoanalyze_count = excluded.autoanalyze_count,
+			vacuum_trigger = excluded.vacuum_trigger,
+			analyze_trigger = excluded.analyze_trigger,
+			vacuum_scale_factor = excluded.vacuum_scale_factor,
+			autovacuum_disabled = excluded.autovacuum_disabled,
 			updated_at = excluded.updated_at
 	`)
 	if err != nil {
@@ -2081,7 +2113,10 @@ func (s *SQLiteStorage) SaveCurrentTableStats(ctx context.Context, instanceID in
 			instanceID, stat.SchemaName, stat.RelName, stat.SeqScan, stat.SeqTupRead,
 			stat.IdxScan, stat.IdxTupFetch, stat.NLiveTup, stat.NDeadTup,
 			stat.LastVacuum, stat.LastAutovacuum, stat.LastAnalyze,
-			stat.TableSize, stat.IndexSize, batchTime,
+			stat.TableSize, stat.IndexSize, stat.LastAutoanalyze, stat.HeapBytes,
+			stat.RelTuples, stat.NModSinceAnalyze, stat.VacuumCount, stat.AutovacuumCount,
+			stat.AnalyzeCount, stat.AutoanalyzeCount, stat.VacuumTrigger, stat.AnalyzeTrigger,
+			stat.VacuumScaleFactor, stat.AutovacuumDisabled, batchTime,
 		)
 		if err != nil {
 			return fmt.Errorf("upserting table stat: %w", err)
@@ -2104,7 +2139,10 @@ func (s *SQLiteStorage) GetCurrentTableStats(ctx context.Context, instanceID int
 	rows, err := s.readDB.QueryContext(ctx, `
 		SELECT instance_id, schemaname, relname, seq_scan, seq_tup_read, idx_scan,
 			idx_tup_fetch, n_live_tup, n_dead_tup, last_vacuum, last_autovacuum,
-			last_analyze, table_size, index_size
+			last_analyze, table_size, index_size, last_autoanalyze, heap_bytes,
+			rel_tuples, n_mod_since_analyze, vacuum_count, autovacuum_count,
+			analyze_count, autoanalyze_count, vacuum_trigger, analyze_trigger,
+			vacuum_scale_factor, autovacuum_disabled
 		FROM current_table_stats
 		WHERE instance_id = ?
 		ORDER BY table_size DESC
@@ -2121,7 +2159,11 @@ func (s *SQLiteStorage) GetCurrentTableStats(ctx context.Context, instanceID int
 			&stat.SnapshotID, &stat.SchemaName, &stat.RelName,
 			&stat.SeqScan, &stat.SeqTupRead, &stat.IdxScan, &stat.IdxTupFetch,
 			&stat.NLiveTup, &stat.NDeadTup, &stat.LastVacuum, &stat.LastAutovacuum,
-			&stat.LastAnalyze, &stat.TableSize, &stat.IndexSize,
+			&stat.LastAnalyze, &stat.TableSize, &stat.IndexSize, &stat.LastAutoanalyze,
+			&stat.HeapBytes, &stat.RelTuples, &stat.NModSinceAnalyze,
+			&stat.VacuumCount, &stat.AutovacuumCount, &stat.AnalyzeCount,
+			&stat.AutoanalyzeCount, &stat.VacuumTrigger, &stat.AnalyzeTrigger,
+			&stat.VacuumScaleFactor, &stat.AutovacuumDisabled,
 		)
 		if err != nil {
 			return nil, fmt.Errorf("scanning table stat: %w", err)
@@ -2226,12 +2268,18 @@ func (s *SQLiteStorage) SaveCurrentBloatStats(ctx context.Context, instanceID in
 
 	stmt, err := tx.PrepareContext(ctx, `
 		INSERT INTO current_bloat_stats (
-			instance_id, schemaname, relname, n_dead_tup, n_live_tup, bloat_percent, updated_at
-		) VALUES (?, ?, ?, ?, ?, ?, ?)
+			instance_id, schemaname, relname, n_dead_tup, n_live_tup, bloat_percent,
+			heap_bytes, dead_tuple_bytes, free_bytes, measurement_source, measured_at, updated_at
+		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 		ON CONFLICT(instance_id, schemaname, relname) DO UPDATE SET
 			n_dead_tup = excluded.n_dead_tup,
 			n_live_tup = excluded.n_live_tup,
 			bloat_percent = excluded.bloat_percent,
+			heap_bytes = excluded.heap_bytes,
+			dead_tuple_bytes = excluded.dead_tuple_bytes,
+			free_bytes = excluded.free_bytes,
+			measurement_source = excluded.measurement_source,
+			measured_at = excluded.measured_at,
 			updated_at = excluded.updated_at
 	`)
 	if err != nil {
@@ -2242,7 +2290,9 @@ func (s *SQLiteStorage) SaveCurrentBloatStats(ctx context.Context, instanceID in
 	for _, stat := range stats {
 		_, err := stmt.ExecContext(ctx,
 			instanceID, stat.SchemaName, stat.RelName,
-			stat.NDeadTup, stat.NLiveTup, stat.BloatPercent, batchTime,
+			stat.NDeadTup, stat.NLiveTup, stat.BloatPercent,
+			stat.HeapBytes, stat.DeadTupleBytes, stat.FreeBytes,
+			stat.MeasurementSource, stat.MeasuredAt, batchTime,
 		)
 		if err != nil {
 			return fmt.Errorf("upserting bloat stat: %w", err)
@@ -2263,7 +2313,8 @@ func (s *SQLiteStorage) SaveCurrentBloatStats(ctx context.Context, instanceID in
 // GetCurrentBloatStats retrieves current bloat statistics for an instance.
 func (s *SQLiteStorage) GetCurrentBloatStats(ctx context.Context, instanceID int64) ([]models.BloatInfo, error) {
 	rows, err := s.readDB.QueryContext(ctx, `
-		SELECT schemaname, relname, n_dead_tup, n_live_tup, bloat_percent
+		SELECT schemaname, relname, n_dead_tup, n_live_tup, bloat_percent,
+			heap_bytes, dead_tuple_bytes, free_bytes, measurement_source, measured_at
 		FROM current_bloat_stats
 		WHERE instance_id = ?
 		ORDER BY bloat_percent DESC
@@ -2278,7 +2329,8 @@ func (s *SQLiteStorage) GetCurrentBloatStats(ctx context.Context, instanceID int
 		var stat models.BloatInfo
 		err := rows.Scan(
 			&stat.SchemaName, &stat.RelName,
-			&stat.NDeadTup, &stat.NLiveTup, &stat.BloatPercent,
+			&stat.NDeadTup, &stat.NLiveTup, &stat.BloatPercent, &stat.HeapBytes,
+			&stat.DeadTupleBytes, &stat.FreeBytes, &stat.MeasurementSource, &stat.MeasuredAt,
 		)
 		if err != nil {
 			return nil, fmt.Errorf("scanning bloat stat: %w", err)

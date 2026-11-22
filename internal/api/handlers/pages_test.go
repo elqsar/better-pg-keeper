@@ -336,10 +336,12 @@ func TestSchemaPageIndexes(t *testing.T) {
 
 func TestSchemaPageBloat(t *testing.T) {
 	e := setupTestEcho()
+	dead, free := int64(20<<20), int64(10<<20)
 	storage := &mockPageStorage{
 		snapshot: &models.Snapshot{ID: 1, CapturedAt: time.Now()},
 		bloatStats: []models.BloatInfo{
-			{SchemaName: "public", RelName: "old_table", NLiveTup: 1000, NDeadTup: 500, BloatPercent: 50.0},
+			{SchemaName: "public", RelName: "old_table", NLiveTup: 1000, NDeadTup: 500, BloatPercent: 50.0,
+				HeapBytes: 100 << 20, DeadTupleBytes: &dead, FreeBytes: &free, MeasurementSource: "pgstattuple_approx"},
 		},
 	}
 
@@ -356,6 +358,14 @@ func TestSchemaPageBloat(t *testing.T) {
 
 	if rec.Code != http.StatusOK {
 		t.Errorf("Schema() status = %d, want %d", rec.Code, http.StatusOK)
+	}
+	for _, text := range []string{"Dead Tuple Bytes", "20.0 MB", "10.0 MB", "pgstattuple_approx"} {
+		if !strings.Contains(rec.Body.String(), text) {
+			t.Errorf("space page missing %q", text)
+		}
+	}
+	if strings.Contains(rec.Body.String(), "VACUUM FULL") {
+		t.Error("space page prescribes VACUUM FULL")
 	}
 }
 

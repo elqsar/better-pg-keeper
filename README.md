@@ -15,6 +15,7 @@ A PostgreSQL performance analyzer that collects query statistics, detects perfor
 - **REST API**: Full API access to all collected data and analysis results
 - **Scheduled Collection**: Automated background collection and analysis at configurable intervals
 - **Data Retention**: Automatic cleanup of old snapshots based on retention policies
+- **Autovacuum and Heap Space Diagnostics**: Effective per-table vacuum/analyze triggers, persistent maintenance backlogs, and measured or estimated dead-tuple space
 
 ## Prerequisites
 
@@ -201,6 +202,39 @@ not use it. PGAnalyzer never installs extensions.
 Planning needs `SELECT` on the tables a query reads; queries the role cannot
 plan are recorded and skipped. The query page shows the latest plan with a
 plain-language summary.
+
+## Autovacuum and Heap Space Diagnostics
+
+The Schema page shows each table's effective vacuum and analyze triggers,
+modifications since analyze, and most recent manual or automatic maintenance.
+PGAnalyzer warns when a table stays above twice its trigger for at least an
+hour without a corresponding vacuum or analyze count increase. Triggers include
+table storage parameters and, on PostgreSQL 18+, the
+`autovacuum_vacuum_max_threshold` cap. Tables that autovacuum won't act on
+(autovacuum off, or `autovacuum_enabled = false`) show "off" and are left to
+the configuration review. Large tables
+whose vacuum trigger allows a substantial dead-tuple footprint get
+table-specific tuning advice.
+
+The Space tab shows heap bytes, dead-tuple bytes, and free space already
+available for reuse. By default, dead-tuple bytes are a **rough estimate**
+from row counts and heap size; free bytes are unknown. If `pgstattuple` is
+installed and the monitoring role can execute it, PGAnalyzer measures up to
+ten candidate heaps per hour with `pgstattuple_approx` and a five-second
+timeout per table. It never installs the extension or executes maintenance
+commands. To enable the optional measurement on a self-managed server:
+
+```sql
+CREATE EXTENSION IF NOT EXISTS pgstattuple;
+GRANT pg_stat_scan_tables TO pganalyzer;
+```
+
+The measurement source and time appear beside each result. Ordinary `VACUUM`
+usually makes dead-tuple space reusable inside the table; it normally does not
+return it to the operating system. Index and TOAST internals are not measured
+by this feature. The existing `bloat_percent` API field keeps its historical
+meaning: estimated dead rows divided by estimated live rows. New nullable
+space fields distinguish physical heap measurements from that ratio.
 
 ## Notifications
 

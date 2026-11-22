@@ -75,8 +75,10 @@ func (r *VacuumRule) Evaluate(ctx context.Context, analysis *analyzer.AnalysisRe
 
 		desc.WriteString("**Recommendation:**\n")
 		desc.WriteString("Run VACUUM to clean up dead tuples and update statistics:\n\n")
-		fmt.Fprintf(&desc, "```sql\nVACUUM ANALYZE %s.%s;\n```\n\n",
-			issue.SchemaName, issue.TableName)
+		fmt.Fprintf(&desc, "```sql\nVACUUM (ANALYZE) %s;\n```\n\n", quoteQualified(issue.SchemaName, issue.TableName))
+		if issue.VacuumTrigger != nil {
+			fmt.Fprintf(&desc, "The effective autovacuum trigger is %.0f dead rows.\n\n", *issue.VacuumTrigger)
+		}
 
 		desc.WriteString("**Note:** If autovacuum is enabled, investigate why it hasn't run:\n")
 		desc.WriteString("- Check if table is excluded from autovacuum\n")

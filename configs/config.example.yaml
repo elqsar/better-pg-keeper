@@ -159,9 +159,11 @@ thresholds:
   # Tip: Healthy databases typically have >99% hit ratio
   cache_hit_ratio_warning: 0.95
 
-  # Table Bloat Detection
+  # Dead Tuple Ratio Detection
   # --------------------
-  # Tables with dead tuple percentage above this are flagged for VACUUM
+  # Tables with estimated dead/live tuple ratio above this are flagged.
+  # The Space tab also shows heap dead-tuple bytes from optional pgstattuple
+  # measurements, or a labeled rough estimate without the extension.
   # Range: 0 to 100 (percentage)
   # Default: 20 (20%)
   # Tip: High bloat wastes disk space and slows queries
