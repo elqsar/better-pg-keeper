@@ -191,23 +191,23 @@ func (c *PgxClient) GetStatTables(ctx context.Context) ([]models.TableStat, erro
 	if c.pool == nil {
 		return nil, fmt.Errorf("postgres: not connected")
 	}
+	defaults, err := c.autovacuumDefaults(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("postgres: reading autovacuum thresholds: %w", err)
+	}
 
 	query := `
 		SELECT
-			schemaname,
-			relname,
-			seq_scan,
-			seq_tup_read,
-			COALESCE(idx_scan, 0) as idx_scan,
-			COALESCE(idx_tup_fetch, 0) as idx_tup_fetch,
-			n_live_tup,
-			n_dead_tup,
-			last_vacuum,
-			last_autovacuum,
-			last_analyze,
-			pg_table_size(relid) as table_size,
-			pg_indexes_size(relid) as index_size
-		FROM pg_stat_user_tables
+			s.schemaname, s.relname, s.seq_scan, s.seq_tup_read,
+			COALESCE(s.idx_scan, 0), COALESCE(s.idx_tup_fetch, 0),
+			s.n_live_tup, s.n_dead_tup, s.last_vacuum, s.last_autovacuum,
+			s.last_analyze, pg_table_size(s.relid), pg_indexes_size(s.relid),
+			s.last_autoanalyze, pg_relation_size(s.relid), c.reltuples,
+			s.n_mod_since_analyze, s.vacuum_count, s.autovacuum_count,
+			s.analyze_count, s.autoanalyze_count, c.reloptions
+		FROM pg_stat_user_tables s
+		JOIN pg_class c ON c.oid = s.relid
+		WHERE c.relkind IN ('r', 'm')
 	`
 
 	rows, err := c.pool.Query(ctx, query)
@@ -219,6 +219,7 @@ func (c *PgxClient) GetStatTables(ctx context.Context) ([]models.TableStat, erro
 	var stats []models.TableStat
 	for rows.Next() {
 		var s models.TableStat
+		var reloptions []string
 		err := rows.Scan(
 			&s.SchemaName,
 			&s.RelName,
@@ -233,10 +234,20 @@ func (c *PgxClient) GetStatTables(ctx context.Context) ([]models.TableStat, erro
 			&s.LastAnalyze,
 			&s.TableSize,
 			&s.IndexSize,
+			&s.LastAutoanalyze,
+			&s.HeapBytes,
+			&s.RelTuples,
+			&s.NModSinceAnalyze,
+			&s.VacuumCount,
+			&s.AutovacuumCount,
+			&s.AnalyzeCount,
+			&s.AutoanalyzeCount,
+			&reloptions,
 		)
 		if err != nil {
 			return nil, fmt.Errorf("postgres: failed to scan table stat: %w", err)
 		}
+		applyAutovacuumThresholds(&s, defaults, reloptions)
 		stats = append(stats, s)
 	}
 
@@ -376,7 +387,7 @@ func (c *PgxClient) GetDatabaseStats(ctx context.Context) (*models.DatabaseStats
 	return &stats, nil
 }
 
-// GetTableBloat retrieves bloat information for tables with significant dead tuples.
+// GetTableBloat retrieves heap space diagnostics for user tables.
 func (c *PgxClient) GetTableBloat(ctx context.Context) ([]models.BloatInfo, error) {
 	if c.pool == nil {
 		return nil, fmt.Errorf("postgres: not connected")
@@ -384,14 +395,14 @@ func (c *PgxClient) GetTableBloat(ctx context.Context) ([]models.BloatInfo, erro
 
 	query := `
 		SELECT
-			schemaname,
-			relname,
-			n_dead_tup,
-			n_live_tup,
-			COALESCE(ROUND(n_dead_tup::numeric / NULLIF(n_live_tup, 0) * 100, 2), 0) as bloat_percent
-		FROM pg_stat_user_tables
-		WHERE n_dead_tup > 1000
-		ORDER BY n_dead_tup DESC
+			s.relid, s.schemaname, s.relname, s.n_dead_tup, s.n_live_tup,
+			COALESCE(ROUND(s.n_dead_tup::numeric / NULLIF(s.n_live_tup, 0) * 100, 2), 0),
+			GREATEST(c.relpages, 0)::bigint * current_setting('block_size')::bigint
+		FROM pg_stat_user_tables s
+		JOIN pg_class c ON c.oid = s.relid
+		WHERE c.relkind IN ('r', 'm')
+		  AND (s.n_dead_tup >= 1000 OR GREATEST(c.relpages, 0)::bigint * current_setting('block_size')::bigint >= 67108864)
+		ORDER BY GREATEST(c.relpages, 0) DESC
 	`
 
 	rows, err := c.pool.Query(ctx, query)
@@ -404,11 +415,13 @@ func (c *PgxClient) GetTableBloat(ctx context.Context) ([]models.BloatInfo, erro
 	for rows.Next() {
 		var b models.BloatInfo
 		err := rows.Scan(
+			&b.RelationOID,
 			&b.SchemaName,
 			&b.RelName,
 			&b.NDeadTup,
 			&b.NLiveTup,
 			&b.BloatPercent,
+			&b.HeapBytes,
 		)
 		if err != nil {
 			return nil, fmt.Errorf("postgres: failed to scan bloat info: %w", err)
@@ -419,8 +432,9 @@ func (c *PgxClient) GetTableBloat(ctx context.Context) ([]models.BloatInfo, erro
 	if err := rows.Err(); err != nil {
 		return nil, fmt.Errorf("postgres: error iterating bloat info: %w", err)
 	}
+	rows.Close()
 
-	return bloatInfo, nil
+	return c.measureHeapSpace(ctx, bloatInfo), nil
 }
 
 // GetIndexDetails retrieves extended index information including definition.

@@ -493,16 +493,28 @@ type SchemaPageData struct {
 
 // PageTable represents a table for the schema page.
 type PageTable struct {
-	SchemaName     string
-	RelName        string
-	TableSize      int64
-	NLiveTup       int64
-	NDeadTup       int64
-	SeqScan        int64
-	IdxScan        int64
-	LastVacuum     *time.Time
-	LastAutovacuum *time.Time
-	LastAnalyze    *time.Time
+	SchemaName        string
+	RelName           string
+	TableSize         int64
+	NLiveTup          int64
+	NDeadTup          int64
+	SeqScan           int64
+	IdxScan           int64
+	LastVacuum        *time.Time
+	LastAutovacuum    *time.Time
+	LastAnalyze       *time.Time
+	LastAutoanalyze   *time.Time
+	MostRecentVacuum  *time.Time
+	VacuumWasAuto     bool
+	MostRecentAnalyze *time.Time
+	AnalyzeWasAuto    bool
+	VacuumTrigger     *float64
+	AnalyzeTrigger    *float64
+	// AutovacuumDisabled replaces the triggers with "off" on the page.
+	AutovacuumDisabled bool
+	NModSinceAnalyze   int64
+	AutovacuumCount    int64
+	AutoanalyzeCount   int64
 }
 
 // PageIndex represents an index for the schema page.
@@ -518,11 +530,17 @@ type PageIndex struct {
 
 // PageBloat represents table bloat info for the schema page.
 type PageBloat struct {
-	SchemaName   string
-	RelName      string
-	NLiveTup     int64
-	NDeadTup     int64
-	BloatPercent float64
+	SchemaName        string
+	RelName           string
+	NLiveTup          int64
+	NDeadTup          int64
+	BloatPercent      float64
+	HeapBytes         int64
+	DeadTupleBytes    *int64
+	FreeBytes         *int64
+	DeadHeapPercent   *float64
+	MeasurementSource string
+	MeasuredAt        *time.Time
 }
 
 // Schema handles GET /schema requests.
@@ -562,17 +580,36 @@ func (h *PageHandler) Schema(c echo.Context) error {
 			c.Logger().Errorf("failed to get current table stats: %v", err)
 		} else {
 			for _, t := range tables {
+				vacuumAt, vacuumAuto := t.LastVacuum, false
+				if t.LastAutovacuum != nil && (vacuumAt == nil || t.LastAutovacuum.After(*vacuumAt)) {
+					vacuumAt, vacuumAuto = t.LastAutovacuum, true
+				}
+				analyzeAt, analyzeAuto := t.LastAnalyze, false
+				if t.LastAutoanalyze != nil && (analyzeAt == nil || t.LastAutoanalyze.After(*analyzeAt)) {
+					analyzeAt, analyzeAuto = t.LastAutoanalyze, true
+				}
 				data.Tables = append(data.Tables, PageTable{
-					SchemaName:     t.SchemaName,
-					RelName:        t.RelName,
-					TableSize:      t.TableSize,
-					NLiveTup:       t.NLiveTup,
-					NDeadTup:       t.NDeadTup,
-					SeqScan:        t.SeqScan,
-					IdxScan:        t.IdxScan,
-					LastVacuum:     t.LastVacuum,
-					LastAutovacuum: t.LastAutovacuum,
-					LastAnalyze:    t.LastAnalyze,
+					SchemaName:         t.SchemaName,
+					RelName:            t.RelName,
+					TableSize:          t.TableSize,
+					NLiveTup:           t.NLiveTup,
+					NDeadTup:           t.NDeadTup,
+					SeqScan:            t.SeqScan,
+					IdxScan:            t.IdxScan,
+					LastVacuum:         t.LastVacuum,
+					LastAutovacuum:     t.LastAutovacuum,
+					LastAnalyze:        t.LastAnalyze,
+					LastAutoanalyze:    t.LastAutoanalyze,
+					MostRecentVacuum:   vacuumAt,
+					VacuumWasAuto:      vacuumAuto,
+					MostRecentAnalyze:  analyzeAt,
+					AnalyzeWasAuto:     analyzeAuto,
+					VacuumTrigger:      t.VacuumTrigger,
+					AnalyzeTrigger:     t.AnalyzeTrigger,
+					AutovacuumDisabled: t.AutovacuumDisabled,
+					NModSinceAnalyze:   t.NModSinceAnalyze,
+					AutovacuumCount:    t.AutovacuumCount,
+					AutoanalyzeCount:   t.AutoanalyzeCount,
 				})
 			}
 		}
@@ -602,11 +639,17 @@ func (h *PageHandler) Schema(c echo.Context) error {
 		} else {
 			for _, b := range bloat {
 				data.Bloat = append(data.Bloat, PageBloat{
-					SchemaName:   b.SchemaName,
-					RelName:      b.RelName,
-					NLiveTup:     b.NLiveTup,
-					NDeadTup:     b.NDeadTup,
-					BloatPercent: b.BloatPercent,
+					SchemaName:        b.SchemaName,
+					RelName:           b.RelName,
+					NLiveTup:          b.NLiveTup,
+					NDeadTup:          b.NDeadTup,
+					BloatPercent:      b.BloatPercent,
+					HeapBytes:         b.HeapBytes,
+					DeadTupleBytes:    b.DeadTupleBytes,
+					FreeBytes:         b.FreeBytes,
+					DeadHeapPercent:   deadHeapPercent(b),
+					MeasurementSource: b.MeasurementSource,
+					MeasuredAt:        b.MeasuredAt,
 				})
 			}
 		}

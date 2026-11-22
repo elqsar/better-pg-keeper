@@ -85,21 +85,36 @@ type QueryStatDelta struct {
 
 // TableStat represents statistics for a single table.
 type TableStat struct {
-	ID             int64      `json:"id"`
-	SnapshotID     int64      `json:"snapshot_id"`
-	SchemaName     string     `json:"schemaname"`
-	RelName        string     `json:"relname"`
-	SeqScan        int64      `json:"seq_scan"`
-	SeqTupRead     int64      `json:"seq_tup_read"`
-	IdxScan        int64      `json:"idx_scan"`
-	IdxTupFetch    int64      `json:"idx_tup_fetch"`
-	NLiveTup       int64      `json:"n_live_tup"`
-	NDeadTup       int64      `json:"n_dead_tup"`
-	LastVacuum     *time.Time `json:"last_vacuum,omitempty"`
-	LastAutovacuum *time.Time `json:"last_autovacuum,omitempty"`
-	LastAnalyze    *time.Time `json:"last_analyze,omitempty"`
-	TableSize      int64      `json:"table_size"` // bytes
-	IndexSize      int64      `json:"index_size"` // bytes
+	ID                int64      `json:"id"`
+	SnapshotID        int64      `json:"snapshot_id"`
+	SchemaName        string     `json:"schemaname"`
+	RelName           string     `json:"relname"`
+	SeqScan           int64      `json:"seq_scan"`
+	SeqTupRead        int64      `json:"seq_tup_read"`
+	IdxScan           int64      `json:"idx_scan"`
+	IdxTupFetch       int64      `json:"idx_tup_fetch"`
+	NLiveTup          int64      `json:"n_live_tup"`
+	NDeadTup          int64      `json:"n_dead_tup"`
+	LastVacuum        *time.Time `json:"last_vacuum,omitempty"`
+	LastAutovacuum    *time.Time `json:"last_autovacuum,omitempty"`
+	LastAnalyze       *time.Time `json:"last_analyze,omitempty"`
+	LastAutoanalyze   *time.Time `json:"last_autoanalyze,omitempty"`
+	TableSize         int64      `json:"table_size"` // bytes
+	IndexSize         int64      `json:"index_size"` // bytes
+	HeapBytes         int64      `json:"heap_bytes"`
+	RelTuples         float64    `json:"rel_tuples"`
+	NModSinceAnalyze  int64      `json:"n_mod_since_analyze"`
+	VacuumCount       int64      `json:"vacuum_count"`
+	AutovacuumCount   int64      `json:"autovacuum_count"`
+	AnalyzeCount      int64      `json:"analyze_count"`
+	AutoanalyzeCount  int64      `json:"autoanalyze_count"`
+	VacuumTrigger     *float64   `json:"vacuum_trigger,omitempty"`
+	AnalyzeTrigger    *float64   `json:"analyze_trigger,omitempty"`
+	VacuumScaleFactor *float64   `json:"vacuum_scale_factor,omitempty"`
+	// AutovacuumDisabled is true when autovacuum or track_counts is off
+	// server-wide, or the table sets autovacuum_enabled=false. The triggers
+	// then describe the configured thresholds, which autovacuum isn't acting on.
+	AutovacuumDisabled bool `json:"autovacuum_disabled"`
 }
 
 // IndexStat represents statistics for a single index.
@@ -185,11 +200,17 @@ type DatabaseStats struct {
 
 // BloatInfo represents table bloat information.
 type BloatInfo struct {
-	SchemaName   string  `json:"schemaname"`
-	RelName      string  `json:"relname"`
-	NDeadTup     int64   `json:"n_dead_tup"`
-	NLiveTup     int64   `json:"n_live_tup"`
-	BloatPercent float64 `json:"bloat_percent"` // dead tuples as percentage of live
+	SchemaName        string     `json:"schemaname"`
+	RelName           string     `json:"relname"`
+	NDeadTup          int64      `json:"n_dead_tup"`
+	NLiveTup          int64      `json:"n_live_tup"`
+	BloatPercent      float64    `json:"bloat_percent"` // dead tuples as percentage of live
+	HeapBytes         int64      `json:"heap_bytes"`
+	DeadTupleBytes    *int64     `json:"dead_tuple_bytes,omitempty"`
+	FreeBytes         *int64     `json:"free_bytes,omitempty"`
+	MeasurementSource string     `json:"measurement_source,omitempty"`
+	MeasuredAt        *time.Time `json:"measured_at,omitempty"`
+	RelationOID       uint32     `json:"-"` // used only while collecting
 }
 
 // IndexDetail represents extended index information.

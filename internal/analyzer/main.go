@@ -197,6 +197,11 @@ func (a *MainAnalyzer) Analyze(ctx context.Context, snapshotID int64) (*Analysis
 		}
 	}
 
+	if err := a.analyzeMaintenance(ctx, result); err != nil {
+		invalidateDomain(coverage, DomainTableStats)
+		result.Errors = append(result.Errors, fmt.Sprintf("maintenance analysis: %v", err))
+		result.ErrorCount++
+	}
 	a.analyzeOperational(ctx, coverage, result)
 
 	return result, nil
@@ -381,6 +386,11 @@ func (a *MainAnalyzer) AnalyzeWithTimeRange(ctx context.Context, fromSnapshotID,
 			result.IndexIssues = indexIssues
 		}
 	}
+	if err := a.analyzeMaintenance(ctx, result); err != nil {
+		invalidateDomain(coverage, DomainTableStats)
+		result.Errors = append(result.Errors, fmt.Sprintf("maintenance analysis: %v", err))
+		result.ErrorCount++
+	}
 	a.analyzeOperational(ctx, coverage, result)
 
 	return result, nil
@@ -388,7 +398,7 @@ func (a *MainAnalyzer) AnalyzeWithTimeRange(ctx context.Context, fromSnapshotID,
 
 // GetIssueCount returns the total count of all issues found.
 func (r *AnalysisResult) GetIssueCount() int {
-	count := len(r.SlowQueries) + len(r.TableIssues) + len(r.IndexIssues)
+	count := len(r.SlowQueries) + len(r.TableIssues) + len(r.MaintenanceIssues) + len(r.IndexIssues)
 	if r.CacheStats != nil {
 		count += len(r.CacheStats.PoorCacheQueries)
 		if r.CacheStats.BelowThreshold {
@@ -403,6 +413,11 @@ func (r *AnalysisResult) GetCriticalCount() int {
 	count := 0
 
 	for _, issue := range r.TableIssues {
+		if issue.Severity == "critical" {
+			count++
+		}
+	}
+	for _, issue := range r.MaintenanceIssues {
 		if issue.Severity == "critical" {
 			count++
 		}
@@ -430,6 +445,11 @@ func (r *AnalysisResult) GetWarningCount() int {
 	}
 
 	for _, issue := range r.TableIssues {
+		if issue.Severity == "warning" {
+			count++
+		}
+	}
+	for _, issue := range r.MaintenanceIssues {
 		if issue.Severity == "warning" {
 			count++
 		}

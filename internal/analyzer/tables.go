@@ -55,7 +55,7 @@ func (a *TableAnalyzer) AnalyzeSnapshots(ctx context.Context, tableSnapshotID, b
 	// Build a map of bloat info by table
 	bloatMap := make(map[string]models.BloatInfo)
 	for _, b := range bloatStats {
-		key := b.SchemaName + "." + b.RelName
+		key := tableKey(b.SchemaName, b.RelName)
 		bloatMap[key] = b
 	}
 
@@ -63,41 +63,54 @@ func (a *TableAnalyzer) AnalyzeSnapshots(ctx context.Context, tableSnapshotID, b
 	now := time.Now()
 
 	for _, stat := range tableStats {
-		tableKey := stat.SchemaName + "." + stat.RelName
+		key := tableKey(stat.SchemaName, stat.RelName)
 
 		// Check for high bloat
-		if bloat, ok := bloatMap[tableKey]; ok {
-			if bloat.BloatPercent >= a.config.BloatPercentWarning {
+		if bloat, ok := bloatMap[key]; ok {
+			deadPercent := bloat.BloatPercent
+			description := fmt.Sprintf("Estimated dead/live row ratio is %.1f%% (%d dead / %d live). Consider running VACUUM.", deadPercent, bloat.NDeadTup, bloat.NLiveTup)
+			if bloat.MeasurementSource == "pgstattuple_approx" && bloat.DeadTupleBytes != nil && bloat.HeapBytes > 0 {
+				deadPercent = 100 * float64(*bloat.DeadTupleBytes) / float64(bloat.HeapBytes)
+				description = fmt.Sprintf("Measured dead tuples occupy %.1f%% of the heap. Consider running VACUUM.", deadPercent)
+			}
+			if deadPercent >= a.config.BloatPercentWarning {
 				severity := models.SeverityWarning
-				if bloat.BloatPercent >= a.config.BloatPercentWarning*2 {
+				if deadPercent >= a.config.BloatPercentWarning*2 {
 					severity = models.SeverityCritical
 				}
 
 				issues = append(issues, TableIssue{
-					SchemaName:   stat.SchemaName,
-					TableName:    stat.RelName,
-					IssueType:    TableIssueHighBloat,
-					Severity:     severity,
-					CurrentValue: bloat.BloatPercent,
-					Threshold:    a.config.BloatPercentWarning,
-					Description: fmt.Sprintf(
-						"Table has %.1f%% dead tuples (%d dead / %d live). Consider running VACUUM.",
-						bloat.BloatPercent, bloat.NDeadTup, bloat.NLiveTup,
-					),
-					NDeadTup:  bloat.NDeadTup,
-					NLiveTup:  bloat.NLiveTup,
-					TableSize: stat.TableSize,
+					SchemaName:        stat.SchemaName,
+					TableName:         stat.RelName,
+					IssueType:         TableIssueHighBloat,
+					Severity:          severity,
+					CurrentValue:      deadPercent,
+					Threshold:         a.config.BloatPercentWarning,
+					Description:       description,
+					NDeadTup:          bloat.NDeadTup,
+					NLiveTup:          bloat.NLiveTup,
+					TableSize:         stat.TableSize,
+					HeapBytes:         bloat.HeapBytes,
+					DeadTupleBytes:    bloat.DeadTupleBytes,
+					FreeBytes:         bloat.FreeBytes,
+					MeasurementSource: bloat.MeasurementSource,
+					VacuumTrigger:     stat.VacuumTrigger,
+					AnalyzeTrigger:    stat.AnalyzeTrigger,
 				})
 			}
 		}
 
 		// Check for stale vacuum
 		if issue := a.checkStaleVacuum(stat, now); issue != nil {
+			issue.VacuumTrigger = stat.VacuumTrigger
+			issue.HeapBytes = stat.HeapBytes
 			issues = append(issues, *issue)
 		}
 
 		// Check for stale analyze
 		if issue := a.checkStaleAnalyze(stat, now); issue != nil {
+			issue.AnalyzeTrigger = stat.AnalyzeTrigger
+			issue.NModSinceAnalyze = stat.NModSinceAnalyze
 			issues = append(issues, *issue)
 		}
 
@@ -198,7 +211,11 @@ func (a *TableAnalyzer) checkStaleAnalyze(stat models.TableStat, now time.Time) 
 	staleThreshold := now.AddDate(0, 0, -staleDays)
 
 	// If never analyzed and has rows, that's an issue
-	if stat.LastAnalyze == nil {
+	lastAnalyze := stat.LastAnalyze
+	if stat.LastAutoanalyze != nil && (lastAnalyze == nil || stat.LastAutoanalyze.After(*lastAnalyze)) {
+		lastAnalyze = stat.LastAutoanalyze
+	}
+	if lastAnalyze == nil {
 		return &TableIssue{
 			SchemaName:   stat.SchemaName,
 			TableName:    stat.RelName,
@@ -216,8 +233,8 @@ func (a *TableAnalyzer) checkStaleAnalyze(stat models.TableStat, now time.Time) 
 	}
 
 	// Check if analyze is stale
-	if stat.LastAnalyze.Before(staleThreshold) {
-		daysSinceAnalyze := int(now.Sub(*stat.LastAnalyze).Hours() / 24)
+	if lastAnalyze.Before(staleThreshold) {
+		daysSinceAnalyze := int(now.Sub(*lastAnalyze).Hours() / 24)
 
 		return &TableIssue{
 			SchemaName:   stat.SchemaName,
@@ -230,7 +247,7 @@ func (a *TableAnalyzer) checkStaleAnalyze(stat models.TableStat, now time.Time) 
 				"Table statistics are %d days old. Consider running ANALYZE for better query plans.",
 				daysSinceAnalyze,
 			),
-			LastAnalyze: stat.LastAnalyze,
+			LastAnalyze: lastAnalyze,
 			NLiveTup:    stat.NLiveTup,
 			TableSize:   stat.TableSize,
 		}

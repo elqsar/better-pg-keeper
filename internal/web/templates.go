@@ -28,31 +28,34 @@ type TemplateRenderer struct {
 // NewTemplateRenderer creates a new TemplateRenderer with templates loaded from embedded FS.
 func NewTemplateRenderer() (*TemplateRenderer, error) {
 	funcMap := template.FuncMap{
-		"formatTime":          formatTime,
-		"formatTimeShort":     formatTimeShort,
-		"formatDuration":      formatDuration,
-		"formatBytes":         formatBytes,
-		"formatNumber":        formatNumber,
-		"formatPercent":       formatPercent,
-		"truncate":            truncate,
-		"severityClass":       severityClass,
-		"severityIcon":        severityIcon,
-		"cacheRatioClass":     cacheRatioClass,
-		"add":                 add,
-		"sub":                 sub,
-		"mul":                 mul,
-		"div":                 div,
-		"seq":                 seq,
-		"safeHTML":            safeHTML,
-		"severityBadgeClass":  severityBadgeClass,
-		"suggestionCardClass": suggestionCardClass,
-		"dict":                dict,
-		"eq":                  eq,
-		"formatDurationSec":   formatDurationSec,
-		"formatMs":            verify.FormatMs,
-		"formatSpan":          formatSpan,
-		"formatFraction":      formatFraction,
-		"markdown":            renderMarkdown,
+		"formatTime":            formatTime,
+		"formatTimeShort":       formatTimeShort,
+		"formatDuration":        formatDuration,
+		"formatBytes":           formatBytes,
+		"formatOptionalBytes":   formatOptionalBytes,
+		"formatOptionalPercent": formatOptionalPercent,
+		"formatOptionalRows":    formatOptionalRows,
+		"formatNumber":          formatNumber,
+		"formatPercent":         formatPercent,
+		"truncate":              truncate,
+		"severityClass":         severityClass,
+		"severityIcon":          severityIcon,
+		"cacheRatioClass":       cacheRatioClass,
+		"add":                   add,
+		"sub":                   sub,
+		"mul":                   mul,
+		"div":                   div,
+		"seq":                   seq,
+		"safeHTML":              safeHTML,
+		"severityBadgeClass":    severityBadgeClass,
+		"suggestionCardClass":   suggestionCardClass,
+		"dict":                  dict,
+		"eq":                    eq,
+		"formatDurationSec":     formatDurationSec,
+		"formatMs":              verify.FormatMs,
+		"formatSpan":            formatSpan,
+		"formatFraction":        formatFraction,
+		"markdown":              renderMarkdown,
 	}
 
 	tmpl, err := template.New("").Funcs(funcMap).ParseFS(templatesFS, "templates/*.html")
@@ -133,6 +136,13 @@ func formatBytes(bytes int64) string {
 	return fmt.Sprintf("%.1f %cB", float64(bytes)/float64(div), "KMGTPE"[exp])
 }
 
+func formatOptionalBytes(bytes *int64) string {
+	if bytes == nil {
+		return "Unknown"
+	}
+	return formatBytes(*bytes)
+}
+
 // formatNumber formats a number with thousand separators.
 func formatNumber(n int64) string {
 	str := fmt.Sprintf("%d", n)
@@ -157,6 +167,20 @@ func formatNumber(n int64) string {
 // formatPercent formats a float as a percentage.
 func formatPercent(f float64) string {
 	return fmt.Sprintf("%.2f%%", f)
+}
+
+func formatOptionalPercent(f *float64) string {
+	if f == nil {
+		return "Unknown"
+	}
+	return formatPercent(*f)
+}
+
+func formatOptionalRows(f *float64) string {
+	if f == nil {
+		return "Unknown"
+	}
+	return formatNumber(int64(*f + 0.5))
 }
 
 // truncate truncates a string to a maximum length.

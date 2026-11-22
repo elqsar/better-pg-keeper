@@ -42,7 +42,7 @@
                         Indexes
                     </a>
                     <a href="/schema?tab=bloat" class="{{if eq .ActiveTab "bloat"}}tab-active{{else}}tab-inactive{{end}}">
-                        Bloat
+                        Space
                     </a>
                 </nav>
             </div>
@@ -60,6 +60,9 @@
                                     <th class="text-right">Size</th>
                                     <th class="text-right">Rows</th>
                                     <th class="text-right">Dead Tuples</th>
+                                    <th class="text-right">Vacuum Trigger</th>
+                                    <th class="text-right">Analyze Trigger</th>
+                                    <th class="text-right">Mods Since Analyze</th>
                                     <th class="text-right">Seq Scans</th>
                                     <th class="text-right">Idx Scans</th>
                                     <th>Last Vacuum</th>
@@ -75,13 +78,21 @@
                                     <td class="text-right tabular-nums">{{formatBytes .TableSize}}</td>
                                     <td class="text-right tabular-nums">{{formatNumber .NLiveTup}}</td>
                                     <td class="text-right tabular-nums {{if gt .NDeadTup 10000}}text-severity-warning font-medium{{end}}">{{formatNumber .NDeadTup}}</td>
+                                    {{if .AutovacuumDisabled}}
+                                    <td class="text-right text-severity-warning font-medium" title="Autovacuum is off for this table, so neither trigger applies">off</td>
+                                    <td class="text-right text-severity-warning font-medium" title="Autovacuum is off for this table, so neither trigger applies">off</td>
+                                    {{else}}
+                                    <td class="text-right tabular-nums">{{formatOptionalRows .VacuumTrigger}}</td>
+                                    <td class="text-right tabular-nums">{{formatOptionalRows .AnalyzeTrigger}}</td>
+                                    {{end}}
+                                    <td class="text-right tabular-nums">{{formatNumber .NModSinceAnalyze}}</td>
                                     <td class="text-right tabular-nums">{{formatNumber .SeqScan}}</td>
                                     <td class="text-right tabular-nums">{{formatNumber .IdxScan}}</td>
                                     <td class="text-gray-500 text-sm">
-                                        {{if .LastVacuum}}{{formatTimeShort .LastVacuum}}{{else if .LastAutovacuum}}{{formatTimeShort .LastAutovacuum}} <span class="text-xs text-gray-400">(auto)</span>{{else}}Never{{end}}
+                                        {{if .MostRecentVacuum}}{{formatTimeShort .MostRecentVacuum}}{{if .VacuumWasAuto}} <span class="text-xs text-gray-400">(auto)</span>{{end}}{{else}}Never{{end}}
                                     </td>
                                     <td class="text-gray-500 text-sm">
-                                        {{if .LastAnalyze}}{{formatTimeShort .LastAnalyze}}{{else}}Never{{end}}
+                                        {{if .MostRecentAnalyze}}{{formatTimeShort .MostRecentAnalyze}}{{if .AnalyzeWasAuto}} <span class="text-xs text-gray-400">(auto)</span>{{end}}{{else}}Never{{end}}
                                     </td>
                                 </tr>
                                 {{end}}
@@ -153,6 +164,7 @@
 
                     {{else if eq .ActiveTab "bloat"}}
                     <!-- Bloat Tab -->
+                    <p class="text-sm text-gray-500 mb-4">Dead tuple bytes become reusable after VACUUM. Free bytes are already reusable inside the heap; they are not a promise of disk space returned to the operating system. Index and TOAST internals are not measured here.</p>
                     {{if .Bloat}}
                     <div class="table-container">
                         <table class="table">
@@ -161,8 +173,11 @@
                                     <th>Table</th>
                                     <th class="text-right">Live Tuples</th>
                                     <th class="text-right">Dead Tuples</th>
-                                    <th class="text-right">Bloat %</th>
-                                    <th>Recommendation</th>
+                                    <th class="text-right">Heap Size</th>
+                                    <th class="text-right">Dead Tuple Bytes</th>
+                                    <th class="text-right">Free Bytes</th>
+                                    <th class="text-right">Dead Heap %</th>
+                                    <th>Measurement</th>
                                 </tr>
                             </thead>
                             <tbody class="divide-y divide-gray-100">
@@ -171,20 +186,11 @@
                                     <td><span class="font-medium text-gray-900">{{.SchemaName}}.{{.RelName}}</span></td>
                                     <td class="text-right tabular-nums">{{formatNumber .NLiveTup}}</td>
                                     <td class="text-right tabular-nums">{{formatNumber .NDeadTup}}</td>
-                                    <td class="text-right tabular-nums">
-                                        <span class="{{if gt .BloatPercent 50.0}}text-severity-critical font-medium{{else if gt .BloatPercent 20.0}}text-severity-warning font-medium{{else}}text-gray-500{{end}}">
-                                            {{formatPercent .BloatPercent}}
-                                        </span>
-                                    </td>
-                                    <td>
-                                        {{if gt .BloatPercent 50.0}}
-                                        <code class="text-sm bg-gray-100 px-2 py-1 rounded font-mono">VACUUM FULL {{.SchemaName}}.{{.RelName}};</code>
-                                        {{else if gt .BloatPercent 20.0}}
-                                        <code class="text-sm bg-gray-100 px-2 py-1 rounded font-mono">VACUUM {{.SchemaName}}.{{.RelName}};</code>
-                                        {{else}}
-                                        <span class="text-gray-400 text-sm">No action needed</span>
-                                        {{end}}
-                                    </td>
+                                    <td class="text-right tabular-nums">{{if .MeasurementSource}}{{formatBytes .HeapBytes}}{{else}}Unknown{{end}}</td>
+                                    <td class="text-right tabular-nums">{{formatOptionalBytes .DeadTupleBytes}}</td>
+                                    <td class="text-right tabular-nums">{{formatOptionalBytes .FreeBytes}}</td>
+                                    <td class="text-right tabular-nums">{{formatOptionalPercent .DeadHeapPercent}}</td>
+                                    <td class="text-sm text-gray-500">{{if eq .MeasurementSource "pgstattuple_approx"}}pgstattuple_approx{{else if eq .MeasurementSource "stats_estimate"}}Rough row-count estimate{{else}}Unknown{{end}}{{if .MeasuredAt}}<br>{{formatTimeShort .MeasuredAt}}{{end}}</td>
                                 </tr>
                                 {{end}}
                             </tbody>
@@ -195,8 +201,8 @@
                         <svg class="empty-state-icon" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                             <path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z"/>
                         </svg>
-                        <div class="empty-state-title">No bloated tables</div>
-                        <p class="empty-state-description">All tables have acceptable dead tuple ratios</p>
+                        <div class="empty-state-title">No table space samples</div>
+                        <p class="empty-state-description">Waiting for the hourly space collection</p>
                     </div>
                     {{end}}
 

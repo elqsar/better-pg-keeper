@@ -60,8 +60,8 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        # The minimum supported version and the newest release.
-        pg: ["14", "17"]
+        # The minimum supported version, the previous release and the newest.
+        pg: ["14", "17", "18"]
     steps:
       - uses: actions/checkout@v5
       - uses: actions/setup-go@v6

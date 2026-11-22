@@ -28,19 +28,28 @@ type SchemaHandler struct {
 
 // TableResponse represents a table in the API response.
 type TableResponse struct {
-	Schema      string  `json:"schema"`
-	Name        string  `json:"name"`
-	FullName    string  `json:"full_name"`
-	LiveTuples  int64   `json:"live_tuples"`
-	DeadTuples  int64   `json:"dead_tuples"`
-	SeqScans    int64   `json:"seq_scans"`
-	IdxScans    int64   `json:"idx_scans"`
-	TableSize   int64   `json:"table_size"`
-	IndexSize   int64   `json:"index_size"`
-	TotalSize   int64   `json:"total_size"`
-	LastVacuum  *string `json:"last_vacuum,omitempty"`
-	LastAnalyze *string `json:"last_analyze,omitempty"`
-	ScanRatio   float64 `json:"seq_scan_ratio"`
+	Schema               string   `json:"schema"`
+	Name                 string   `json:"name"`
+	FullName             string   `json:"full_name"`
+	LiveTuples           int64    `json:"live_tuples"`
+	DeadTuples           int64    `json:"dead_tuples"`
+	SeqScans             int64    `json:"seq_scans"`
+	IdxScans             int64    `json:"idx_scans"`
+	TableSize            int64    `json:"table_size"`
+	IndexSize            int64    `json:"index_size"`
+	TotalSize            int64    `json:"total_size"`
+	LastVacuum           *string  `json:"last_vacuum,omitempty"`
+	LastAnalyze          *string  `json:"last_analyze,omitempty"`
+	LastAutovacuum       *string  `json:"last_autovacuum,omitempty"`
+	LastAutoanalyze      *string  `json:"last_autoanalyze,omitempty"`
+	HeapBytes            int64    `json:"heap_bytes"`
+	VacuumTrigger        *float64 `json:"vacuum_trigger,omitempty"`
+	AnalyzeTrigger       *float64 `json:"analyze_trigger,omitempty"`
+	AutovacuumDisabled   bool     `json:"autovacuum_disabled"`
+	ModifiedSinceAnalyze int64    `json:"modified_since_analyze"`
+	AutovacuumCount      int64    `json:"autovacuum_count"`
+	AutoanalyzeCount     int64    `json:"autoanalyze_count"`
+	ScanRatio            float64  `json:"seq_scan_ratio"`
 }
 
 // TablesResponse represents the tables list response.
@@ -71,12 +80,18 @@ type IndexesResponse struct {
 
 // BloatResponse represents a table with bloat in the API response.
 type BloatResponse struct {
-	Schema       string  `json:"schema"`
-	Table        string  `json:"table"`
-	FullName     string  `json:"full_name"`
-	DeadTuples   int64   `json:"dead_tuples"`
-	LiveTuples   int64   `json:"live_tuples"`
-	BloatPercent float64 `json:"bloat_percent"`
+	Schema            string     `json:"schema"`
+	Table             string     `json:"table"`
+	FullName          string     `json:"full_name"`
+	DeadTuples        int64      `json:"dead_tuples"`
+	LiveTuples        int64      `json:"live_tuples"`
+	BloatPercent      float64    `json:"bloat_percent"`
+	HeapBytes         int64      `json:"heap_bytes"`
+	DeadTupleBytes    *int64     `json:"dead_tuple_bytes,omitempty"`
+	FreeBytes         *int64     `json:"free_bytes,omitempty"`
+	DeadHeapPercent   *float64   `json:"dead_heap_percent,omitempty"`
+	MeasurementSource string     `json:"measurement_source,omitempty"`
+	MeasuredAt        *time.Time `json:"measured_at,omitempty"`
 }
 
 // BloatListResponse represents the bloat list response.
@@ -220,12 +235,18 @@ func (h *SchemaHandler) GetBloat(c echo.Context) error {
 	tables := make([]BloatResponse, len(stats))
 	for i, stat := range stats {
 		tables[i] = BloatResponse{
-			Schema:       stat.SchemaName,
-			Table:        stat.RelName,
-			FullName:     stat.SchemaName + "." + stat.RelName,
-			DeadTuples:   stat.NDeadTup,
-			LiveTuples:   stat.NLiveTup,
-			BloatPercent: stat.BloatPercent,
+			Schema:            stat.SchemaName,
+			Table:             stat.RelName,
+			FullName:          stat.SchemaName + "." + stat.RelName,
+			DeadTuples:        stat.NDeadTup,
+			LiveTuples:        stat.NLiveTup,
+			BloatPercent:      stat.BloatPercent,
+			HeapBytes:         stat.HeapBytes,
+			DeadTupleBytes:    stat.DeadTupleBytes,
+			FreeBytes:         stat.FreeBytes,
+			DeadHeapPercent:   deadHeapPercent(stat),
+			MeasurementSource: stat.MeasurementSource,
+			MeasuredAt:        stat.MeasuredAt,
 		}
 	}
 
@@ -238,16 +259,23 @@ func (h *SchemaHandler) GetBloat(c echo.Context) error {
 // tableStatToResponse converts a TableStat to TableResponse.
 func tableStatToResponse(stat models.TableStat) TableResponse {
 	resp := TableResponse{
-		Schema:     stat.SchemaName,
-		Name:       stat.RelName,
-		FullName:   stat.SchemaName + "." + stat.RelName,
-		LiveTuples: stat.NLiveTup,
-		DeadTuples: stat.NDeadTup,
-		SeqScans:   stat.SeqScan,
-		IdxScans:   stat.IdxScan,
-		TableSize:  stat.TableSize,
-		IndexSize:  stat.IndexSize,
-		TotalSize:  stat.TableSize + stat.IndexSize,
+		Schema:               stat.SchemaName,
+		Name:                 stat.RelName,
+		FullName:             stat.SchemaName + "." + stat.RelName,
+		LiveTuples:           stat.NLiveTup,
+		DeadTuples:           stat.NDeadTup,
+		SeqScans:             stat.SeqScan,
+		IdxScans:             stat.IdxScan,
+		TableSize:            stat.TableSize,
+		IndexSize:            stat.IndexSize,
+		TotalSize:            stat.TableSize + stat.IndexSize,
+		HeapBytes:            stat.HeapBytes,
+		VacuumTrigger:        stat.VacuumTrigger,
+		AnalyzeTrigger:       stat.AnalyzeTrigger,
+		AutovacuumDisabled:   stat.AutovacuumDisabled,
+		ModifiedSinceAnalyze: stat.NModSinceAnalyze,
+		AutovacuumCount:      stat.AutovacuumCount,
+		AutoanalyzeCount:     stat.AutoanalyzeCount,
 	}
 
 	// Calculate seq scan ratio
@@ -258,15 +286,31 @@ func tableStatToResponse(stat models.TableStat) TableResponse {
 
 	// Format timestamps
 	if stat.LastVacuum != nil {
-		t := stat.LastVacuum.Format("2006-01-02T15:04:05Z")
+		t := stat.LastVacuum.UTC().Format(time.RFC3339)
 		resp.LastVacuum = &t
 	}
 	if stat.LastAnalyze != nil {
-		t := stat.LastAnalyze.Format("2006-01-02T15:04:05Z")
+		t := stat.LastAnalyze.UTC().Format(time.RFC3339)
 		resp.LastAnalyze = &t
+	}
+	if stat.LastAutovacuum != nil {
+		t := stat.LastAutovacuum.UTC().Format(time.RFC3339)
+		resp.LastAutovacuum = &t
+	}
+	if stat.LastAutoanalyze != nil {
+		t := stat.LastAutoanalyze.UTC().Format(time.RFC3339)
+		resp.LastAutoanalyze = &t
 	}
 
 	return resp
+}
+
+func deadHeapPercent(stat models.BloatInfo) *float64 {
+	if stat.DeadTupleBytes == nil || stat.HeapBytes <= 0 {
+		return nil
+	}
+	v := 100 * float64(*stat.DeadTupleBytes) / float64(stat.HeapBytes)
+	return &v
 }
 
 // indexStatToResponse converts an IndexStat to IndexResponse.
