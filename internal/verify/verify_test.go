@@ -2,6 +2,7 @@ package verify
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"strings"
 	"testing"
@@ -10,7 +11,8 @@ import (
 	"github.com/elqsar/pganalyzer/internal/models"
 )
 
-// fakeHistory serves cumulative samples per query, newest first like storage.
+// fakeHistory serves cumulative samples per query, newest first like storage,
+// honoring limit and offset.
 type fakeHistory map[int64][]models.QueryHistorySample
 
 func (f fakeHistory) GetQueryHistory(ctx context.Context, instanceID, queryID int64, from, to time.Time, limit, offset int) ([]models.QueryHistorySample, error) {
@@ -19,6 +21,13 @@ func (f fakeHistory) GetQueryHistory(ctx context.Context, instanceID, queryID in
 		if !s.SampledAt.Before(from) && !s.SampledAt.After(to) {
 			out = append([]models.QueryHistorySample{s}, out...)
 		}
+	}
+	if offset >= len(out) {
+		return nil, nil
+	}
+	out = out[offset:]
+	if limit > 0 && len(out) > limit {
+		out = out[:limit]
 	}
 	return out, nil
 }
@@ -189,4 +198,104 @@ func TestVerifySkipsUnverifiable(t *testing.T) {
 	if s := FormatMs(0.42); !strings.HasSuffix(s, "ms") {
 		t.Errorf("FormatMs = %q", s)
 	}
+}
+
+func TestVerifyEdgeCases(t *testing.T) {
+	resolved := time.Date(2026, 9, 20, 12, 0, 0, 0, time.UTC)
+
+	t.Run("Before.MeanMs zero returns VerdictNoData and finite JSON", func(t *testing.T) {
+		store := fakeHistory{
+			1: history(1, resolved.Add(-2*24*time.Hour), resolved.Add(24*time.Hour), func(t time.Time) float64 {
+				if t.After(resolved) {
+					return 50
+				}
+				return 0
+			}),
+		}
+		res, err := New(store, 24*time.Hour).Verify(context.Background(), resolvedSuggestion("index_recommendation", `{"query_ids":[1]}`, resolved), resolved.Add(24*time.Hour))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if res.Verdict != VerdictNoData || res.Queries[0].Ratio != 0 {
+			t.Fatalf("res = %+v, want VerdictNoData with finite zero ratio", res)
+		}
+		if _, err := json.Marshal(res); err != nil {
+			t.Fatalf("json.Marshal failed (NaN/Inf?): %v", err)
+		}
+	})
+
+	t.Run("stale baseline older than baselineLeadIn is ignored", func(t *testing.T) {
+		mk := func(at time.Time, calls int64, total float64) models.QueryHistorySample {
+			s := models.QueryHistorySample{SampledAt: at}
+			s.QueryID, s.Calls, s.TotalExecTime = 1, calls, total
+			return s
+		}
+		// Sample 5h before 'from' must NOT become prev for 'After'.
+		samples := []models.QueryHistorySample{
+			mk(resolved.Add(-5*time.Hour), 100, 100000),
+			mk(resolved.Add(10*time.Minute), 120, 100400),
+		}
+		p := period(samples, resolved, resolved.Add(time.Hour))
+		if p == nil || p.Calls != 0 || !p.From.Equal(resolved.Add(10*time.Minute)) {
+			t.Fatalf("stale pre-window sample bled into period: %+v", p)
+		}
+	})
+
+	t.Run("completed window with fewer than MinCalls does not stay pending forever", func(t *testing.T) {
+		mk := func(at time.Time, calls int64, total float64) models.QueryHistorySample {
+			s := models.QueryHistorySample{SampledAt: at}
+			s.QueryID, s.Calls, s.TotalExecTime = 1, calls, total
+			return s
+		}
+		samples := history(1, resolved.Add(-25*time.Hour), resolved, func(time.Time) float64 { return 500 })
+		last := samples[len(samples)-1]
+		// Only 3 calls over the entire 24h post-resolution window.
+		samples = append(samples,
+			mk(resolved.Add(2*time.Hour), last.Calls+1, last.TotalExecTime+50),
+			mk(resolved.Add(12*time.Hour), last.Calls+3, last.TotalExecTime+150),
+		)
+		res, err := New(fakeHistory{1: samples}, 24*time.Hour).Verify(
+			context.Background(),
+			resolvedSuggestion("index_recommendation", `{"query_ids":[1]}`, resolved),
+			resolved.Add(25*time.Hour),
+		)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if res.Verdict != VerdictNoData || !strings.Contains(res.Summary, "too few calls") {
+			t.Fatalf("verdict = %s (%q), want no_data / too few calls", res.Verdict, res.Summary)
+		}
+	})
+
+	t.Run("large window over 10k samples preserves before period", func(t *testing.T) {
+		// 7-day window at 1-minute sampling -> >10,000 samples per side (>20,000 total).
+		win := 8 * 24 * time.Hour
+		var samples []models.QueryHistorySample
+		var calls int64
+		var total float64
+		start := resolved.Add(-win - 10*time.Minute)
+		end := resolved.Add(win)
+		for at := start; !at.After(end); at = at.Add(time.Minute) {
+			calls += 1
+			if at.After(resolved) {
+				total += 10
+			} else {
+				total += 1000
+			}
+			s := models.QueryHistorySample{SampledAt: at}
+			s.QueryID, s.Calls, s.TotalExecTime = 1, calls, total
+			samples = append(samples, s)
+		}
+		res, err := New(fakeHistory{1: samples}, win).Verify(
+			context.Background(),
+			resolvedSuggestion("index_recommendation", `{"query_ids":[1]}`, resolved),
+			end,
+		)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if res.Verdict != VerdictImproved || res.Queries[0].Before == nil || res.Queries[0].Before.Calls == 0 {
+			t.Fatalf("large window lost before samples: %+v", res.Queries[0])
+		}
+	})
 }

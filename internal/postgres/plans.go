@@ -25,13 +25,16 @@ const (
 	planLockTimeout      = "100ms"
 )
 
+const maxExplainPlaceholders = 1000
+
 var placeholderPattern = regexp.MustCompile(`\$(\d+)`)
 
-// MaxPlaceholder returns the highest $n placeholder in a normalized query, or 0.
+// MaxPlaceholder returns the highest valid $n placeholder (1..maxExplainPlaceholders)
+// in a normalized query, or 0.
 func MaxPlaceholder(query string) int {
 	maxPos := 0
 	for _, m := range placeholderPattern.FindAllStringSubmatch(query, -1) {
-		if n, err := strconv.Atoi(m[1]); err == nil && n > maxPos {
+		if n, err := strconv.Atoi(m[1]); err == nil && n > 0 && n <= maxExplainPlaceholders && n > maxPos {
 			maxPos = n
 		}
 	}
@@ -42,13 +45,25 @@ func MaxPlaceholder(query string) int {
 // without side effects. EXPLAIN never executes the statement, but utility
 // commands (DDL, VACUUM, SET ...) cannot be explained at all.
 func Explainable(query string) bool {
-	q := strings.ToUpper(strings.TrimLeft(query, " \t\r\n("))
-	for _, kw := range []string{"SELECT", "WITH", "UPDATE", "DELETE", "TABLE", "VALUES"} {
-		if strings.HasPrefix(q, kw) {
-			return true
+	tokens := tokenizeSQL(query)
+	for i, tok := range tokens {
+		if tok.kind == "semi" && i < len(tokens)-1 {
+			return false
 		}
 	}
-	return false
+	idx := 0
+	for idx < len(tokens) && tokens[idx].kind == "lparen" {
+		idx++
+	}
+	if idx >= len(tokens) || tokens[idx].kind != "word" {
+		return false
+	}
+	switch tokens[idx].text {
+	case "SELECT", "WITH", "UPDATE", "DELETE", "TABLE", "VALUES":
+		return true
+	default:
+		return false
+	}
 }
 
 // ExplainGeneric returns the generic plan of a normalized query such as
@@ -149,11 +164,11 @@ func (c *PgxClient) GetTableIndexInfo(ctx context.Context, schema, table string,
 		return nil, fmt.Errorf("postgres: reading table size: %w", err)
 	}
 
-	// Expression columns (attnum 0) have no name and are left out, so an
-	// expression index never counts as covering plain columns.
+	// Expression columns (attnum 0) produce '' to preserve key positions so an
+	// expression at position 1 never shifts later columns into position 1.
 	rows, err := c.pool.Query(ctx, `
 		SELECT ic.relname,
-		       array_agg(a.attname ORDER BY k.ord) FILTER (WHERE a.attname IS NOT NULL)
+		       array_agg(COALESCE(a.attname, '') ORDER BY k.ord)
 		FROM pg_index i
 		JOIN pg_class t ON t.oid = i.indrelid
 		JOIN pg_namespace n ON n.oid = t.relnamespace

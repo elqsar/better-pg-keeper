@@ -302,10 +302,13 @@ func (r *ConfigurationRule) sharedBuffers(s *models.ServerSettings, analysis *an
 		desc.WriteString("**What to do:**\n")
 		desc.WriteString(applySetting(st, target))
 	} else {
-		var cluster int64
-		if analysis.Risk != nil && analysis.Risk.OutageRisk != nil {
-			cluster = analysis.Risk.ClusterSize
+		if !analysis.DomainsUsable(analyzer.DomainOutageRisk) || analysis.Risk == nil || analysis.Risk.OutageRisk == nil {
+			return nil
 		}
+		if _, sizeUnavailable := riskUnavailable(analysis)["size"]; sizeUnavailable {
+			return nil
+		}
+		cluster := analysis.Risk.ClusterSize
 		if sb != initdbSharedBuffers || cluster < untunedSharedBuffersClusterBytes {
 			return nil
 		}
@@ -463,8 +466,11 @@ func (r *ConfigurationRule) UnobservedTargets(analysis *analyzer.AnalysisResult)
 		"settings":            "setting:",
 		"autovacuum_disabled": "autovacuum_disabled:",
 	})
-	if r.memoryBytes <= 0 && (analysis == nil || analysis.Risk == nil || !analysis.DomainsUsable(analyzer.DomainOutageRisk)) {
-		out = append(out, "setting:shared_buffers")
+	if r.memoryBytes <= 0 {
+		_, sizeUnavailable := riskUnavailable(analysis)["size"]
+		if analysis == nil || analysis.Risk == nil || !analysis.DomainsUsable(analyzer.DomainOutageRisk) || sizeUnavailable {
+			out = append(out, "setting:shared_buffers")
+		}
 	}
 	return out
 }

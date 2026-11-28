@@ -44,9 +44,10 @@ const (
 	// before a verdict is given.
 	MinAfterSpan = time.Hour
 	MinCalls     = 10
-	// maxSamples bounds the history read per query: three windows of samples
-	// at one-minute collection.
-	maxSamples = 10000
+	// maxSamples bounds each page read per period; maxPeriodSamples caps total
+	// samples read per period even for multi-week windows.
+	maxSamples       = 10000
+	maxPeriodSamples = 50000
 	// baselineLeadIn is how far before a period its baseline sample is looked
 	// for; several collection intervals.
 	baselineLeadIn = time.Hour
@@ -125,16 +126,38 @@ func (v *Verifier) Verify(ctx context.Context, sug models.Suggestion, now time.T
 
 	res := &Result{ResolvedAt: resolved}
 	for _, id := range ids {
-		// The lead-in finds a baseline sample from just before the period.
-		samples, err := v.storage.GetQueryHistory(ctx, sug.InstanceID, id, before[0].Add(-baselineLeadIn), after[1], maxSamples, 0)
+		// Read before and after windows separately with pagination so large
+		// windows never drop older "before" samples behind a DESC LIMIT.
+		beforeSamples, err := v.readHistory(ctx, sug.InstanceID, id, before[0].Add(-baselineLeadIn), before[1])
 		if err != nil {
-			return nil, fmt.Errorf("reading history of query %d: %w", id, err)
+			return nil, fmt.Errorf("reading before history of query %d: %w", id, err)
 		}
-		res.Queries = append(res.Queries, compare(id, samples, before, after, now.Sub(resolved) >= v.window))
+		afterSamples, err := v.readHistory(ctx, sug.InstanceID, id, after[0].Add(-baselineLeadIn), after[1])
+		if err != nil {
+			return nil, fmt.Errorf("reading after history of query %d: %w", id, err)
+		}
+		res.Queries = append(res.Queries, comparePeriods(id, beforeSamples, afterSamples, before, after, now.Sub(resolved) >= v.window))
 	}
 	res.Verdict = overall(res.Queries)
 	res.Summary = summarize(res)
 	return res, nil
+}
+
+func (v *Verifier) readHistory(ctx context.Context, instanceID, queryID int64, from, to time.Time) ([]models.QueryHistorySample, error) {
+	var all []models.QueryHistorySample
+	for offset := 0; len(all) < maxPeriodSamples; {
+		limit := min(maxSamples, maxPeriodSamples-len(all))
+		batch, err := v.storage.GetQueryHistory(ctx, instanceID, queryID, from, to, limit, offset)
+		if err != nil {
+			return nil, err
+		}
+		all = append(all, batch...)
+		if len(batch) < limit {
+			break
+		}
+		offset += len(batch)
+	}
+	return all, nil
 }
 
 // queryIDs returns the queries a suggestion is about, and whether its
@@ -167,25 +190,33 @@ func queryIDs(sug models.Suggestion) ([]int64, bool) {
 	return nil, false
 }
 
-// compare computes one query's periods and verdict. afterComplete reports
-// whether a full window has passed since the resolution.
-func compare(id int64, samples []models.QueryHistorySample, before, after [2]time.Time, afterComplete bool) QueryOutcome {
+// comparePeriods computes one query's before/after periods and verdict.
+// afterComplete reports whether a full window has passed since the resolution.
+func comparePeriods(id int64, beforeSamples, afterSamples []models.QueryHistorySample, before, after [2]time.Time, afterComplete bool) QueryOutcome {
 	// Storage returns newest first.
-	sort.Slice(samples, func(i, j int) bool { return samples[i].SampledAt.Before(samples[j].SampledAt) })
+	sort.Slice(beforeSamples, func(i, j int) bool { return beforeSamples[i].SampledAt.Before(beforeSamples[j].SampledAt) })
+	sort.Slice(afterSamples, func(i, j int) bool { return afterSamples[i].SampledAt.Before(afterSamples[j].SampledAt) })
 	out := QueryOutcome{QueryID: id}
-	if len(samples) > 0 {
-		out.Query = samples[len(samples)-1].Query
+	if len(afterSamples) > 0 {
+		out.Query = afterSamples[len(afterSamples)-1].Query
+	} else if len(beforeSamples) > 0 {
+		out.Query = beforeSamples[len(beforeSamples)-1].Query
 	}
-	out.Before = period(samples, before[0], before[1])
-	out.After = period(samples, after[0], after[1])
+	out.Before = period(beforeSamples, before[0], before[1])
+	out.After = period(afterSamples, after[0], after[1])
 
 	switch {
-	case out.Before == nil || out.Before.Calls == 0:
+	case out.Before == nil || out.Before.Calls == 0 || out.Before.MeanMs <= 0:
 		out.Verdict = VerdictNoData
 	case afterComplete && (out.After == nil || out.After.Calls == 0):
 		out.Verdict = VerdictStopped
 	case out.After == nil || out.After.To.Sub(out.After.From) < MinAfterSpan || out.After.Calls < MinCalls:
-		out.Verdict = VerdictPending
+		if afterComplete {
+			// The post-resolution window is closed, so waiting will never add calls.
+			out.Verdict = VerdictNoData
+		} else {
+			out.Verdict = VerdictPending
+		}
 	default:
 		out.Ratio = out.After.MeanMs / out.Before.MeanMs
 		switch {
@@ -203,8 +234,8 @@ func compare(id int64, samples []models.QueryHistorySample, before, after [2]tim
 // period sums execution between from and to. Samples hold cumulative
 // pg_stat_statements counters, so the period is the sum of the deltas between
 // consecutive samples. Each delta covers the interval ending at its sample, so
-// a sample at or before from is only the baseline. A counter that went down
-// was reset, and counts from zero.
+// a sample at or before from (within baselineLeadIn) is only the baseline. A
+// counter that went down was reset, and counts from zero.
 func period(samples []models.QueryHistorySample, from, to time.Time) *Period {
 	var prev *models.QueryHistorySample
 	var p *Period
@@ -214,7 +245,11 @@ func period(samples []models.QueryHistorySample, from, to time.Time) *Period {
 			break
 		}
 		if !s.SampledAt.After(from) {
-			prev = s
+			// Ignore stale baselines older than baselineLeadIn so a collection
+			// outage before from does not blend pre-fix execution into the period.
+			if from.Sub(s.SampledAt) <= baselineLeadIn {
+				prev = s
+			}
 			continue
 		}
 		if p == nil {
@@ -285,6 +320,9 @@ func summarize(r *Result) string {
 func describe(q QueryOutcome) string {
 	switch q.Verdict {
 	case VerdictNoData:
+		if q.Before != nil && q.Before.Calls > 0 && q.Before.MeanMs > 0 && q.After != nil && q.After.Calls > 0 {
+			return "too few calls after the fix to compare"
+		}
 		return "no query history from before the fix"
 	case VerdictPending:
 		return "waiting for more calls after the fix"

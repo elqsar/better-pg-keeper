@@ -154,9 +154,10 @@ func (r *WraparoundRule) describe(risk *models.OutageRisk, dbName string, age, w
 	}
 
 	desc.WriteString("**What to do:**\n")
-	if dbName == risk.Database && len(risk.OldestTables) > 0 {
+	oldestTables := r.oldestTables(risk)
+	if dbName == risk.Database && len(oldestTables) > 0 {
 		desc.WriteString("Freeze the oldest tables, largest risk first. `VACUUM` takes no blocking locks but uses I/O:\n```sql\n")
-		for i, t := range risk.OldestTables {
+		for i, t := range oldestTables {
 			if i == 3 {
 				break
 			}
@@ -169,14 +170,33 @@ func (r *WraparoundRule) describe(risk *models.OutageRisk, dbName string, age, w
 		}
 		desc.WriteString("```\n")
 	} else {
+		orderCol := 2
+		if r.multixact {
+			orderCol = 3
+		}
 		fmt.Fprintf(&desc, "Connect to `%s` and find its oldest tables:\n```sql\n", dbName)
 		desc.WriteString("SELECT c.oid::regclass, age(c.relfrozenxid), mxid_age(c.relminmxid)\n")
-		desc.WriteString("FROM pg_class c WHERE c.relkind IN ('r','m','t')\nORDER BY 2 DESC LIMIT 10;\n```\n")
+		fmt.Fprintf(&desc, "FROM pg_class c WHERE c.relkind IN ('r','m','t')\nORDER BY %d DESC LIMIT 10;\n```\n", orderCol)
 		desc.WriteString("Then run `VACUUM (FREEZE, VERBOSE)` on each.\n")
 	}
 	desc.WriteString("- Check `pg_stat_progress_vacuum` for an anti-wraparound autovacuum already running; do not cancel it.\n")
 	desc.WriteString("- If autovacuum is too slow, raise `autovacuum_vacuum_cost_limit` or `autovacuum_max_workers`.\n")
 	return desc.String()
+}
+
+func (r *WraparoundRule) oldestTables(risk *models.OutageRisk) []models.TableAge {
+	if !r.multixact {
+		return risk.OldestTables
+	}
+	if len(risk.OldestMXIDTables) > 0 {
+		return risk.OldestMXIDTables
+	}
+	if len(risk.OldestTables) == 0 {
+		return nil
+	}
+	cp := append([]models.TableAge(nil), risk.OldestTables...)
+	sort.Slice(cp, func(i, j int) bool { return cp[i].MXIDAge > cp[j].MXIDAge })
+	return cp
 }
 
 // xminHolders describes sessions, slots and prepared transactions holding back

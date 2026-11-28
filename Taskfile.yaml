@@ -196,7 +196,7 @@ tasks:
     desc: Run database migrations manually
     deps: [build]
     cmds:
-      - "{{.BUILD_DIR}}/{{.BINARY_NAME}} --migrate-only {{.CLI_ARGS}}"
+      - "{{.BUILD_DIR}}/{{.BINARY_NAME}} -migrate-only {{.CLI_ARGS}}"
 
   all:
     desc: Run fmt, lint, test, and build

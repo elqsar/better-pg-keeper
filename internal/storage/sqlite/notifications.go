@@ -36,10 +36,6 @@ func (s *SQLiteStorage) ListNotificationStates(ctx context.Context, instanceID i
 
 // UpsertNotificationState creates or replaces the state for one issue.
 func (s *SQLiteStorage) UpsertNotificationState(ctx context.Context, st *models.NotificationState) error {
-	var cleared any
-	if st.ClearedAt != nil {
-		cleared = st.ClearedAt.Round(0)
-	}
 	_, err := s.writeDB.ExecContext(ctx, `
 		INSERT INTO notification_state (instance_id, rule_id, target_object, severity, notified_at, cleared_at)
 		VALUES (?, ?, ?, ?, ?, ?)
@@ -47,7 +43,7 @@ func (s *SQLiteStorage) UpsertNotificationState(ctx context.Context, st *models.
 			severity = excluded.severity,
 			notified_at = excluded.notified_at,
 			cleared_at = excluded.cleared_at
-	`, st.InstanceID, st.RuleID, st.TargetObject, st.Severity, st.NotifiedAt.Round(0), cleared)
+	`, st.InstanceID, st.RuleID, st.TargetObject, st.Severity, utcTime(st.NotifiedAt), utcTimePtr(st.ClearedAt))
 	if err != nil {
 		return fmt.Errorf("upserting notification state: %w", err)
 	}
@@ -100,15 +96,21 @@ func (s *SQLiteStorage) SetNotifierTime(ctx context.Context, instanceID int64, k
 // GetEarliestSnapshotWithCollector returns the oldest snapshot at or after
 // notBefore that the named collector successfully contributed to, or nil.
 func (s *SQLiteStorage) GetEarliestSnapshotWithCollector(ctx context.Context, instanceID int64, collector string, notBefore time.Time) (*models.Snapshot, error) {
-	var snap models.Snapshot
-	err := s.readDB.QueryRowContext(ctx, `
+	query := `
 		SELECT s.id, s.instance_id, s.captured_at, s.pg_version, s.stats_reset, s.cache_hit_ratio, s.created_at
 		FROM snapshots s
 		JOIN snapshot_collectors sc ON sc.snapshot_id = s.id
-		WHERE s.instance_id = ? AND sc.collector = ? AND sc.status = ? AND s.captured_at >= ?
-		ORDER BY s.captured_at ASC
-		LIMIT 1
-	`, instanceID, collector, models.CollectorStatusSuccess, notBefore.Round(0)).Scan(
+		WHERE s.instance_id = ? AND sc.collector = ? AND sc.status = ?
+	`
+	args := []any{instanceID, collector, models.CollectorStatusSuccess}
+	if !notBefore.IsZero() {
+		query += " AND s.captured_at >= ?"
+		args = append(args, utcTime(notBefore))
+	}
+	query += " ORDER BY s.captured_at ASC LIMIT 1"
+
+	var snap models.Snapshot
+	err := s.readDB.QueryRowContext(ctx, query, args...).Scan(
 		&snap.ID, &snap.InstanceID, &snap.CapturedAt, &snap.PGVersion,
 		&snap.StatsReset, &snap.CacheHitRatio, &snap.CreatedAt,
 	)

@@ -311,13 +311,27 @@ func (n *Notifier) evaluateSuggestions(ctx context.Context) error {
 	return errors.Join(errs...)
 }
 
+// persistTimeout bounds post-delivery state persistence so writes survive
+// shutdown cancellation without blocking indefinitely.
+const persistTimeout = 5 * time.Second
+
+func persistCtx() (context.Context, context.CancelFunc) {
+	return context.WithTimeout(context.Background(), persistTimeout)
+}
+
 func (n *Notifier) upsert(st models.NotificationState) func() error {
-	return func() error { return n.storage.UpsertNotificationState(context.Background(), &st) }
+	return func() error {
+		ctx, cancel := persistCtx()
+		defer cancel()
+		return n.storage.UpsertNotificationState(ctx, &st)
+	}
 }
 
 func (n *Notifier) forget(st models.NotificationState) func() error {
 	return func() error {
-		return n.storage.DeleteNotificationState(context.Background(), st.InstanceID, st.RuleID, st.TargetObject)
+		ctx, cancel := persistCtx()
+		defer cancel()
+		return n.storage.DeleteNotificationState(ctx, st.InstanceID, st.RuleID, st.TargetObject)
 	}
 }
 

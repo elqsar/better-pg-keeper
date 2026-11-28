@@ -166,9 +166,13 @@
   }
 
   /* Forms */
+  .input {
+    @apply rounded-lg border border-gray-300 bg-white px-3 py-1.5 text-sm
+           focus:outline-none focus:ring-2 focus:ring-primary focus:border-primary;
+  }
   .select {
-    @apply rounded-lg border-gray-300 text-sm
-           focus:ring-primary focus:border-primary;
+    @apply rounded-lg border border-gray-300 bg-white px-3 py-1.5 text-sm
+           focus:outline-none focus:ring-2 focus:ring-primary focus:border-primary;
   }
 
   /* Code blocks */
@@ -199,10 +203,10 @@
     @apply fixed inset-0 bg-gray-900/50 backdrop-blur-sm;
   }
   .modal-container {
-    @apply fixed inset-0 flex items-center justify-center p-4;
+    @apply fixed inset-0 flex items-center justify-center p-4 pointer-events-none;
   }
   .modal-content {
-    @apply bg-white rounded-2xl shadow-2xl max-w-4xl w-full max-h-[90vh] overflow-hidden;
+    @apply bg-white rounded-2xl shadow-2xl max-w-4xl w-full max-h-[90vh] overflow-hidden pointer-events-auto;
   }
   .modal-header {
     @apply flex items-center justify-between px-6 py-4 border-b border-gray-200;

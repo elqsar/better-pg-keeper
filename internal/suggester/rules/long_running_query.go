@@ -74,7 +74,11 @@ func (r *LongRunningQueryRule) Evaluate(ctx context.Context, analysis *analyzer.
 		fmt.Fprintf(&desc, "- Database: %s\n", lrq.DatabaseName)
 		fmt.Fprintf(&desc, "- State: %s\n", lrq.State)
 		if lrq.WaitEventType != nil {
-			fmt.Fprintf(&desc, "- Wait Event: %s/%s\n", *lrq.WaitEventType, *lrq.WaitEvent)
+			if lrq.WaitEvent != nil {
+				fmt.Fprintf(&desc, "- Wait Event: %s/%s\n", *lrq.WaitEventType, *lrq.WaitEvent)
+			} else {
+				fmt.Fprintf(&desc, "- Wait Event: %s\n", *lrq.WaitEventType)
+			}
 		}
 		fmt.Fprintf(&desc, "- Started: %s\n\n", lrq.QueryStart.Format("2006-01-02 15:04:05"))
 
@@ -82,7 +86,7 @@ func (r *LongRunningQueryRule) Evaluate(ctx context.Context, analysis *analyzer.
 		desc.WriteString("- Check if the query is making progress or is stuck waiting\n")
 		desc.WriteString("- Review the query plan with EXPLAIN ANALYZE (on a test database)\n")
 		desc.WriteString("- Consider adding statement_timeout to prevent runaway queries\n")
-		desc.WriteString("- If needed, terminate the query with: `SELECT pg_cancel_backend(%d);`\n")
+		fmt.Fprintf(&desc, "- If needed, terminate the query with: `SELECT pg_cancel_backend(%d);`\n", lrq.PID)
 
 		suggestions = append(suggestions, suggester.Suggestion{
 			RuleID:       r.ID(),

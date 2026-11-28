@@ -637,6 +637,74 @@ func TestSuggestionOperations(t *testing.T) {
 		if dismissed.Status != models.StatusDismissed {
 			t.Errorf("Status not updated: got %s", dismissed.Status)
 		}
+
+		// Undismiss restores back to active and clears dismissed_at
+		if err := storage.UndismissSuggestion(ctx, active[0].ID); err != nil {
+			t.Fatalf("UndismissSuggestion failed: %v", err)
+		}
+		restored, _ := storage.GetSuggestionByID(ctx, active[0].ID)
+		if restored.Status != models.StatusActive {
+			t.Errorf("Expected restored status 'active', got %s", restored.Status)
+		}
+		if restored.DismissedAt != nil {
+			t.Errorf("Expected dismissed_at cleared, got %v", restored.DismissedAt)
+		}
+		// Re-dismiss to preserve expected state for subsequent subtests
+		if err := storage.DismissSuggestion(ctx, active[0].ID); err != nil {
+			t.Fatalf("re-dismiss failed: %v", err)
+		}
+	})
+
+	t.Run("DismissSuggestion does not overwrite resolved", func(t *testing.T) {
+		sug := &models.Suggestion{
+			InstanceID:   instID,
+			RuleID:       "resolved_guard",
+			Severity:     models.SeverityInfo,
+			Title:        "Resolved test",
+			Description:  "Should not be overwritten by dismiss",
+			TargetObject: "guard:1",
+		}
+		if err := storage.UpsertSuggestion(ctx, sug); err != nil {
+			t.Fatal(err)
+		}
+		active, _ := storage.GetSuggestionsByStatus(ctx, instID, models.StatusActive)
+		var id int64
+		for _, a := range active {
+			if a.RuleID == "resolved_guard" {
+				id = a.ID
+				break
+			}
+		}
+		if err := storage.ResolveSuggestion(ctx, id); err != nil {
+			t.Fatal(err)
+		}
+		if err := storage.DismissSuggestion(ctx, id); err != nil {
+			t.Fatal(err)
+		}
+		got, _ := storage.GetSuggestionByID(ctx, id)
+		if got.Status != models.StatusResolved {
+			t.Errorf("expected resolved status to remain intact, got %s", got.Status)
+		}
+	})
+
+	t.Run("PurgeOldSuggestions", func(t *testing.T) {
+		// Backdate an old resolved suggestion and verify active and fresh ones stay.
+		oldTime := utcTime(time.Now().Add(-45 * 24 * time.Hour))
+		_, err := storage.writeDB.ExecContext(ctx, `
+			INSERT INTO suggestions (instance_id, rule_id, severity, title, description, target_object, status, first_seen_at, last_seen_at, resolved_at)
+			VALUES (?, 'old_resolved', 'warning', 'Old', 'Old', 'old:1', 'resolved', ?, ?, ?)
+		`, instID, oldTime, oldTime, oldTime)
+		if err != nil {
+			t.Fatalf("inserting old resolved suggestion: %v", err)
+		}
+
+		purged, err := storage.PurgeOldSuggestions(ctx, 30*24*time.Hour)
+		if err != nil {
+			t.Fatalf("PurgeOldSuggestions failed: %v", err)
+		}
+		if purged != 1 {
+			t.Errorf("PurgeOldSuggestions purged %d rows, want 1", purged)
+		}
 	})
 
 	t.Run("UpsertSuggestion reactivates resolved", func(t *testing.T) {
@@ -1115,4 +1183,195 @@ func TestSnapshotCoverageOperations(t *testing.T) {
 			}
 		}
 	})
+}
+
+func TestFileStorageReadDBQueryOnly(t *testing.T) {
+	ctx := context.Background()
+	dbPath := filepath.Join(t.TempDir(), "readonly_check.db")
+	storage, err := NewStorage(dbPath)
+	if err != nil {
+		t.Fatalf("NewStorage() error = %v", err)
+	}
+	defer storage.Close()
+
+	// readDB must enforce query_only(ON) and reject writes.
+	if _, err := storage.ReadDB().ExecContext(ctx, `
+		INSERT INTO instances (name, host, port, database) VALUES ('bad', 'h', 5432, 'd')
+	`); err == nil {
+		t.Fatal("expected readDB to reject INSERT under PRAGMA query_only(ON)")
+	}
+}
+
+func createTestInstanceID(t *testing.T, storage *SQLiteStorage) int64 {
+	t.Helper()
+	id, err := storage.CreateInstance(context.Background(), &models.Instance{
+		Name: "test-inst", Host: "localhost", Port: 5432, Database: "testdb",
+	})
+	if err != nil {
+		t.Fatalf("CreateInstance failed: %v", err)
+	}
+	return id
+}
+
+func TestCurrentIndexStatsMigration024Fields(t *testing.T) {
+	ctx := context.Background()
+	storage := setupTestStorage(t)
+	instID := createTestInstanceID(t, storage)
+
+	statsSince := time.Date(2026, 9, 1, 12, 0, 0, 0, time.UTC)
+	want := models.IndexStat{
+		SchemaName:      "public",
+		RelName:         "orders",
+		IndexRelName:    "idx_orders_status",
+		IdxScan:         42,
+		IdxTupRead:      100,
+		IdxTupFetch:     90,
+		IndexSize:       65536,
+		IsUnique:        false,
+		IsPrimary:       false,
+		AccessMethod:    "btree",
+		IndexDef:        "CREATE INDEX idx_orders_status ON public.orders USING btree (status) INCLUDE (created_at) WHERE (status <> 'archived')",
+		KeyColumns:      "status",
+		IncludeColumns:  "created_at",
+		Expressions:     "",
+		Predicate:       "(status <> 'archived')",
+		BacksForeignKey: true,
+		StatsSince:      &statsSince,
+	}
+
+	if err := storage.SaveCurrentIndexStats(ctx, instID, []models.IndexStat{want}); err != nil {
+		t.Fatalf("SaveCurrentIndexStats() error = %v", err)
+	}
+	got, err := storage.GetCurrentIndexStats(ctx, instID)
+	if err != nil {
+		t.Fatalf("GetCurrentIndexStats() error = %v", err)
+	}
+	if len(got) != 1 {
+		t.Fatalf("got %d rows, want 1", len(got))
+	}
+	g := got[0]
+	if g.AccessMethod != want.AccessMethod || g.IndexDef != want.IndexDef ||
+		g.KeyColumns != want.KeyColumns || g.IncludeColumns != want.IncludeColumns ||
+		g.Predicate != want.Predicate || !g.BacksForeignKey ||
+		g.StatsSince == nil || !g.StatsSince.Equal(statsSince) {
+		t.Fatalf("GetCurrentIndexStats() = %+v, want %+v", g, want)
+	}
+}
+
+func TestCurrentBlockedQueriesMultipleBlockers(t *testing.T) {
+	ctx := context.Background()
+	storage := setupTestStorage(t)
+	instID := createTestInstanceID(t, storage)
+	now := time.Now().UTC().Round(time.Second)
+
+	queries := []models.BlockedQuery{
+		{BlockedPID: 100, BlockedUser: "app", BlockedQuery: "ALTER TABLE t ...", BlockedStart: now, WaitDuration: 15, BlockingPID: 201, BlockingUser: "u1", LockType: "relation", LockMode: "AccessExclusiveLock"},
+		{BlockedPID: 100, BlockedUser: "app", BlockedQuery: "ALTER TABLE t ...", BlockedStart: now, WaitDuration: 15, BlockingPID: 202, BlockingUser: "u2", LockType: "relation", LockMode: "AccessExclusiveLock"},
+	}
+	if err := storage.SaveCurrentBlockedQueries(ctx, instID, queries); err != nil {
+		t.Fatalf("SaveCurrentBlockedQueries() error = %v", err)
+	}
+	got, err := storage.GetCurrentBlockedQueries(ctx, instID)
+	if err != nil {
+		t.Fatalf("GetCurrentBlockedQueries() error = %v", err)
+	}
+	if len(got) != 2 {
+		t.Fatalf("got %d blocked query rows, want 2 (both blockers preserved)", len(got))
+	}
+}
+
+func TestGetQueryStatsDeltaResetConsistency(t *testing.T) {
+	ctx := context.Background()
+	storage := setupTestStorage(t)
+	instID := createTestInstanceID(t, storage)
+
+	t1 := time.Date(2026, 10, 1, 10, 0, 0, 0, time.UTC)
+	t2 := t1.Add(time.Hour)
+	r1 := t1.Add(-24 * time.Hour)
+	r2 := t1.Add(30 * time.Minute)
+
+	// Case 1: pg_stat_statements_reset() changed stats_reset AND calls surpassed baseline.
+	s1, err := storage.CreateSnapshot(ctx, &models.Snapshot{InstanceID: instID, CapturedAt: t1, StatsReset: &r1})
+	if err != nil {
+		t.Fatal(err)
+	}
+	s2, err := storage.CreateSnapshot(ctx, &models.Snapshot{InstanceID: instID, CapturedAt: t2, StatsReset: &r2})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := storage.SaveQueryStats(ctx, s1, []models.QueryStat{
+		{QueryID: 1, Query: "SELECT 1", Calls: 100, TotalExecTime: 1000, Rows: 100, SharedBlksHit: 500, SharedBlksRead: 10},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if err := storage.SaveQueryStats(ctx, s2, []models.QueryStat{
+		{QueryID: 1, Query: "SELECT 1", Calls: 150, TotalExecTime: 1500, Rows: 150, SharedBlksHit: 750, SharedBlksRead: 15},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	deltas, err := storage.GetQueryStatsDelta(ctx, s1, s2)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(deltas) != 1 || deltas[0].DeltaCalls != 150 || deltas[0].DeltaTotalTime != 1500 || deltas[0].DeltaRows != 150 {
+		t.Fatalf("snapshot stats_reset delta = %+v, want full post-reset totals (150/1500/150)", deltas)
+	}
+
+	// Case 2: same stats_reset, single-query eviction: calls dropped, rows exceeded baseline.
+	// All 5 columns must take post-reset totals uniformly instead of mixing columns.
+	s3, err := storage.CreateSnapshot(ctx, &models.Snapshot{InstanceID: instID, CapturedAt: t2.Add(time.Hour), StatsReset: &r2})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := storage.SaveQueryStats(ctx, s3, []models.QueryStat{
+		{QueryID: 1, Query: "SELECT 1", Calls: 20, TotalExecTime: 200, Rows: 200, SharedBlksHit: 900, SharedBlksRead: 20},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	deltas, err = storage.GetQueryStatsDelta(ctx, s2, s3)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(deltas) != 1 || deltas[0].DeltaCalls != 20 || deltas[0].DeltaRows != 200 || deltas[0].DeltaBlksHit != 900 {
+		t.Fatalf("eviction reset delta = %+v, want uniform post-reset totals (calls=20, rows=200, hit=900)", deltas)
+	}
+}
+
+func TestUTCTimestampOrderingAcrossTimezones(t *testing.T) {
+	ctx := context.Background()
+	storage := setupTestStorage(t)
+	instID := createTestInstanceID(t, storage)
+
+	cest := time.FixedZone("CEST", 2*3600)
+	// 11:00+0200 == 09:00Z (earlier); 10:00Z == 12:00+0200 (later).
+	earlierLocal := time.Date(2026, 7, 1, 11, 0, 0, 0, cest)
+	laterUTC := time.Date(2026, 7, 1, 10, 0, 0, 0, time.UTC)
+
+	id1, err := storage.CreateSnapshot(ctx, &models.Snapshot{InstanceID: instID, CapturedAt: earlierLocal})
+	if err != nil {
+		t.Fatal(err)
+	}
+	id2, err := storage.CreateSnapshot(ctx, &models.Snapshot{InstanceID: instID, CapturedAt: laterUTC})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := storage.RecordCollectorRun(ctx, id1, "query_stats", models.CollectorStatusSuccess, earlierLocal, ""); err != nil {
+		t.Fatal(err)
+	}
+	if err := storage.RecordCollectorRun(ctx, id2, "query_stats", models.CollectorStatusSuccess, laterUTC, ""); err != nil {
+		t.Fatal(err)
+	}
+
+	latest, err := storage.GetLatestSnapshot(ctx, instID)
+	if err != nil || latest == nil || latest.ID != id2 {
+		t.Fatalf("GetLatestSnapshot() = %+v, want id %d (10:00Z > 11:00+0200)", latest, id2)
+	}
+	earliest, err := storage.GetEarliestSnapshotWithCollector(ctx, instID, "query_stats", time.Time{})
+	if err != nil || earliest == nil || earliest.ID != id1 {
+		t.Fatalf("GetEarliestSnapshotWithCollector(zero) = %+v, want id %d", earliest, id1)
+	}
+	bounded, err := storage.GetLatestSnapshotWithCollector(ctx, instID, "query_stats", time.Date(2026, 7, 1, 9, 30, 0, 0, time.UTC))
+	if err != nil || bounded == nil || bounded.ID != id1 {
+		t.Fatalf("GetLatestSnapshotWithCollector(09:30Z) = %+v, want id %d", bounded, id1)
+	}
 }

@@ -84,6 +84,104 @@ type QueryHistorySample struct {
 	TotalPlanTimeMs float64   `json:"total_plan_time_ms"`
 }
 
+// QueryDetailResponse represents a single query's stats and latest cached EXPLAIN plan.
+type QueryDetailResponse struct {
+	QueryDetail
+	Rows            int64            `json:"rows"`
+	SharedBlksHit   int64            `json:"shared_blks_hit"`
+	SharedBlksRead  int64            `json:"shared_blks_read"`
+	Plans           int64            `json:"plans"`
+	TotalPlanTimeMs float64          `json:"total_plan_time_ms"`
+	ExplainPlan     *ExplainResponse `json:"explain_plan,omitempty"`
+}
+
+type currentQueryStatsStorage interface {
+	GetCurrentQueryStats(ctx context.Context, instanceID int64) ([]models.QueryStat, error)
+}
+
+// GetQuery handles GET /api/v1/queries/:id requests.
+func (h *QueriesHandler) GetQuery(c echo.Context) error {
+	ctx := c.Request().Context()
+
+	queryID, err := strconv.ParseInt(c.Param("id"), 10, 64)
+	if err != nil {
+		return c.JSON(http.StatusBadRequest, map[string]string{
+			"error": "invalid query ID",
+			"code":  "VALIDATION_ERROR",
+		})
+	}
+
+	var stats []models.QueryStat
+	if cur, ok := h.storage.(currentQueryStatsStorage); ok {
+		stats, err = cur.GetCurrentQueryStats(ctx, h.instanceID)
+		if err != nil {
+			c.Logger().Errorf("failed to get current query stats: %v", err)
+			return c.JSON(http.StatusInternalServerError, map[string]string{
+				"error": "failed to get query stats",
+				"code":  "DATABASE_ERROR",
+			})
+		}
+	}
+	if len(stats) == 0 {
+		snapshot, err := h.storage.GetLatestSnapshotWithCollector(ctx, h.instanceID, analyzer.DomainQueryStats, time.Time{})
+		if err != nil {
+			c.Logger().Errorf("failed to get latest snapshot: %v", err)
+			return c.JSON(http.StatusInternalServerError, map[string]string{
+				"error": "failed to get snapshot data",
+				"code":  "DATABASE_ERROR",
+			})
+		}
+		if snapshot != nil {
+			stats, err = h.storage.GetQueryStats(ctx, snapshot.ID)
+			if err != nil {
+				c.Logger().Errorf("failed to get query stats: %v", err)
+				return c.JSON(http.StatusInternalServerError, map[string]string{
+					"error": "failed to get query stats",
+					"code":  "DATABASE_ERROR",
+				})
+			}
+		}
+	}
+
+	var found *models.QueryStat
+	for i := range stats {
+		if stats[i].QueryID == queryID {
+			found = &stats[i]
+			break
+		}
+	}
+	if found == nil {
+		return c.JSON(http.StatusNotFound, map[string]string{
+			"error": "query not found",
+			"code":  "NOT_FOUND",
+		})
+	}
+
+	resp := QueryDetailResponse{
+		QueryDetail:     statToQueryDetail(*found),
+		Rows:            found.Rows,
+		SharedBlksHit:   found.SharedBlksHit,
+		SharedBlksRead:  found.SharedBlksRead,
+		Plans:           found.Plans,
+		TotalPlanTimeMs: found.TotalPlanTime,
+	}
+
+	if plan, err := h.storage.GetExplainPlan(ctx, queryID); err != nil {
+		c.Logger().Errorf("failed to get explain plan: %v", err)
+	} else if plan != nil {
+		resp.ExplainPlan = &ExplainResponse{
+			QueryID:       plan.QueryID,
+			PlanText:      plan.PlanText,
+			PlanJSON:      plan.PlanJSON,
+			CapturedAt:    plan.CapturedAt.UTC().Format(time.RFC3339),
+			ExecutionTime: plan.ExecutionTime,
+			Summary:       summarizePlan(plan.PlanJSON),
+		}
+	}
+
+	return c.JSON(http.StatusOK, resp)
+}
+
 // GetQueryHistory handles GET /api/v1/queries/:id/history.
 func (h *QueriesHandler) GetQueryHistory(c echo.Context) error {
 	queryID, err := strconv.ParseInt(c.Param("id"), 10, 64)
@@ -465,26 +563,61 @@ func (h *QueriesHandler) ExplainQuery(c echo.Context) error {
 	})
 }
 
-// sortStats sorts query stats by the specified field.
+func compareQueryStat(a, b models.QueryStat, field string) int {
+	switch field {
+	case "calls":
+		switch {
+		case a.Calls < b.Calls:
+			return -1
+		case a.Calls > b.Calls:
+			return 1
+		default:
+			return 0
+		}
+	case "mean_time":
+		switch {
+		case a.MeanExecTime < b.MeanExecTime:
+			return -1
+		case a.MeanExecTime > b.MeanExecTime:
+			return 1
+		default:
+			return 0
+		}
+	case "rows":
+		switch {
+		case a.Rows < b.Rows:
+			return -1
+		case a.Rows > b.Rows:
+			return 1
+		default:
+			return 0
+		}
+	case "total_time":
+		fallthrough
+	default:
+		switch {
+		case a.TotalExecTime < b.TotalExecTime:
+			return -1
+		case a.TotalExecTime > b.TotalExecTime:
+			return 1
+		default:
+			return 0
+		}
+	}
+}
+
+// sortStats sorts query stats by the specified field with a deterministic
+// QueryID tie-breaker so sort.Slice always observes a strict weak ordering.
 func sortStats(stats []models.QueryStat, field string, desc bool) {
 	sort.Slice(stats, func(i, j int) bool {
-		var less bool
-		switch field {
-		case "calls":
-			less = stats[i].Calls < stats[j].Calls
-		case "mean_time":
-			less = stats[i].MeanExecTime < stats[j].MeanExecTime
-		case "total_time":
-			less = stats[i].TotalExecTime < stats[j].TotalExecTime
-		case "rows":
-			less = stats[i].Rows < stats[j].Rows
-		default:
-			less = stats[i].TotalExecTime < stats[j].TotalExecTime
+		cmp := compareQueryStat(stats[i], stats[j], field)
+		if cmp == 0 {
+			return stats[i].QueryID < stats[j].QueryID
 		}
 		if desc {
-			return !less
+			return cmp > 0
 		}
-		return less
+		return cmp < 0
 	})
 }
 
@@ -514,16 +647,22 @@ func statToQueryDetail(stat models.QueryStat) QueryDetail {
 	}
 }
 
-// extractPlaceholders finds all $N placeholders in query text.
-// Returns sorted unique placeholder positions (e.g., [1, 2, 3]).
+const maxExplainPlaceholders = 1000
+
+var placeholderRegex = regexp.MustCompile(`\$(\d+)`)
+
+// extractPlaceholders finds all valid $N (1..maxExplainPlaceholders)
+// placeholders in query text. Returns sorted unique positions (e.g., [1, 2, 3]).
 func extractPlaceholders(query string) []int {
-	re := regexp.MustCompile(`\$(\d+)`)
-	matches := re.FindAllStringSubmatch(query, -1)
+	matches := placeholderRegex.FindAllStringSubmatch(query, -1)
 
 	seen := make(map[int]bool)
 	var positions []int
 	for _, match := range matches {
-		pos, _ := strconv.Atoi(match[1])
+		pos, err := strconv.Atoi(match[1])
+		if err != nil || pos <= 0 || pos > maxExplainPlaceholders {
+			continue
+		}
 		if !seen[pos] {
 			seen[pos] = true
 			positions = append(positions, pos)
@@ -536,7 +675,7 @@ func extractPlaceholders(query string) []int {
 // buildParamSlice converts ExplainParameter slice to []any for pgx.
 // Returns nil if no valid parameters provided.
 func buildParamSlice(params []ExplainParameter, maxPos int) []any {
-	if len(params) == 0 || maxPos == 0 {
+	if len(params) == 0 || maxPos <= 0 || maxPos > maxExplainPlaceholders {
 		return nil
 	}
 

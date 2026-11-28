@@ -20,6 +20,7 @@
                     <a href="/schema" class="nav-link-inactive">Schema</a>
                     <a href="/activity" class="nav-link-inactive">Activity</a>
                     <a href="/suggestions" class="nav-link-inactive">Suggestions</a>
+                    <a href="/setup" class="nav-link-inactive">Setup</a>
                 </nav>
             </div>
         </div>
@@ -179,7 +180,7 @@
                                 <tbody class="divide-y divide-gray-100">
                                     {{range .TopQueries}}
                                     <tr>
-                                        <td class="query-text max-w-xs truncate">{{truncate .QueryPreview 60}}</td>
+                                        <td class="query-text max-w-xs truncate"><a href="/queries/{{.QueryID}}" class="text-primary hover:underline">{{truncate .QueryPreview 60}}</a></td>
                                         <td class="text-right tabular-nums">{{formatNumber .Calls}}</td>
                                         <td class="text-right tabular-nums">{{formatDuration .MeanExecTimeMs}}</td>
                                         <td class="text-right tabular-nums">{{formatDuration .TotalExecTimeMs}}</td>
@@ -215,7 +216,7 @@
                             <div class="{{suggestionCardClass .Severity}}">
                                 <div class="flex items-center gap-2 mb-2">
                                     <span class="{{severityBadgeClass .Severity}}">{{.Severity}}</span>
-                                    <span class="font-medium text-gray-900">{{.Title}}</span>
+                                    <a href="/suggestions/{{.ID}}" class="font-medium text-gray-900 hover:text-primary hover:underline">{{.Title}}</a>
                                 </div>
                                 <div class="text-sm font-mono text-gray-500 mb-2">{{.TargetObject}}</div>
                                 <div class="text-xs text-gray-400">

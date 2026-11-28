@@ -69,6 +69,22 @@ func TestWraparoundRules(t *testing.T) {
 		t.Errorf("multixact severities = %v, want reports warning", mxid)
 	}
 
+	// Non-connected database multixact fallback SQL must ORDER BY 3 DESC (mxid_age).
+	mxidSugs, _ := rules.NewMultixactWraparoundRule(cfg).Evaluate(context.Background(), riskAnalysis(risk))
+	if len(mxidSugs) != 1 || !strings.Contains(mxidSugs[0].Description, "ORDER BY 3 DESC LIMIT 10") {
+		t.Errorf("multixact fallback SQL should order by column 3:\n%v", mxidSugs)
+	}
+
+	// Connected database multixact rule uses OldestMXIDTables rather than XID-sorted OldestTables.
+	mxidRisk := *risk
+	mxidRisk.Databases = []models.DatabaseAge{{Name: "app", XIDAge: 100, MXIDAge: 700_000_000}}
+	mxidRisk.OldestTables = []models.TableAge{{SchemaName: "public", RelName: "xid_old", XIDAge: 900_000_000, MXIDAge: 10}}
+	mxidRisk.OldestMXIDTables = []models.TableAge{{SchemaName: "public", RelName: "mxid_hot", XIDAge: 50, MXIDAge: 700_000_000}}
+	mxidApp, _ := rules.NewMultixactWraparoundRule(cfg).Evaluate(context.Background(), riskAnalysis(&mxidRisk))
+	if len(mxidApp) != 1 || !strings.Contains(mxidApp[0].Description, `"public"."mxid_hot"`) || strings.Contains(mxidApp[0].Description, `"public"."xid_old"`) {
+		t.Errorf("multixact rule did not use OldestMXIDTables:\n%v", mxidApp)
+	}
+
 	got, _ := rules.NewXIDWraparoundRule(cfg).Evaluate(context.Background(), riskAnalysis(risk))
 	for _, s := range got {
 		if s.TargetObject != "database:app" {
@@ -101,15 +117,19 @@ func TestReplicationSlotRule(t *testing.T) {
 			{ApplicationName: "replica1", State: "streaming", ReplayLagSecs: float64p(900)},
 			{ApplicationName: "replica2", State: "streaming", ReplayLagSecs: float64p(2)},
 			{ApplicationName: "replica3", State: "streaming"}, // lag hidden without pg_monitor
+			{ApplicationName: "walreceiver", ClientAddr: "10.0.0.2", State: "streaming", ReplayLagSecs: float64p(600)},
+			{ApplicationName: "walreceiver", ClientAddr: "10.0.0.3", State: "streaming", ReplayLagSecs: float64p(700)},
 		},
 	}
 	got := severities(t, rules.NewReplicationSlotRule(cfg), riskAnalysis(risk))
 	want := map[string]string{
-		"slot:abandoned":   models.SeverityWarning,
-		"slot:huge":        models.SeverityCritical,
-		"slot:doomed":      models.SeverityCritical,
-		"slot:gone":        models.SeverityWarning,
-		"replica:replica1": models.SeverityWarning,
+		"slot:abandoned":               models.SeverityWarning,
+		"slot:huge":                    models.SeverityCritical,
+		"slot:doomed":                  models.SeverityCritical,
+		"slot:gone":                    models.SeverityWarning,
+		"replica:replica1":             models.SeverityWarning,
+		"replica:walreceiver@10.0.0.2": models.SeverityWarning,
+		"replica:walreceiver@10.0.0.3": models.SeverityWarning,
 	}
 	if len(got) != len(want) {
 		t.Errorf("got %v, want %v", got, want)
@@ -118,6 +138,24 @@ func TestReplicationSlotRule(t *testing.T) {
 		if got[target] != sev {
 			t.Errorf("%s = %q, want %q", target, got[target], sev)
 		}
+	}
+}
+
+func TestLockContentionRuleMultipleBlockers(t *testing.T) {
+	cfg := suggester.DefaultConfig()
+	rule := rules.NewLockContentionRule(cfg)
+	a := &analyzer.AnalysisResult{
+		Coverage: analyzer.FullCoverage(),
+		LockStats: &analyzer.LockAnalysis{
+			BlockedQueries: []models.BlockedQuery{
+				{BlockedPID: 100, BlockingPID: 201, WaitDuration: 30, LockType: "relation", LockMode: "AccessExclusiveLock"},
+				{BlockedPID: 100, BlockingPID: 202, WaitDuration: 30, LockType: "relation", LockMode: "AccessExclusiveLock"},
+			},
+		},
+	}
+	got := severities(t, rule, a)
+	if len(got) != 2 || got["blocked_pid:100:blocking_pid:201"] == "" || got["blocked_pid:100:blocking_pid:202"] == "" {
+		t.Fatalf("expected distinct targets per (blocked_pid, blocking_pid), got %v", got)
 	}
 }
 

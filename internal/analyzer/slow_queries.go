@@ -59,7 +59,7 @@ func (a *SlowQueryAnalyzer) Analyze(ctx context.Context, snapshotID int64) ([]Sl
 	if err != nil {
 		return nil, err
 	}
-	if baseline == nil || baseline.ID == snapshotID {
+	if baseline == nil || baseline.ID == snapshotID || statsResetBetween(baseline, snapshot) {
 		return a.analyzeCumulative(stats), nil
 	}
 

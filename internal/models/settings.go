@@ -1,6 +1,7 @@
 package models
 
 import (
+	"math"
 	"strconv"
 	"strings"
 	"time"
@@ -57,9 +58,10 @@ func (s Setting) On() bool {
 }
 
 // Bytes returns a memory setting in bytes. ok is false for settings that are
-// not a memory amount, and for -1 ("use another setting").
+// not a memory amount, for negative values (e.g. -1 "inherit"/"unlimited"),
+// or if the product would overflow int64.
 func (s Setting) Bytes() (bytes int64, ok bool) {
-	mult, ok := byteUnits[s.Unit]
+	mult, ok := parseByteUnit(s.Unit)
 	if !ok {
 		return 0, false
 	}
@@ -67,27 +69,37 @@ func (s Setting) Bytes() (bytes int64, ok bool) {
 	if err != nil || n < 0 {
 		return 0, false
 	}
+	if mult > 0 && n > math.MaxInt64/mult {
+		return 0, false
+	}
 	return n * mult, true
 }
 
 // Duration returns a time setting. ok is false for settings that are not a
-// time, and for negative values (usually "disabled").
+// time, for negative/non-finite values, or if the result overflows time.Duration.
 func (s Setting) Duration() (d time.Duration, ok bool) {
 	unit, ok := timeUnits[s.Unit]
 	if !ok {
 		return 0, false
 	}
 	n, err := strconv.ParseFloat(s.Setting, 64)
-	if err != nil || n < 0 {
+	if err != nil || math.IsNaN(n) || math.IsInf(n, 0) || n < 0 {
 		return 0, false
 	}
-	return time.Duration(n * float64(unit)), true
+	ns := n * float64(unit)
+	if math.IsNaN(ns) || math.IsInf(ns, 0) || ns > float64(math.MaxInt64) {
+		return 0, false
+	}
+	return time.Duration(ns), true
 }
 
-// Float returns a numeric setting.
+// Float returns a finite numeric setting.
 func (s Setting) Float() (float64, bool) {
 	n, err := strconv.ParseFloat(s.Setting, 64)
-	return n, err == nil
+	if err != nil || math.IsNaN(n) || math.IsInf(n, 0) {
+		return 0, false
+	}
+	return n, true
 }
 
 // NeedsRestart reports whether changing the setting needs a server restart
@@ -98,6 +110,26 @@ func (s Setting) NeedsRestart() bool {
 
 // Display renders the value in its unit as PostgreSQL would, e.g. "128MB".
 func (s Setting) Display() string {
+	if s.Setting == "-1" {
+		switch s.Name {
+		case "autovacuum_work_mem", "autovacuum_vacuum_cost_limit", "autovacuum_vacuum_cost_delay":
+			return "-1 (inherit)"
+		case "max_slot_wal_keep_size":
+			return "-1 (unlimited)"
+		default:
+			return "-1 (disabled)"
+		}
+	}
+	if s.Setting == "0" {
+		switch s.Name {
+		case "log_min_duration_statement":
+			return "0ms (log all)"
+		case "log_temp_files":
+			return "0kB (log all)"
+		case "autovacuum_vacuum_cost_delay":
+			return "0ms"
+		}
+	}
 	if b, ok := s.Bytes(); ok {
 		return FormatSettingBytes(b)
 	}
@@ -106,9 +138,6 @@ func (s Setting) Display() string {
 			return "0 (disabled)"
 		}
 		return d.String()
-	}
-	if s.Setting == "-1" {
-		return "-1 (disabled)"
 	}
 	if s.Unit != "" && !strings.ContainsAny(s.Unit, "0123456789") {
 		return s.Setting + s.Unit
@@ -132,13 +161,35 @@ func FormatSettingBytes(b int64) string {
 	return strconv.FormatInt(b, 10) + "B"
 }
 
-var byteUnits = map[string]int64{
-	"B":    1,
-	"kB":   1 << 10,
-	"8kB":  8 << 10,
-	"MB":   1 << 20,
-	"16MB": 16 << 20,
-	"GB":   1 << 30,
+// parseByteUnit parses PostgreSQL pg_settings memory units such as "B", "kB",
+// "8kB", "16kB", "MB", "16MB", "64MB", "GB", and "TB".
+func parseByteUnit(unit string) (int64, bool) {
+	if unit == "" {
+		return 0, false
+	}
+	var base int64
+	var prefix string
+	for _, u := range []struct {
+		suffix string
+		size   int64
+	}{{"TB", 1 << 40}, {"GB", 1 << 30}, {"MB", 1 << 20}, {"kB", 1 << 10}, {"B", 1}} {
+		if strings.HasSuffix(unit, u.suffix) {
+			base = u.size
+			prefix = strings.TrimSuffix(unit, u.suffix)
+			break
+		}
+	}
+	if base == 0 {
+		return 0, false
+	}
+	if prefix == "" {
+		return base, true
+	}
+	count, err := strconv.ParseInt(prefix, 10, 64)
+	if err != nil || count <= 0 || count > math.MaxInt64/base {
+		return 0, false
+	}
+	return count * base, true
 }
 
 var timeUnits = map[string]time.Duration{

@@ -20,6 +20,7 @@
                     <a href="/schema" class="nav-link-inactive">Schema</a>
                     <a href="/activity" class="nav-link-inactive">Activity</a>
                     <a href="/suggestions" class="nav-link-inactive">Suggestions</a>
+                    <a href="/setup" class="nav-link-active">Setup</a>
                 </nav>
             </div>
         </div>
@@ -48,7 +49,7 @@
                             <tr>
                                 <td class="py-3 pr-4 align-top">
                                     {{if eq .Status "ok"}}<span class="badge-success">OK</span>
-                                    {{else if eq .Status "fail"}}<span class="badge-warning">Failed</span>
+                                    {{else if eq .Status "fail"}}<span class="badge-critical">Failed</span>
                                     {{else if eq .Status "warn"}}<span class="badge-warning">Warning</span>
                                     {{else if eq .Status "pending"}}<span class="badge-info">Collecting</span>
                                     {{else}}<span class="badge-gray">Info</span>{{end}}

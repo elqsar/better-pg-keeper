@@ -99,7 +99,7 @@ func (r *LockContentionRule) Evaluate(ctx context.Context, analysis *analyzer.An
 			Severity:     severity,
 			Title:        title,
 			Description:  desc.String(),
-			TargetObject: fmt.Sprintf("blocked_pid:%d", blocked.BlockedPID),
+			TargetObject: fmt.Sprintf("blocked_pid:%d:blocking_pid:%d", blocked.BlockedPID, blocked.BlockingPID),
 			Metadata: map[string]any{
 				"blocked_pid":    blocked.BlockedPID,
 				"blocked_user":   blocked.BlockedUser,

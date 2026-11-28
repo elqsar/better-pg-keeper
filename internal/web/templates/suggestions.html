@@ -20,6 +20,7 @@
                     <a href="/schema" class="nav-link-inactive">Schema</a>
                     <a href="/activity" class="nav-link-inactive">Activity</a>
                     <a href="/suggestions" class="nav-link-active">Suggestions</a>
+                    <a href="/setup" class="nav-link-inactive">Setup</a>
                 </nav>
             </div>
         </div>
@@ -49,6 +50,7 @@
                     <select id="status-select" onchange="updateFilter('status', this.value)"
                             class="select">
                         <option value="active"{{if eq .StatusFilter "active"}} selected{{end}}>Active</option>
+                        <option value="resolved"{{if eq .StatusFilter "resolved"}} selected{{end}}>Resolved</option>
                         <option value="dismissed"{{if eq .StatusFilter "dismissed"}} selected{{end}}>Dismissed</option>
                     </select>
                 </div>
@@ -93,6 +95,9 @@
                                 <span>Rule: {{.RuleID}}</span>
                                 <span>First seen: {{formatTimeShort .FirstSeenAt}}</span>
                                 <span>Last seen: {{formatTimeShort .LastSeenAt}}</span>
+                                {{with .ResolvedAt}}
+                                <span>Resolved: {{formatTimeShort .}}</span>
+                                {{end}}
                             </div>
                         </div>
                         <div class="flex-shrink-0 flex flex-col gap-2 items-end">
@@ -101,8 +106,13 @@
                             <button class="btn-secondary btn-sm" onclick="dismissSuggestion({{.ID}})">
                                 Dismiss
                             </button>
+                            {{else if eq .Status "resolved"}}
+                            <span class="badge-success">Resolved</span>
                             {{else}}
                             <span class="badge-gray">Dismissed</span>
+                            <button class="btn-secondary btn-sm" onclick="undismissSuggestion({{.ID}})">
+                                Restore
+                            </button>
                             {{end}}
                         </div>
                     </div>
@@ -119,6 +129,8 @@
                     <p class="empty-state-description">
                         {{if eq .StatusFilter "dismissed"}}
                         No dismissed suggestions found
+                        {{else if eq .StatusFilter "resolved"}}
+                        No resolved suggestions found
                         {{else}}
                         Your database is performing well! No issues detected.
                         {{end}}
@@ -172,6 +184,31 @@
         })
         .catch(error => {
             alert('Failed to dismiss suggestion: ' + error);
+        });
+    }
+
+    function undismissSuggestion(id) {
+        if (!confirm('Restore this suggestion back to active status?')) {
+            return;
+        }
+
+        fetch('/api/v1/suggestions/' + id + '/undismiss', {
+            method: 'POST'
+        })
+        .then(response => {
+            if (response.ok) {
+                const card = document.getElementById('suggestion-' + id);
+                card.classList.add('opacity-50');
+                const btn = card.querySelector('button');
+                if (btn) {
+                    btn.outerHTML = '<span class="badge-info">Restored</span>';
+                }
+            } else {
+                alert('Failed to restore suggestion');
+            }
+        })
+        .catch(error => {
+            alert('Failed to restore suggestion: ' + error);
         });
     }
     </script>

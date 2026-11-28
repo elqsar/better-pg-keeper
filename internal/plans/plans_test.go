@@ -34,6 +34,21 @@ func TestIndexColumns(t *testing.T) {
 		{"(o.a = o.b)", nil},
 		// AND inside a string constant is not a separator.
 		{"(o.note = 'x AND y'::text)", []string{"note"}},
+		// IN (...) formatted as = ANY (ARRAY[...]) with optional casts.
+		{"(o.status = ANY (ARRAY[$1, $2]))", []string{"status"}},
+		{"((o.status)::text = ANY ((ARRAY['open'::character varying(50), 'pending'::character varying(50)])::text[]))", []string{"status"}},
+		// Schema-qualified enum and typmod casts from EXPLAIN (VERBOSE).
+		{"((o.status)::public.order_status = 'open'::public.order_status)", []string{"status"}},
+		{"((o.code)::character varying(32) = ($1)::character varying(32))", []string{"code"}},
+		{"((o.amount)::numeric(10,2) > 100.50::numeric(10,2))", []string{"amount"}},
+		// Boolean literals.
+		{"((o.active = true) AND (o.archived = FALSE))", []string{"active", "archived"}},
+		// Nested parenthesized AND groups are flattened recursively.
+		{"(((o.a = $1) AND (o.b = $2)) AND (o.c > $3))", []string{"a", "b", "c"}},
+		// Quoted identifiers containing spaces, parens, or keywords.
+		{`(("a AND b" = $1) AND ("col (1)" > $2))`, []string{"a AND b", "col (1)"}},
+		// E'...' escape string literals with escaped quotes and parens.
+		{`((o.note = E'it\'s (not) AND OR'::text) AND (o.tenant_id = $1))`, []string{"note", "tenant_id"}},
 		{"", nil},
 	}
 	for _, tt := range tests {

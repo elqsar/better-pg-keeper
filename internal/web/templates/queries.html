@@ -20,6 +20,7 @@
                     <a href="/schema" class="nav-link-inactive">Schema</a>
                     <a href="/activity" class="nav-link-inactive">Activity</a>
                     <a href="/suggestions" class="nav-link-inactive">Suggestions</a>
+                    <a href="/setup" class="nav-link-inactive">Setup</a>
                 </nav>
             </div>
         </div>
@@ -116,7 +117,7 @@
                                     <td class="text-center">
                                         <div class="flex items-center justify-center gap-2">
                                             <a href="/queries/{{.QueryID}}" class="btn-secondary btn-sm">Details</a>
-                                            <button class="btn-secondary btn-sm" onclick="explainQuery({{.QueryID}})">EXPLAIN</button>
+                                            <button class="btn-secondary btn-sm" onclick="explainQuery('{{.QueryID}}')">EXPLAIN</button>
                                         </div>
                                     </td>
                                 </tr>
@@ -228,7 +229,16 @@
             if (data.error) {
                 content.innerHTML = '<div class="text-severity-critical p-4 bg-severity-critical-bg rounded-lg">Error: ' + escapeHtml(data.error) + '</div>';
             } else {
-                content.innerHTML = '<pre class="code-block whitespace-pre-wrap">' + escapeHtml(data.plan_text) + '</pre>';
+                let html = '';
+                if (Array.isArray(data.summary) && data.summary.length > 0) {
+                    html += '<div class="mb-4"><p class="text-sm font-medium text-gray-700 mb-2">In plain language</p><ul class="list-disc pl-5 space-y-1 text-sm text-gray-700">';
+                    data.summary.forEach(function(line) {
+                        html += '<li>' + escapeHtml(line) + '</li>';
+                    });
+                    html += '</ul></div>';
+                }
+                html += '<pre class="code-block whitespace-pre-wrap">' + escapeHtml(data.plan_text) + '</pre>';
+                content.innerHTML = html;
             }
         })
         .catch(error => {

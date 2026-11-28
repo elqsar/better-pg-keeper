@@ -251,13 +251,15 @@ type LockAnalysis struct {
 	LockContentionHigh bool                  `json:"lock_contention_high"`
 }
 
-// TransactionAnalysis contains transaction rate analysis.
+// TransactionAnalysis contains windowed deltas of pg_stat_database counters.
 type TransactionAnalysis struct {
-	XactCommit   int64 `json:"xact_commit"`
-	XactRollback int64 `json:"xact_rollback"`
-	TempFiles    int64 `json:"temp_files"`
-	TempBytes    int64 `json:"temp_bytes"`
-	Deadlocks    int64 `json:"deadlocks"`
+	XactCommit       int64         `json:"xact_commit"`
+	XactRollback     int64         `json:"xact_rollback"`
+	TempFiles        int64         `json:"temp_files"`
+	TempBytes        int64         `json:"temp_bytes"`
+	Deadlocks        int64         `json:"deadlocks"`
+	Window           time.Duration `json:"window_ns,omitempty"`
+	BaselineObserved bool          `json:"baseline_observed"`
 }
 
 // Config holds analyzer configuration derived from thresholds.

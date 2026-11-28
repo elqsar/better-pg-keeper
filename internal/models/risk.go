@@ -21,8 +21,10 @@ type OutageRisk struct {
 	FreezeMaxAge          int64         `json:"freeze_max_age"`
 	MultixactFreezeMaxAge int64         `json:"multixact_freeze_max_age"`
 	Databases             []DatabaseAge `json:"databases"`
-	// OldestTables covers only the database PGAnalyzer is connected to.
+	// OldestTables covers only the database PGAnalyzer is connected to (top by XID age).
 	OldestTables []TableAge `json:"oldest_tables"`
+	// OldestMXIDTables holds the top tables by multixact age in the connected database.
+	OldestMXIDTables []TableAge `json:"oldest_mxid_tables,omitempty"`
 
 	// Things that stop VACUUM from freezing rows: old snapshots in sessions,
 	// replication slots and prepared transactions.

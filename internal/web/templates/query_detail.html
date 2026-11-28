@@ -20,6 +20,7 @@
                     <a href="/schema" class="nav-link-inactive">Schema</a>
                     <a href="/activity" class="nav-link-inactive">Activity</a>
                     <a href="/suggestions" class="nav-link-inactive">Suggestions</a>
+                    <a href="/setup" class="nav-link-inactive">Setup</a>
                 </nav>
             </div>
         </div>
@@ -191,7 +192,10 @@
         const placeholders = new Set();
         let match;
         while ((match = regex.exec(queryText)) !== null) {
-            placeholders.add(parseInt(match[1], 10));
+            const pos = parseInt(match[1], 10);
+            if (pos > 0 && pos <= 1000) {
+                placeholders.add(pos);
+            }
         }
         return Array.from(placeholders).sort((a, b) => a - b);
     }

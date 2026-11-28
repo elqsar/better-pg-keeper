@@ -132,9 +132,14 @@ func (c *Coordinator) runCollector(ctx context.Context, collector Collector, sna
 		return
 	}
 
-	// Update last run time on success
+	// Record cycle start time (not completion time) on success so collectors
+	// running on the scheduler's MinInterval tick are not skipped every other tick.
+	ranAt := result.StartedAt
+	if ranAt.IsZero() {
+		ranAt = time.Now()
+	}
 	c.mu.Lock()
-	c.lastRun[collector.Name()] = time.Now()
+	c.lastRun[collector.Name()] = ranAt
 	c.mu.Unlock()
 }
 
@@ -252,8 +257,10 @@ func (c *Coordinator) getDueCollectors(collectors []Collector, now time.Time) []
 		lastRun, hasRun := c.lastRun[coll.Name()]
 		interval := coll.Interval()
 
-		// If never run, or interval has elapsed, collector is due
-		if !hasRun || now.Sub(lastRun) >= interval {
+		// If never run, or interval has elapsed (allowing tiny ticker wakeup
+		// jitter), collector is due.
+		jitter := min(interval/100, 50*time.Millisecond)
+		if !hasRun || now.Sub(lastRun) >= interval-jitter {
 			due = append(due, coll)
 			c.logger.Printf("[coordinator] collector %s is due (interval=%v, last_run=%v)",
 				coll.Name(), interval, lastRun)
@@ -381,7 +388,7 @@ func (c *Coordinator) RunCollector(ctx context.Context, name string, snapshotID 
 	if target == nil {
 		return fmt.Errorf("collector not found: %s", name)
 	}
-	result := &CollectionResult{Errors: make(map[string]error)}
+	result := &CollectionResult{StartedAt: time.Now(), Errors: make(map[string]error)}
 	var errorsMu sync.Mutex
 	c.runCollector(ctx, target, snapshotID, result, &errorsMu)
 	return result.Errors[name]

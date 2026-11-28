@@ -4,7 +4,6 @@ import (
 	"context"
 	"encoding/json"
 	"net/http"
-	"sort"
 	"strconv"
 	"time"
 
@@ -354,16 +353,16 @@ func (h *PageHandler) Queries(c echo.Context) error {
 	// Sort stats
 	sortQueryStats(stats, sortField, order == "desc")
 
-	// Calculate pagination
+	// Calculate pagination (clamp page before multiplying to prevent int overflow)
 	data.Total = len(stats)
 	data.TotalPages = max((data.Total+perPage-1)/perPage, 1)
+	if page > data.TotalPages {
+		page = 1
+		data.CurrentPage = 1
+	}
 
 	// Apply pagination
 	offset := (page - 1) * perPage
-	if offset >= len(stats) {
-		offset = 0
-		data.CurrentPage = 1
-	}
 	end := min(offset+perPage, len(stats))
 
 	// Convert to page format
@@ -681,6 +680,7 @@ type PageSuggestion struct {
 	Status       string
 	FirstSeenAt  time.Time
 	LastSeenAt   time.Time
+	ResolvedAt   *time.Time
 }
 
 // Suggestions handles GET /suggestions requests.
@@ -748,6 +748,7 @@ func (h *PageHandler) Suggestions(c echo.Context) error {
 			Status:       sug.Status,
 			FirstSeenAt:  sug.FirstSeenAt,
 			LastSeenAt:   sug.LastSeenAt,
+			ResolvedAt:   sug.ResolvedAt,
 		})
 	}
 
@@ -803,7 +804,7 @@ func (h *PageHandler) SuggestionDetail(c echo.Context) error {
 	}
 
 	suggestion, err := h.storage.GetSuggestionByID(ctx, id)
-	if err != nil || suggestion == nil {
+	if err != nil || suggestion == nil || (suggestion.InstanceID != 0 && suggestion.InstanceID != h.instanceID) {
 		return c.Redirect(http.StatusFound, "/suggestions")
 	}
 	data.Suggestion = suggestion
@@ -905,25 +906,7 @@ func truncateString(s string, maxLen int) string {
 }
 
 func sortQueryStats(stats []models.QueryStat, field string, desc bool) {
-	sort.Slice(stats, func(i, j int) bool {
-		var less bool
-		switch field {
-		case "calls":
-			less = stats[i].Calls < stats[j].Calls
-		case "mean_time":
-			less = stats[i].MeanExecTime < stats[j].MeanExecTime
-		case "total_time":
-			less = stats[i].TotalExecTime < stats[j].TotalExecTime
-		case "rows":
-			less = stats[i].Rows < stats[j].Rows
-		default:
-			less = stats[i].TotalExecTime < stats[j].TotalExecTime
-		}
-		if desc {
-			return !less
-		}
-		return less
-	})
+	sortStats(stats, field, desc)
 }
 
 func calculateRowsPerCall(rows, calls int64) float64 {

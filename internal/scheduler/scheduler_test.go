@@ -203,8 +203,20 @@ func (m *mockStorage) DismissSuggestion(ctx context.Context, id int64) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	for i := range m.suggestions {
-		if m.suggestions[i].ID == id {
+		if m.suggestions[i].ID == id && m.suggestions[i].Status == models.StatusActive {
 			m.suggestions[i].Status = models.StatusDismissed
+		}
+	}
+	return nil
+}
+
+func (m *mockStorage) UndismissSuggestion(ctx context.Context, id int64) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	for i := range m.suggestions {
+		if m.suggestions[i].ID == id && m.suggestions[i].Status == models.StatusDismissed {
+			m.suggestions[i].Status = models.StatusActive
+			m.suggestions[i].DismissedAt = nil
 		}
 	}
 	return nil
@@ -219,6 +231,10 @@ func (m *mockStorage) ResolveSuggestion(ctx context.Context, id int64) error {
 		}
 	}
 	return nil
+}
+
+func (m *mockStorage) PurgeOldSuggestions(ctx context.Context, retention time.Duration) (int64, error) {
+	return 0, nil
 }
 
 // Explain plan operations
@@ -748,6 +764,126 @@ func TestScheduler_TriggerSnapshot(t *testing.T) {
 	// Verify snapshot was created
 	if storage.snapshotCount() != 1 {
 		t.Errorf("Expected 1 snapshot, got %d", storage.snapshotCount())
+	}
+}
+
+type blockingCollector struct {
+	name     string
+	interval time.Duration
+	started  chan struct{}
+	canceled chan struct{}
+}
+
+func (b *blockingCollector) Name() string            { return b.name }
+func (b *blockingCollector) Interval() time.Duration { return b.interval }
+func (b *blockingCollector) Collect(ctx context.Context, snapshotID int64) error {
+	select {
+	case b.started <- struct{}{}:
+	default:
+	}
+	<-ctx.Done()
+	select {
+	case b.canceled <- struct{}{}:
+	default:
+	}
+	return ctx.Err()
+}
+
+func TestScheduler_StopCancelsInFlightJobsAndContextUpdatesIsRunning(t *testing.T) {
+	logger := log.New(os.Stdout, "", 0)
+	storage := newMockStorage()
+	pgClient := newMockPGClient()
+	coord := collector.NewCoordinator(collector.CoordinatorConfig{
+		PGClient:   pgClient,
+		Storage:    storage,
+		InstanceID: 1,
+		Logger:     logger,
+	})
+	bc := &blockingCollector{
+		name:     "slow",
+		interval: time.Hour,
+		started:  make(chan struct{}, 1),
+		canceled: make(chan struct{}, 1),
+	}
+	coord.RegisterCollector(bc)
+
+	sched, err := scheduler.NewScheduler(scheduler.Config{
+		SchedulerConfig: &config.SchedulerConfig{
+			SnapshotInterval: config.Duration(time.Hour),
+			AnalysisInterval: config.Duration(time.Hour),
+		},
+		Coordinator: coord,
+		Analyzer:    analyzer.NewMainAnalyzer(storage, nil),
+		Suggester:   suggester.NewSuggester(storage, nil, logger),
+		Storage:     storage,
+		InstanceID:  1,
+		Logger:      logger,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// Start with an uncancellable background context; Stop() must cancel the
+	// child context so the blocking collector exits immediately.
+	if err := sched.Start(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	<-bc.started
+
+	if err := sched.StopWithTimeout(2 * time.Second); err != nil {
+		t.Fatalf("StopWithTimeout() failed (in-flight job not cancelled): %v", err)
+	}
+	select {
+	case <-bc.canceled:
+	default:
+		t.Error("expected blocking collector context to be cancelled by Stop()")
+	}
+	if sched.IsRunning() {
+		t.Error("IsRunning() should be false after Stop()")
+	}
+}
+
+func TestScheduler_NoOpCollectionDoesNotMarkHealthy(t *testing.T) {
+	logger := log.New(os.Stdout, "", 0)
+	storage := newMockStorage()
+	pgClient := newMockPGClient()
+	// Coordinator with zero collectors -> Collect() returns SnapshotID=0, no error (no-op).
+	coord := collector.NewCoordinator(collector.CoordinatorConfig{
+		PGClient:   pgClient,
+		Storage:    storage,
+		InstanceID: 1,
+		Logger:     logger,
+	})
+	sched, err := scheduler.NewScheduler(scheduler.Config{
+		SchedulerConfig: &config.SchedulerConfig{
+			SnapshotInterval: config.Duration(50 * time.Millisecond),
+			AnalysisInterval: config.Duration(time.Hour),
+		},
+		Coordinator: coord,
+		Analyzer:    analyzer.NewMainAnalyzer(storage, nil),
+		Suggester:   suggester.NewSuggester(storage, nil, logger),
+		Storage:     storage,
+		InstanceID:  1,
+		Logger:      logger,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if err := sched.Start(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	time.Sleep(120 * time.Millisecond)
+	if err := sched.Stop(); err != nil {
+		t.Fatal(err)
+	}
+
+	lastSuccess, _ := sched.CollectionStatus()
+	if !lastSuccess.IsZero() {
+		t.Fatalf("no-op collection advanced LastSuccessfulCollection to %v, want zero", lastSuccess)
+	}
+	if h := sched.GetHealth(); h.TotalCollections != 0 {
+		t.Fatalf("TotalCollections = %d, want 0 for no-op ticks", h.TotalCollections)
 	}
 }
 

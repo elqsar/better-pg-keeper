@@ -3,6 +3,7 @@ package config
 import (
 	"fmt"
 	"os"
+	"reflect"
 	"regexp"
 	"strings"
 
@@ -34,14 +35,10 @@ func Load(path string) (*Config, error) {
 		return nil, fmt.Errorf("reading config file %s: %w", configPath, err)
 	}
 
-	// Expand environment variables in the YAML content
-	expanded := expandEnvVars(string(data))
-
-	// Start with defaults
-	cfg := Default()
-
-	// Parse YAML into the config struct
-	if err := yaml.Unmarshal([]byte(expanded), &cfg); err != nil {
+	// Parse YAML into AST, expand environment variables on scalar values only,
+	// and decode into defaults to prevent YAML injection from env values.
+	cfg, err := unmarshalConfig(data)
+	if err != nil {
 		return nil, fmt.Errorf("parsing config file: %w", err)
 	}
 
@@ -51,6 +48,130 @@ func Load(path string) (*Config, error) {
 	}
 
 	return &cfg, nil
+}
+
+var durationType = reflect.TypeOf(Duration(0))
+
+func unmarshalConfig(data []byte) (Config, error) {
+	cfg := Default()
+	var doc yaml.Node
+	if err := yaml.Unmarshal(data, &doc); err != nil {
+		return cfg, err
+	}
+	if doc.Kind == 0 || len(doc.Content) == 0 {
+		return cfg, nil
+	}
+	expandNodeEnvVars(&doc, reflect.TypeOf(cfg))
+	if err := doc.Decode(&cfg); err != nil {
+		return cfg, err
+	}
+	return cfg, nil
+}
+
+// expandNodeEnvVars walks a parsed YAML AST guided by the target Go type and
+// expands ${VAR} / ${VAR:-default} strictly inside scalar value nodes.
+// String targets are tagged !!str so YAML metacharacters (newlines, #, :,
+// quotes, anchors, booleans, numbers) can never alter document structure or types.
+func expandNodeEnvVars(node *yaml.Node, targetType reflect.Type) {
+	if node == nil {
+		return
+	}
+	for targetType != nil && targetType.Kind() == reflect.Ptr {
+		targetType = targetType.Elem()
+	}
+
+	switch node.Kind {
+	case yaml.DocumentNode:
+		for _, child := range node.Content {
+			expandNodeEnvVars(child, targetType)
+		}
+	case yaml.MappingNode:
+		for i := 0; i+1 < len(node.Content); i += 2 {
+			keyNode := node.Content[i]
+			valNode := node.Content[i+1]
+			var valType reflect.Type
+			if targetType != nil {
+				switch targetType.Kind() {
+				case reflect.Struct:
+					valType = yamlFieldType(targetType, keyNode.Value)
+				case reflect.Map:
+					valType = targetType.Elem()
+				}
+			}
+			expandNodeEnvVars(valNode, valType)
+		}
+	case yaml.SequenceNode:
+		var elemType reflect.Type
+		if targetType != nil && (targetType.Kind() == reflect.Slice || targetType.Kind() == reflect.Array) {
+			elemType = targetType.Elem()
+		}
+		for _, child := range node.Content {
+			expandNodeEnvVars(child, elemType)
+		}
+	case yaml.ScalarNode:
+		if !envVarPattern.MatchString(node.Value) {
+			return
+		}
+		node.Value = expandEnvVars(node.Value)
+		switch {
+		case targetType == nil || targetType.Kind() == reflect.String || node.Style != 0:
+			node.Tag = "!!str"
+		case targetType == durationType:
+			if node.Value == "" {
+				node.Tag = "!!null"
+			} else {
+				node.Tag = "!!str"
+			}
+		default:
+			// Unquoted non-string scalar (int, float, bool): keep default on
+			// empty expansion, otherwise let yaml.v3 parse the single scalar.
+			if node.Value == "" {
+				node.Tag = "!!null"
+			} else {
+				node.Tag = ""
+			}
+		}
+	}
+}
+
+func yamlFieldType(structType reflect.Type, key string) reflect.Type {
+	for i := 0; i < structType.NumField(); i++ {
+		f := structType.Field(i)
+		if !f.IsExported() {
+			continue
+		}
+		tag := f.Tag.Get("yaml")
+		if tag == "-" {
+			continue
+		}
+		parts := strings.Split(tag, ",")
+		name := parts[0]
+		inline := false
+		for _, opt := range parts[1:] {
+			if opt == "inline" {
+				inline = true
+			}
+		}
+		if inline {
+			ft := f.Type
+			for ft.Kind() == reflect.Ptr {
+				ft = ft.Elem()
+			}
+			if ft.Kind() == reflect.Struct {
+				if found := yamlFieldType(ft, key); found != nil {
+					return found
+				}
+			}
+			continue
+		}
+		if name == "" {
+			name = strings.ToLower(f.Name)
+		}
+		if name == key {
+			return f.Type
+		}
+	}
+	return nil
 }
 
 // envVarPattern matches ${VAR_NAME} or ${VAR_NAME:-default} patterns.
@@ -94,14 +215,8 @@ func MustLoad(path string) *Config {
 // LoadFromString parses configuration from a YAML string.
 // Useful for testing.
 func LoadFromString(content string) (*Config, error) {
-	// Expand environment variables
-	expanded := expandEnvVars(content)
-
-	// Start with defaults
-	cfg := Default()
-
-	// Parse YAML
-	if err := yaml.Unmarshal([]byte(expanded), &cfg); err != nil {
+	cfg, err := unmarshalConfig([]byte(content))
+	if err != nil {
 		return nil, fmt.Errorf("parsing config: %w", err)
 	}
 
@@ -116,9 +231,8 @@ func LoadFromString(content string) (*Config, error) {
 // LoadFromStringNoValidation parses configuration without validation.
 // Useful for testing validation separately.
 func LoadFromStringNoValidation(content string) (*Config, error) {
-	expanded := expandEnvVars(content)
-	cfg := Default()
-	if err := yaml.Unmarshal([]byte(expanded), &cfg); err != nil {
+	cfg, err := unmarshalConfig([]byte(content))
+	if err != nil {
 		return nil, fmt.Errorf("parsing config: %w", err)
 	}
 	return &cfg, nil

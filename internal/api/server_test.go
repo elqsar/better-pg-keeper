@@ -196,10 +196,21 @@ func (m *mockStorage) GetSuggestionByID(ctx context.Context, id int64) (*models.
 
 func (m *mockStorage) DismissSuggestion(ctx context.Context, id int64) error {
 	for i, sug := range m.suggestions {
-		if sug.ID == id {
+		if sug.ID == id && sug.Status == models.StatusActive {
 			m.suggestions[i].Status = models.StatusDismissed
-			now := time.Now()
+			now := time.Now().UTC()
 			m.suggestions[i].DismissedAt = &now
+			return nil
+		}
+	}
+	return nil
+}
+
+func (m *mockStorage) UndismissSuggestion(ctx context.Context, id int64) error {
+	for i, sug := range m.suggestions {
+		if sug.ID == id && sug.Status == models.StatusDismissed {
+			m.suggestions[i].Status = models.StatusActive
+			m.suggestions[i].DismissedAt = nil
 			return nil
 		}
 	}
@@ -214,6 +225,10 @@ func (m *mockStorage) ResolveSuggestion(ctx context.Context, id int64) error {
 		}
 	}
 	return nil
+}
+
+func (m *mockStorage) PurgeOldSuggestions(ctx context.Context, retention time.Duration) (int64, error) {
+	return 0, nil
 }
 
 func (m *mockStorage) SaveExplainPlan(ctx context.Context, plan *models.ExplainPlan) (int64, error) {

@@ -99,15 +99,22 @@ func (n *Node) SeqScans() []SeqScan {
 const maxEqualityColumns = 3
 
 var (
+	// Optional PostgreSQL type cast supporting schema-qualified types,
+	// double-quoted identifiers, multi-word built-ins (character varying,
+	// timestamp with time zone), typmods ((50), (10,2)), and arrays ([]).
+	typeCast = `(?:::(?:(?:"[^"]+"|[A-Za-z_][\w$]*)\.)?(?:"[^"]+"|[A-Za-z_][\w$]*(?: [A-Za-z_][\w$]*)*)(?:\(\d+(?:\s*,\s*\d+)*\))?(?:\[\])?)?`
 	// A column reference, optionally qualified and optionally cast:
-	// status, o.status, "Status", (o.status)::text
-	columnPattern = `\(?((?:"[^"]+"|[A-Za-z_][\w$]*)(?:\.(?:"[^"]+"|[A-Za-z_][\w$]*))?)\)?(?:::[\w ]+(?:\[\])?)?`
-	// A parameter or constant: $1, ($1)::text, 'open'::text, 42, NULL-free.
-	valuePattern = `(?:\(?\$\d+\)?(?:::[\w ]+(?:\[\])?)?|'(?:[^']|'')*'(?:::[\w ]+(?:\[\])?)?|-?\d+(?:\.\d+)?(?:::[\w ]+)?)`
+	// status, o.status, "Status", (o.status)::text, (o.status)::public.order_status
+	columnPattern = `\(?((?:"[^"]+"|[A-Za-z_][\w$]*)(?:\.(?:"[^"]+"|[A-Za-z_][\w$]*))?)\)?` + typeCast
+	// A parameter or constant: $1, ($1)::text, 'open'::text, E'a\'b'::text, 42, true, false.
+	valuePattern = `(?:\(?\$\d+\)?` + typeCast + `|(?:E'(?:[^'\\]|\\.|'')*'|'(?:[^']|'')*')` + typeCast + `|-?\d+(?:\.\d+)?` + typeCast + `|(?i:true|false)` + typeCast + `)`
+	// An ARRAY[...] literal as formatted by PostgreSQL for IN (...) filters:
+	// ARRAY[$1, $2], (ARRAY['open'::character varying, 'closed'::character varying])::text[]
+	arrayValuePattern = `\(?ARRAY\[` + valuePattern + `(?:\s*,\s*` + valuePattern + `)*\]\)?` + typeCast
 
 	comparison = regexp.MustCompile(`^` + columnPattern + `\s*(=|<=|>=|<|>)\s*` + valuePattern + `$`)
-	// col = ANY ($1) or col = ANY ('{a,b}'::text[])
-	anyComparison = regexp.MustCompile(`^` + columnPattern + `\s*=\s*ANY\s*\(` + valuePattern + `\)$`)
+	// col = ANY ($1), col = ANY ('{a,b}'::text[]), or col = ANY (ARRAY[$1, $2])
+	anyComparison = regexp.MustCompile(`^` + columnPattern + `\s*=\s*ANY\s*\((?:` + valuePattern + `|` + arrayValuePattern + `)\)$`)
 	// Reversed comparison: $1 < col
 	reversedComparison = regexp.MustCompile(`^` + valuePattern + `\s*(=|<=|>=|<|>)\s*` + columnPattern + `$`)
 )
@@ -198,22 +205,26 @@ func lastUnquotedDot(s string) int {
 	return last
 }
 
-// splitAnd splits a filter into its top-level AND terms. It reports false when
-// the filter contains a top-level OR, or its parentheses do not balance.
+// splitAnd splits a filter into its top-level AND terms, recursively flattening
+// parenthesized AND groups while preserving nested OR sub-expressions as single
+// unparseable terms. It reports false when the filter contains a top-level OR,
+// or its parentheses/quotes do not balance.
 func splitAnd(filter string) ([]string, bool) {
 	filter = stripParens(strings.TrimSpace(filter))
 	if filter == "" {
 		return nil, false
 	}
 
-	var terms []string
+	var rawTerms []string
 	depth, start := 0, 0
-	inQuote := false
 	for i := 0; i < len(filter); i++ {
 		switch c := filter[i]; {
-		case c == '\'':
-			inQuote = !inQuote
-		case inQuote:
+		case c == '\'' || c == '"':
+			end, ok := advanceQuoted(filter, i)
+			if !ok {
+				return nil, false
+			}
+			i = end
 		case c == '(':
 			depth++
 		case c == ')':
@@ -224,15 +235,27 @@ func splitAnd(filter string) ([]string, bool) {
 		case depth == 0 && hasWordAt(filter, i, " OR "):
 			return nil, false
 		case depth == 0 && hasWordAt(filter, i, " AND "):
-			terms = append(terms, filter[start:i])
+			rawTerms = append(rawTerms, filter[start:i])
 			start = i + len(" AND ")
 			i += len(" AND ") - 1
 		}
 	}
-	if depth != 0 || inQuote {
+	if depth != 0 {
 		return nil, false
 	}
-	terms = append(terms, filter[start:])
+	rawTerms = append(rawTerms, filter[start:])
+	if len(rawTerms) == 1 {
+		return rawTerms, true
+	}
+
+	var terms []string
+	for _, raw := range rawTerms {
+		if sub, ok := splitAnd(raw); ok {
+			terms = append(terms, sub...)
+		} else if trimmed := strings.TrimSpace(raw); trimmed != "" {
+			terms = append(terms, trimmed)
+		}
+	}
 	return terms, true
 }
 
@@ -251,12 +274,14 @@ func stripParens(s string) string {
 // wraps reports whether the opening parenthesis at s[0] closes at the end.
 func wraps(s string) bool {
 	depth := 0
-	inQuote := false
 	for i := 0; i < len(s); i++ {
 		switch c := s[i]; {
-		case c == '\'':
-			inQuote = !inQuote
-		case inQuote:
+		case c == '\'' || c == '"':
+			end, ok := advanceQuoted(s, i)
+			if !ok {
+				return false
+			}
+			i = end
 		case c == '(':
 			depth++
 		case c == ')':
@@ -267,4 +292,43 @@ func wraps(s string) bool {
 		}
 	}
 	return depth == 0
+}
+
+// advanceQuoted advances from the opening quote at s[i] to its matching closing
+// quote, respecting PostgreSQL ” / "" escaping and E'...\” backslash escapes.
+func advanceQuoted(s string, i int) (int, bool) {
+	switch s[i] {
+	case '\'':
+		escape := i > 0 && (s[i-1] == 'E' || s[i-1] == 'e') && (i == 1 || !isPlanIdentChar(s[i-2]))
+		for j := i + 1; j < len(s); j++ {
+			if escape && s[j] == '\\' {
+				j++
+				continue
+			}
+			if s[j] == '\'' {
+				if j+1 < len(s) && s[j+1] == '\'' {
+					j++
+					continue
+				}
+				return j, true
+			}
+		}
+		return -1, false
+	case '"':
+		for j := i + 1; j < len(s); j++ {
+			if s[j] == '"' {
+				if j+1 < len(s) && s[j+1] == '"' {
+					j++
+					continue
+				}
+				return j, true
+			}
+		}
+		return -1, false
+	}
+	return i, true
+}
+
+func isPlanIdentChar(b byte) bool {
+	return (b >= 'a' && b <= 'z') || (b >= 'A' && b <= 'Z') || (b >= '0' && b <= '9') || b == '_' || b == '$'
 }

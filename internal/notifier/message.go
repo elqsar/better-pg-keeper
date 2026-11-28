@@ -190,23 +190,28 @@ func severityEmoji(s string) string {
 	}
 }
 
+func renderDigestItems(b *strings.Builder, items []Item, total int, f format) {
+	if total == 0 {
+		b.WriteString("None\n")
+		return
+	}
+	shown := min(len(items), maxListed)
+	for _, it := range items[:shown] {
+		b.WriteString("• " + itemLine(it, f) + "\n")
+	}
+	if more := total - shown; more > 0 {
+		fmt.Fprintf(b, "…and %d more\n", more)
+	}
+}
+
 func renderDigest(b *strings.Builder, d *Digest, f format) {
 	fmt.Fprintf(b, "Active issues: %d critical, %d warning, %d info\n", d.Critical, d.Warning, d.Info)
 
 	fmt.Fprintf(b, "\n%s\n", f.bold(fmt.Sprintf("New in this period (%d)", d.NewTotal)))
-	if d.NewTotal == 0 {
-		b.WriteString("None\n")
-	}
-	renderItems(b, d.New, f)
-	if more := d.NewTotal - len(d.New); more > 0 && len(d.New) < maxListed {
-		fmt.Fprintf(b, "…and %d more\n", more)
-	}
+	renderDigestItems(b, d.New, d.NewTotal, f)
 
 	fmt.Fprintf(b, "\n%s\n", f.bold(fmt.Sprintf("Resolved in this period (%d)", d.ResolvedTotal)))
-	renderItems(b, d.Resolved, f)
-	if more := d.ResolvedTotal - len(d.Resolved); more > 0 && len(d.Resolved) < maxListed {
-		fmt.Fprintf(b, "…and %d more\n", more)
-	}
+	renderDigestItems(b, d.Resolved, d.ResolvedTotal, f)
 
 	if len(d.TopQueries) > 0 {
 		fmt.Fprintf(b, "\n%s\n", f.bold("Top queries by total execution time"))

@@ -109,7 +109,7 @@ func (s *SQLiteStorage) GetConnectionPeak(ctx context.Context, instanceID int64,
 		  AND ca.max_connections > 0
 		ORDER BY CAST(ca.total_connections AS REAL) / ca.max_connections DESC, s.captured_at DESC
 		LIMIT 1
-	`, instanceID, since.Round(0), until.Round(0)).Scan(
+	`, instanceID, utcTime(since), utcTime(until)).Scan(
 		&peak.CapturedAt, &peak.TotalConnections, &peak.IdleCount, &peak.MaxConnections,
 	)
 	if errors.Is(err, sql.ErrNoRows) {

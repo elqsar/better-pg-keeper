@@ -212,6 +212,95 @@ server:
 	}
 }
 
+func TestLoadFromString_EnvVarSafetyAndTypes(t *testing.T) {
+	trickyPasswords := []struct {
+		name  string
+		value string
+	}{
+		{"hash comment", "abc # not a comment"},
+		{"colon space", "user: pass"},
+		{"quotes", `p"a's`},
+		{"yaml alias star", "*notanalias"},
+		{"yaml anchor amp", "&notananchor"},
+		{"newline injection attempt", "secret\n  sslmode: disable"},
+		{"leading zeros numeric", "01234"},
+		{"boolean string", "true"},
+		{"null string", "null"},
+	}
+
+	for _, tc := range trickyPasswords {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Setenv("TEST_TRICKY_PW", tc.value)
+			t.Setenv("TEST_TOKEN", "tok: #val")
+			cfgYAML := `
+postgres:
+  host: localhost
+  database: mydb
+  user: myuser
+  password: ${TEST_TRICKY_PW}
+server:
+  auth:
+    enabled: true
+    username: admin
+    password: ${TEST_TRICKY_PW}
+notifications:
+  enabled: true
+  channels:
+    - type: webhook
+      url: https://hooks.example.com/notify
+      headers:
+        Authorization: Bearer ${TEST_TOKEN}
+`
+			cfg, err := LoadFromString(cfgYAML)
+			if err != nil {
+				t.Fatalf("LoadFromString failed for %q: %v", tc.value, err)
+			}
+			if cfg.Postgres.Password != tc.value {
+				t.Errorf("Postgres.Password = %q, want %q", cfg.Postgres.Password, tc.value)
+			}
+			if cfg.Server.Auth.Password != tc.value {
+				t.Errorf("Server.Auth.Password = %q, want %q", cfg.Server.Auth.Password, tc.value)
+			}
+			if cfg.Postgres.SSLMode != "prefer" {
+				t.Errorf("SSLMode was altered to %q (YAML injection!)", cfg.Postgres.SSLMode)
+			}
+			if got := cfg.Notifications.Channels[0].Headers["Authorization"]; got != "Bearer tok: #val" {
+				t.Errorf("Authorization header = %q, want %q", got, "Bearer tok: #val")
+			}
+		})
+	}
+
+	t.Run("unquoted non-string scalars and empty defaults", func(t *testing.T) {
+		t.Setenv("TEST_PG_PORT", "5433")
+		t.Setenv("TEST_AUTH_ENABLED", "false")
+		t.Setenv("TEST_UNSET_PORT", "")
+		cfgYAML := `
+postgres:
+  host: localhost
+  port: ${TEST_PG_PORT:-5432}
+  database: mydb
+  user: myuser
+server:
+  port: ${TEST_UNSET_PORT}
+  auth:
+    enabled: ${TEST_AUTH_ENABLED:-true}
+`
+		cfg, err := LoadFromString(cfgYAML)
+		if err != nil {
+			t.Fatalf("LoadFromString: %v", err)
+		}
+		if cfg.Postgres.Port != 5433 {
+			t.Errorf("Postgres.Port = %d, want 5433", cfg.Postgres.Port)
+		}
+		if cfg.Server.Port != 8080 {
+			t.Errorf("Server.Port = %d, want default 8080 when env empty", cfg.Server.Port)
+		}
+		if cfg.Server.Auth.Enabled {
+			t.Errorf("Server.Auth.Enabled = true, want false")
+		}
+	})
+}
+
 func TestValidation_RequiredFields(t *testing.T) {
 	tests := []struct {
 		name          string
@@ -579,6 +668,24 @@ server:
 	}
 	if !containsField(err.Error(), "sslmode") {
 		t.Errorf("expected error about sslmode, got: %v", err)
+	}
+}
+
+func TestValidation_VerifySSLModes(t *testing.T) {
+	for _, mode := range []string{"disable", "allow", "prefer", "require", "verify-ca", "verify-full"} {
+		yaml := `
+postgres:
+  host: localhost
+  database: mydb
+  user: myuser
+  sslmode: ` + mode + `
+server:
+  auth:
+    enabled: false
+`
+		if _, err := LoadFromString(yaml); err != nil {
+			t.Errorf("sslmode %q should be valid, got error: %v", mode, err)
+		}
 	}
 }
 

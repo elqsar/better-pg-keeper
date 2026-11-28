@@ -184,6 +184,29 @@ func TestConfigurationRule_UnobservedTargets(t *testing.T) {
 	if got := rule.UnobservedTargets(a); len(got) != 1 || got[0] != "setting:shared_buffers" {
 		t.Errorf("unobserved = %v, want [setting:shared_buffers]", got)
 	}
+	// When outage-risk is usable but its "size" check failed, shared_buffers must
+	// also be marked unobserved so an active finding is not falsely resolved.
+	a.Risk = &analyzer.RiskAnalysis{OutageRisk: &models.OutageRisk{
+		Unavailable: map[string]string{"size": "permission denied"},
+	}}
+	if got := rule.UnobservedTargets(a); len(got) != 1 || got[0] != "setting:shared_buffers" {
+		t.Errorf("unobserved with size unavailable = %v, want [setting:shared_buffers]", got)
+	}
+	// When DomainOutageRisk is stale, sharedBuffers must not emit using stale ClusterSize.
+	staleSB := settingsAnalysis(withSBValue("16384"))
+	staleSB.Coverage[analyzer.DomainOutageRisk] = analyzer.DomainCoverage{Present: true, Stale: true}
+	staleSB.Risk = &analyzer.RiskAnalysis{OutageRisk: &models.OutageRisk{ClusterSize: 50 << 30}}
+	if got := severities(t, rule, staleSB); got["setting:shared_buffers"] != "" {
+		t.Errorf("stale outage_risk emitted shared_buffers: %v", got)
+	}
+}
+
+func withSBValue(value string) *models.ServerSettings {
+	set := tunedSettings()
+	sb := set["shared_buffers"]
+	sb.Setting = value
+	set["shared_buffers"] = sb
+	return &models.ServerSettings{Settings: set}
 }
 
 func TestStatStatementsCapacityRule(t *testing.T) {

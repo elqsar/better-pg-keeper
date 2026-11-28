@@ -47,15 +47,34 @@ func (n *Notifier) maybeSendDigest(ctx context.Context) error {
 	if err := n.deliver(ctx, msg); err != nil {
 		return err
 	}
-	return n.storage.SetNotifierTime(ctx, n.instanceID, digestSlotKey, slot)
+	saveCtx, cancel := persistCtx()
+	defer cancel()
+	return n.storage.SetNotifierTime(saveCtx, n.instanceID, digestSlotKey, slot)
+}
+
+// slotOnDay builds the scheduled digest time for calendar day y-m-d at hour
+// in day's location. On a spring-forward DST day when wall-clock hour does not
+// exist (e.g. 02:00 -> 03:00), Go's time.Date normalizes backward to hour-1;
+// advancing past the gap lands on the first valid instant after the skipped
+// hour instead of firing an hour early or shifting adjacent days.
+func slotOnDay(day time.Time, hour int) time.Time {
+	t := time.Date(day.Year(), day.Month(), day.Day(), hour, 0, 0, 0, day.Location())
+	if t.Hour() < hour {
+		t = t.Add(time.Duration(hour-t.Hour()) * time.Hour)
+	}
+	return t
 }
 
 // lastDigestSlot returns the most recent scheduled digest time at or before now,
 // in now's location.
 func lastDigestSlot(d config.DigestConfig, now time.Time) (time.Time, error) {
-	slot := time.Date(now.Year(), now.Month(), now.Day(), d.Hour, 0, 0, 0, now.Location())
+	// Anchor calendar stepping at local noon so AddDate(0, 0, -1) never lands
+	// on a midnight DST boundary.
+	day := time.Date(now.Year(), now.Month(), now.Day(), 12, 0, 0, 0, now.Location())
+	slot := slotOnDay(day, d.Hour)
 	if slot.After(now) {
-		slot = slot.AddDate(0, 0, -1)
+		day = day.AddDate(0, 0, -1)
+		slot = slotOnDay(day, d.Hour)
 	}
 	if d.Schedule != "weekly" {
 		return slot, nil
@@ -64,17 +83,20 @@ func lastDigestSlot(d config.DigestConfig, now time.Time) (time.Time, error) {
 	if err != nil {
 		return time.Time{}, err
 	}
-	for slot.Weekday() != weekday {
-		slot = slot.AddDate(0, 0, -1)
+	for day.Weekday() != weekday {
+		day = day.AddDate(0, 0, -1)
 	}
-	return slot, nil
+	return slotOnDay(day, d.Hour), nil
 }
 
 func previousSlot(d config.DigestConfig, slot time.Time) time.Time {
+	day := time.Date(slot.Year(), slot.Month(), slot.Day(), 12, 0, 0, 0, slot.Location())
 	if d.Schedule == "weekly" {
-		return slot.AddDate(0, 0, -7)
+		day = day.AddDate(0, 0, -7)
+	} else {
+		day = day.AddDate(0, 0, -1)
 	}
-	return slot.AddDate(0, 0, -1)
+	return slotOnDay(day, d.Hour)
 }
 
 // buildDigest summarises issues and query load between since and now.

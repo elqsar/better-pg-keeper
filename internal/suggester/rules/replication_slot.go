@@ -138,6 +138,15 @@ func (r *ReplicationSlotRule) evaluateReplica(replica models.ReplicaLag) *sugges
 	if name == "" {
 		name = replica.ClientAddr
 	}
+	target := replica.ApplicationName
+	switch {
+	case replica.ApplicationName != "" && replica.ClientAddr != "":
+		target = replica.ApplicationName + "@" + replica.ClientAddr
+	case replica.ClientAddr != "":
+		target = replica.ClientAddr
+	case target == "":
+		target = "unknown"
+	}
 
 	var desc strings.Builder
 	fmt.Fprintf(&desc, "Standby `%s` (%s, state %s) is %.0f seconds behind in replaying WAL.\n\n", name, replica.ClientAddr, replica.State, lag)
@@ -153,7 +162,7 @@ func (r *ReplicationSlotRule) evaluateReplica(replica models.ReplicaLag) *sugges
 		Severity:     suggester.SeverityWarning,
 		Title:        fmt.Sprintf("Standby %s is %.0fs behind", name, lag),
 		Description:  desc.String(),
-		TargetObject: "replica:" + name,
+		TargetObject: "replica:" + target,
 		Metadata: map[string]any{
 			"application_name":   replica.ApplicationName,
 			"client_addr":        replica.ClientAddr,

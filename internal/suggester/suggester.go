@@ -166,7 +166,7 @@ func (s *Suggester) Suggest(ctx context.Context, analysis *analyzer.AnalysisResu
 	// skipped or failed rule, "not detected" means "not looked for".
 	for key, sug := range existingMap {
 		if !stillActive[key] {
-			if !resolvableRules[sug.RuleID] || hasAnyPrefix(sug.TargetObject, unobserved[sug.RuleID]) {
+			if !resolvableRules[sug.RuleID] || matchesUnobserved(sug.TargetObject, unobserved[sug.RuleID]) {
 				continue
 			}
 			// This issue is no longer detected, mark as resolved
@@ -199,9 +199,16 @@ func describeCoverage(analysis *analyzer.AnalysisResult, domains []string) strin
 	return strings.Join(parts, ", ")
 }
 
-func hasAnyPrefix(s string, prefixes []string) bool {
-	for _, p := range prefixes {
-		if strings.HasPrefix(s, p) {
+// matchesUnobserved reports whether target is hidden by any unobserved entry.
+// Entries ending in ":" match all targets with that prefix (e.g. "slot:",
+// "vacuum:"); all other entries match only the exact target.
+func matchesUnobserved(target string, patterns []string) bool {
+	for _, p := range patterns {
+		if strings.HasSuffix(p, ":") {
+			if strings.HasPrefix(target, p) {
+				return true
+			}
+		} else if target == p {
 			return true
 		}
 	}
@@ -251,13 +258,24 @@ func (s *Suggester) GetSuggestionStats(ctx context.Context, instanceID int64) (*
 	return stats, nil
 }
 
-// CleanupOldResolved marks old resolved suggestions for cleanup.
-// This is useful for housekeeping - suggestions that have been resolved
-// for longer than the retention period can be purged.
+type suggestionPurger interface {
+	PurgeOldSuggestions(ctx context.Context, retention time.Duration) (int64, error)
+}
+
+// CleanupOldResolved removes resolved and dismissed suggestions older than
+// retentionDays when the backing storage supports purging.
 func (s *Suggester) CleanupOldResolved(ctx context.Context, instanceID int64, retentionDays int) (int, error) {
-	// Note: This would require additional storage methods to implement.
-	// For now, this is a placeholder for future implementation.
-	_ = retentionDays
-	_ = time.Now() // Would use for comparison with last_seen_at
-	return 0, nil
+	_ = instanceID
+	if retentionDays <= 0 {
+		return 0, nil
+	}
+	purger, ok := s.storage.(suggestionPurger)
+	if !ok {
+		return 0, nil
+	}
+	purged, err := purger.PurgeOldSuggestions(ctx, time.Duration(retentionDays)*24*time.Hour)
+	if err != nil {
+		return 0, err
+	}
+	return int(purged), nil
 }

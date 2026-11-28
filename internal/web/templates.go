@@ -50,7 +50,6 @@ func NewTemplateRenderer() (*TemplateRenderer, error) {
 		"severityBadgeClass":    severityBadgeClass,
 		"suggestionCardClass":   suggestionCardClass,
 		"dict":                  dict,
-		"eq":                    eq,
 		"formatDurationSec":     formatDurationSec,
 		"formatMs":              verify.FormatMs,
 		"formatSpan":            formatSpan,
@@ -312,11 +311,6 @@ func dict(values ...interface{}) map[string]interface{} {
 		d[key] = values[i+1]
 	}
 	return d
-}
-
-// eq compares two values for equality.
-func eq(a, b interface{}) bool {
-	return a == b
 }
 
 // formatSpan renders a window length in whole hours or days, e.g. "24h" or "7 days".

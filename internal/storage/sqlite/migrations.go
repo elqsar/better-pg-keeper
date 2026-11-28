@@ -176,6 +176,12 @@ func Migrate(ctx context.Context, db *sql.DB) error {
 				return fmt.Errorf("backfilling query history: %w", err)
 			}
 		}
+		if m.Version == 24 {
+			if err := normalizeTimestampsUTC(ctx, tx); err != nil {
+				tx.Rollback()
+				return fmt.Errorf("normalizing timestamps to UTC: %w", err)
+			}
+		}
 
 		if _, err := tx.ExecContext(ctx, `INSERT INTO _migrations (version, name) VALUES (?, ?)`,
 			m.Version, m.Name); err != nil {
@@ -236,6 +242,74 @@ func backfillQueryHistory(ctx context.Context, tx *sql.Tx) error {
 		}
 	}
 	return rows.Err()
+}
+
+// normalizeTimestampsUTC rewrites existing text timestamps stored in local time
+// to UTC without monotonic suffixes so lexicographical SQLite comparisons and
+// ordering remain accurate across timezones and DST transitions.
+func normalizeTimestampsUTC(ctx context.Context, tx *sql.Tx) error {
+	// Tables keyed by integer rowid with text timestamp columns.
+	targets := []struct {
+		table string
+		cols  []string
+	}{
+		{"snapshots", []string{"captured_at", "created_at"}},
+		{"snapshot_collectors", []string{"collected_at"}},
+		{"suggestions", []string{"first_seen_at", "last_seen_at", "dismissed_at", "resolved_at"}},
+		{"explain_plans", []string{"captured_at"}},
+		{"notification_state", []string{"notified_at", "cleared_at"}},
+	}
+
+	for _, target := range targets {
+		for _, col := range target.cols {
+			rows, err := tx.QueryContext(ctx, fmt.Sprintf(
+				`SELECT rowid, %s FROM %s WHERE %s IS NOT NULL`, col, target.table, col,
+			))
+			if err != nil {
+				return fmt.Errorf("reading %s.%s: %w", target.table, col, err)
+			}
+
+			type rowUpdate struct {
+				rowid int64
+				val   time.Time
+			}
+			var updates []rowUpdate
+			for rows.Next() {
+				var rowid int64
+				var t sql.NullTime
+				if err := rows.Scan(&rowid, &t); err != nil {
+					rows.Close()
+					return fmt.Errorf("scanning %s.%s: %w", target.table, col, err)
+				}
+				if t.Valid {
+					updates = append(updates, rowUpdate{rowid: rowid, val: utcTime(t.Time)})
+				}
+			}
+			if err := rows.Err(); err != nil {
+				rows.Close()
+				return fmt.Errorf("iterating %s.%s: %w", target.table, col, err)
+			}
+			rows.Close()
+
+			if len(updates) == 0 {
+				continue
+			}
+			stmt, err := tx.PrepareContext(ctx, fmt.Sprintf(
+				`UPDATE %s SET %s = ? WHERE rowid = ?`, target.table, col,
+			))
+			if err != nil {
+				return fmt.Errorf("preparing %s.%s update: %w", target.table, col, err)
+			}
+			for _, u := range updates {
+				if _, err := stmt.ExecContext(ctx, u.val, u.rowid); err != nil {
+					stmt.Close()
+					return fmt.Errorf("updating %s.%s: %w", target.table, col, err)
+				}
+			}
+			stmt.Close()
+		}
+	}
+	return nil
 }
 
 // Rollback rolls back the last applied migration.

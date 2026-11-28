@@ -39,9 +39,18 @@ func (r *HighTempUsageRule) RequiredDomains() []string {
 	return []string{analyzer.DomainDatabaseStats}
 }
 
-// Evaluate analyzes temp file usage and generates suggestions.
+// UnobservedTargets preserves active temp-usage suggestions when no baseline
+// snapshot is available to compute a recent window delta.
+func (r *HighTempUsageRule) UnobservedTargets(analysis *analyzer.AnalysisResult) []string {
+	if analysis == nil || analysis.TransactionStats == nil || !analysis.TransactionStats.BaselineObserved {
+		return []string{"database:temp_usage"}
+	}
+	return nil
+}
+
+// Evaluate analyzes temp file usage over the recent window and generates suggestions.
 func (r *HighTempUsageRule) Evaluate(ctx context.Context, analysis *analyzer.AnalysisResult) ([]suggester.Suggestion, error) {
-	if analysis == nil || analysis.TransactionStats == nil {
+	if analysis == nil || analysis.TransactionStats == nil || !analysis.TransactionStats.BaselineObserved {
 		return nil, nil
 	}
 
@@ -59,7 +68,11 @@ func (r *HighTempUsageRule) Evaluate(ctx context.Context, analysis *analyzer.Ana
 	title := fmt.Sprintf("High temp file usage: %s", formatTempBytes(stats.TempBytes))
 
 	var desc strings.Builder
-	fmt.Fprintf(&desc, "Database has used %s of temporary files.\n\n", formatTempBytes(stats.TempBytes))
+	if stats.Window > 0 {
+		fmt.Fprintf(&desc, "Database has written %s of temporary files over the last %s.\n\n", formatTempBytes(stats.TempBytes), formatShortDuration(stats.Window))
+	} else {
+		fmt.Fprintf(&desc, "Database has used %s of temporary files.\n\n", formatTempBytes(stats.TempBytes))
+	}
 	desc.WriteString("**Statistics:**\n")
 	fmt.Fprintf(&desc, "- Temp files created: %d\n", stats.TempFiles)
 	fmt.Fprintf(&desc, "- Temp bytes written: %s\n\n", formatTempBytes(stats.TempBytes))
@@ -117,5 +130,6 @@ func formatTempBytes(bytes int64) string {
 	}
 }
 
-// Ensure HighTempUsageRule implements Rule interface.
+// Ensure HighTempUsageRule implements Rule and PartiallyObserved interfaces.
 var _ suggester.Rule = (*HighTempUsageRule)(nil)
+var _ suggester.PartiallyObserved = (*HighTempUsageRule)(nil)

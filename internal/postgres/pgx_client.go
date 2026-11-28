@@ -6,13 +6,16 @@ import (
 	"errors"
 	"fmt"
 	"log"
+	"math"
 	"net"
 	"net/url"
+	"sort"
 	"strconv"
 	"strings"
 	"time"
 
 	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	"github.com/elqsar/pganalyzer/internal/models"
@@ -138,7 +141,7 @@ func (c *PgxClient) GetStatStatements(ctx context.Context) ([]models.QueryStat, 
 			sum(calls) AS calls,
 			sum(total_exec_time) AS total_exec_time,
 			COALESCE(sum(total_exec_time) / nullif(sum(calls), 0), 0) AS mean_exec_time,
-			min(min_exec_time) AS min_exec_time,
+			COALESCE(min(min_exec_time) FILTER (WHERE calls > 0), 0) AS min_exec_time,
 			max(max_exec_time) AS max_exec_time,
 			sum(rows) AS rows,
 			sum(shared_blks_hit) AS shared_blks_hit,
@@ -147,6 +150,7 @@ func (c *PgxClient) GetStatStatements(ctx context.Context) ([]models.QueryStat, 
 			sum(COALESCE(total_plan_time, 0)) AS total_plan_time
 		FROM pg_stat_statements
 		WHERE dbid = (SELECT oid FROM pg_database WHERE datname = current_database())
+		  AND queryid IS NOT NULL
 		GROUP BY queryid
 	`
 
@@ -292,8 +296,8 @@ func (c *PgxClient) GetStatIndexes(ctx context.Context) ([]models.IndexStat, err
 			), ''),
 			COALESCE(pg_get_expr(i.indexprs, i.indrelid), ''),
 			COALESCE(pg_get_expr(i.indpred, i.indrelid), ''),
-			-- A non-partial index whose leading key columns are exactly a foreign
-			-- key's columns serves that FK's lookups on delete/update.
+			-- A non-partial btree/hash index whose leading key columns are exactly
+			-- a foreign key's columns serves that FK's lookups on delete/update.
 			EXISTS (
 				SELECT 1
 				FROM pg_constraint c,
@@ -303,6 +307,7 @@ func (c *PgxClient) GetStatIndexes(ctx context.Context) ([]models.IndexStat, err
 						WHERE k.ord <= cardinality(c.conkey)
 					) l
 				WHERE c.contype = 'f' AND c.conrelid = i.indrelid AND i.indpred IS NULL
+					AND am.amname IN ('btree', 'hash')
 					AND cardinality(c.conkey) <= i.indnkeyatts
 					AND l.lead @> c.conkey AND l.lead <@ c.conkey
 			),
@@ -314,6 +319,7 @@ func (c *PgxClient) GetStatIndexes(ctx context.Context) ([]models.IndexStat, err
 		JOIN pg_index i ON s.indexrelid = i.indexrelid
 		JOIN pg_class ic ON ic.oid = s.indexrelid
 		JOIN pg_am am ON am.oid = ic.relam
+		WHERE i.indisvalid
 	`
 
 	rows, err := c.pool.Query(ctx, query)
@@ -368,7 +374,7 @@ func (c *PgxClient) GetDatabaseStats(ctx context.Context) (*models.DatabaseStats
 			datname,
 			blks_hit,
 			blks_read,
-			COALESCE(ROUND(100.0 * blks_hit / NULLIF(blks_hit + blks_read, 0), 2), 0) as cache_hit_ratio
+			COALESCE(ROUND(100.0 * blks_hit / NULLIF(blks_hit + blks_read, 0), 2), 100) as cache_hit_ratio
 		FROM pg_stat_database
 		WHERE datname = current_database()
 	`
@@ -498,74 +504,284 @@ func (c *PgxClient) GetIndexDetails(ctx context.Context) ([]models.IndexDetail, 
 	return details, nil
 }
 
-// isWriteQuery checks if a query modifies data.
-func isWriteQuery(query string) bool {
-	upper := strings.ToUpper(strings.TrimSpace(query))
-	writeKeywords := []string{"INSERT", "UPDATE", "DELETE", "TRUNCATE", "DROP", "ALTER", "CREATE"}
-	for _, keyword := range writeKeywords {
-		if strings.HasPrefix(upper, keyword) {
+const analyzeStatementTimeout = "10s"
+
+// sqlToken represents a lexical token extracted from a SQL string outside
+// comments and quoted literals/identifiers.
+type sqlToken struct {
+	kind string // "word", "semi", "lparen", "other"
+	text string // uppercased text for "word"
+}
+
+// tokenizeSQL extracts non-comment, non-literal tokens from PostgreSQL SQL.
+// It understands single-line comments (--), nested block comments (/* */),
+// single-quoted strings (including E'...' backslash escapes), double-quoted
+// identifiers, and dollar-quoted strings ($tag$...$tag$).
+func tokenizeSQL(query string) []sqlToken {
+	var tokens []sqlToken
+	n := len(query)
+	i := 0
+
+	for i < n {
+		ch := query[i]
+
+		// Whitespace
+		if ch == ' ' || ch == '\t' || ch == '\r' || ch == '\n' || ch == '\f' {
+			i++
+			continue
+		}
+
+		// Line comment: -- ...\n
+		if ch == '-' && i+1 < n && query[i+1] == '-' {
+			i += 2
+			for i < n && query[i] != '\n' {
+				i++
+			}
+			continue
+		}
+
+		// Nested block comment: /* ... */
+		if ch == '/' && i+1 < n && query[i+1] == '*' {
+			depth := 1
+			i += 2
+			for i < n && depth > 0 {
+				if query[i] == '/' && i+1 < n && query[i+1] == '*' {
+					depth++
+					i += 2
+				} else if query[i] == '*' && i+1 < n && query[i+1] == '/' {
+					depth--
+					i += 2
+				} else {
+					i++
+				}
+			}
+			continue
+		}
+
+		// Escape string literal: E'...' or e'...'
+		if (ch == 'E' || ch == 'e') && i+1 < n && query[i+1] == '\'' {
+			i += 2
+			for i < n {
+				if query[i] == '\\' && i+1 < n {
+					i += 2
+					continue
+				}
+				if query[i] == '\'' {
+					i++
+					if i < n && query[i] == '\'' {
+						i++
+						continue
+					}
+					break
+				}
+				i++
+			}
+			tokens = append(tokens, sqlToken{kind: "other"})
+			continue
+		}
+
+		// Single-quoted string literal
+		if ch == '\'' {
+			i++
+			for i < n {
+				if query[i] == '\'' {
+					i++
+					if i < n && query[i] == '\'' {
+						i++
+						continue
+					}
+					break
+				}
+				i++
+			}
+			tokens = append(tokens, sqlToken{kind: "other"})
+			continue
+		}
+
+		// Double-quoted identifier
+		if ch == '"' {
+			i++
+			for i < n {
+				if query[i] == '"' {
+					i++
+					if i < n && query[i] == '"' {
+						i++
+						continue
+					}
+					break
+				}
+				i++
+			}
+			tokens = append(tokens, sqlToken{kind: "other"})
+			continue
+		}
+
+		// Dollar-quoted string: $tag$...$tag$ (not positional $1)
+		if ch == '$' {
+			end := i + 1
+			validTag := false
+			if end < n && query[end] == '$' {
+				validTag = true
+			} else if end < n && isSQLIdentStart(query[end]) {
+				end++
+				for end < n && (isSQLIdentStart(query[end]) || (query[end] >= '0' && query[end] <= '9')) {
+					end++
+				}
+				validTag = end < n && query[end] == '$'
+			}
+			if validTag {
+				tag := query[i : end+1]
+				i = end + 1
+				if closeIdx := strings.Index(query[i:], tag); closeIdx >= 0 {
+					i += closeIdx + len(tag)
+				} else {
+					i = n
+				}
+				tokens = append(tokens, sqlToken{kind: "other"})
+				continue
+			}
+		}
+
+		if ch == ';' {
+			tokens = append(tokens, sqlToken{kind: "semi"})
+			i++
+			continue
+		}
+
+		if ch == '(' {
+			tokens = append(tokens, sqlToken{kind: "lparen"})
+			i++
+			continue
+		}
+
+		if isSQLIdentStart(ch) {
+			start := i
+			i++
+			for i < n && isSQLIdentPart(query[i]) {
+				i++
+			}
+			tokens = append(tokens, sqlToken{
+				kind: "word",
+				text: strings.ToUpper(query[start:i]),
+			})
+			continue
+		}
+
+		tokens = append(tokens, sqlToken{kind: "other"})
+		i++
+	}
+
+	return tokens
+}
+
+func isSQLIdentStart(b byte) bool {
+	return (b >= 'a' && b <= 'z') || (b >= 'A' && b <= 'Z') || b == '_'
+}
+
+func isSQLIdentPart(b byte) bool {
+	return isSQLIdentStart(b) || (b >= '0' && b <= '9') || b == '$'
+}
+
+// hasMultipleStatements reports whether query contains more than one SQL
+// statement (an unquoted semicolon followed by additional tokens).
+func hasMultipleStatements(query string) bool {
+	tokens := tokenizeSQL(query)
+	for i, tok := range tokens {
+		if tok.kind == "semi" && i < len(tokens)-1 {
 			return true
 		}
 	}
 	return false
 }
 
-// Explain runs EXPLAIN on a query and returns the execution plan.
-func (c *PgxClient) Explain(ctx context.Context, query string, analyze bool) (*models.ExplainPlan, error) {
-	if c.pool == nil {
-		return nil, fmt.Errorf("postgres: not connected")
-	}
+var writeCommandKeywords = map[string]bool{
+	"INSERT":   true,
+	"UPDATE":   true,
+	"DELETE":   true,
+	"TRUNCATE": true,
+	"DROP":     true,
+	"ALTER":    true,
+	"CREATE":   true,
+	"MERGE":    true,
+	"COPY":     true,
+	"CALL":     true,
+	"DO":       true,
+	"GRANT":    true,
+	"REVOKE":   true,
+	"VACUUM":   true,
+	"REINDEX":  true,
+	"CLUSTER":  true,
+	"LOCK":     true,
+	"REFRESH":  true,
+}
 
-	// Never auto-analyze write queries
-	if analyze && isWriteQuery(query) {
-		return nil, fmt.Errorf("postgres: cannot use ANALYZE on write queries (INSERT/UPDATE/DELETE)")
-	}
+var cteWriteKeywords = map[string]bool{
+	"INSERT": true,
+	"UPDATE": true,
+	"DELETE": true,
+	"MERGE":  true,
+}
 
-	var explainQuery string
-	if analyze {
-		// Use a statement timeout for ANALYZE to prevent long-running queries
-		explainQuery = fmt.Sprintf("EXPLAIN (ANALYZE, BUFFERS, VERBOSE, SETTINGS, FORMAT JSON) %s", query)
-	} else {
-		explainQuery = fmt.Sprintf("EXPLAIN (BUFFERS, VERBOSE, SETTINGS, FORMAT JSON) %s", query)
-	}
-
-	rows, err := c.pool.Query(ctx, explainQuery)
-	if err != nil {
-		return nil, fmt.Errorf("postgres: failed to explain query: %w", err)
-	}
-	defer rows.Close()
-
-	var planParts []string
-	for rows.Next() {
-		var part string
-		if err := rows.Scan(&part); err != nil {
-			return nil, fmt.Errorf("postgres: failed to scan explain result: %w", err)
+// isWriteQuery reports whether a query modifies data, runs a utility/DDL
+// command, or contains multiple statements.
+func isWriteQuery(query string) bool {
+	tokens := tokenizeSQL(query)
+	for i, tok := range tokens {
+		if tok.kind == "semi" && i < len(tokens)-1 {
+			return true
 		}
-		planParts = append(planParts, part)
 	}
 
-	if err := rows.Err(); err != nil {
-		return nil, fmt.Errorf("postgres: error iterating explain results: %w", err)
+	idx := 0
+	for idx < len(tokens) && tokens[idx].kind == "lparen" {
+		idx++
+	}
+	if idx >= len(tokens) || tokens[idx].kind != "word" {
+		return false
 	}
 
-	planJSON := strings.Join(planParts, "")
+	first := tokens[idx].text
+	if writeCommandKeywords[first] {
+		return true
+	}
 
+	// Data-modifying CTEs: WITH d AS (DELETE ... RETURNING *) SELECT ...
+	if first == "WITH" {
+		for _, tok := range tokens[idx+1:] {
+			if tok.kind == "word" && cteWriteKeywords[tok.text] {
+				return true
+			}
+		}
+	}
+
+	return false
+}
+
+func explainTimeout(analyze bool) string {
+	if analyze {
+		return analyzeStatementTimeout
+	}
+	return planStatementTimeout
+}
+
+func buildExplainPlan(planJSON string, analyze bool) *models.ExplainPlan {
 	plan := &models.ExplainPlan{
 		PlanJSON:   planJSON,
 		CapturedAt: time.Now(),
 	}
 
-	// Parse JSON to extract plan text and execution time
 	var planData []map[string]any
 	if err := json.Unmarshal([]byte(planJSON), &planData); err == nil && len(planData) > 0 {
-		// Generate text representation from JSON
-		if planText, err := json.MarshalIndent(planData, "", "  "); err == nil {
-			plan.PlanText = string(planText)
+		if formatted, err := json.MarshalIndent(planData, "", "  "); err == nil {
+			plan.PlanText = string(formatted)
+		} else {
+			plan.PlanText = planJSON
 		}
 
-		// Extract execution time if ANALYZE was used
 		if analyze {
-			if planInfo, ok := planData[0]["Plan"].(map[string]any); ok {
+			if execTime, ok := planData[0]["Execution Time"].(float64); ok {
+				plan.ExecutionTime = &execTime
+			} else if planInfo, ok := planData[0]["Plan"].(map[string]any); ok {
 				if actualTime, ok := planInfo["Actual Total Time"].(float64); ok {
 					plan.ExecutionTime = &actualTime
 				}
@@ -575,16 +791,63 @@ func (c *PgxClient) Explain(ctx context.Context, query string, analyze bool) (*m
 		plan.PlanText = planJSON
 	}
 
-	return plan, nil
+	return plan
+}
+
+// Explain runs EXPLAIN on a query inside a read-only transaction with timeouts
+// and always rolls back.
+func (c *PgxClient) Explain(ctx context.Context, query string, analyze bool) (*models.ExplainPlan, error) {
+	if hasMultipleStatements(query) {
+		return nil, fmt.Errorf("postgres: cannot explain multiple statements")
+	}
+	if analyze && isWriteQuery(query) {
+		return nil, fmt.Errorf("postgres: cannot use ANALYZE on write queries (INSERT/UPDATE/DELETE)")
+	}
+	if c.pool == nil {
+		return nil, fmt.Errorf("postgres: not connected")
+	}
+
+	tx, err := c.pool.BeginTx(ctx, pgx.TxOptions{AccessMode: pgx.ReadOnly})
+	if err != nil {
+		return nil, fmt.Errorf("postgres: failed to begin explain transaction: %w", err)
+	}
+	defer func() {
+		rbCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		_ = tx.Rollback(rbCtx)
+	}()
+
+	for _, set := range []string{
+		"SET LOCAL statement_timeout = '" + explainTimeout(analyze) + "'",
+		"SET LOCAL lock_timeout = '" + planLockTimeout + "'",
+	} {
+		if _, err := tx.Exec(ctx, set); err != nil {
+			return nil, fmt.Errorf("postgres: %s: %w", set, err)
+		}
+	}
+
+	var explainQuery string
+	if analyze {
+		explainQuery = fmt.Sprintf("EXPLAIN (ANALYZE, BUFFERS, VERBOSE, SETTINGS, FORMAT JSON) %s", query)
+	} else {
+		explainQuery = fmt.Sprintf("EXPLAIN (BUFFERS, VERBOSE, SETTINGS, FORMAT JSON) %s", query)
+	}
+
+	planParts, err := readExplainRows(ctx, tx, explainQuery)
+	if err != nil {
+		return nil, err
+	}
+
+	return buildExplainPlan(strings.Join(planParts, ""), analyze), nil
 }
 
 // readExplainRows runs an EXPLAIN query inside tx and returns its output rows.
 // It closes the result set before returning so the transaction can accept
-// further commands (notably DEALLOCATE) without a "conn busy" error.
+// further commands without a "conn busy" error.
 func readExplainRows(ctx context.Context, tx pgx.Tx, explainQuery string) ([]string, error) {
 	rows, err := tx.Query(ctx, explainQuery)
 	if err != nil {
-		return nil, fmt.Errorf("postgres: failed to explain query with params: %w", err)
+		return nil, fmt.Errorf("postgres: failed to explain query: %w", err)
 	}
 	defer rows.Close()
 
@@ -606,138 +869,133 @@ func readExplainRows(ctx context.Context, tx pgx.Tx, explainQuery string) ([]str
 }
 
 // ExplainWithParams runs EXPLAIN on a query with actual parameter values.
-// It uses PREPARE/EXECUTE to provide parameters safely.
+// It uses a read-only transaction with timeouts on a dedicated connection,
+// always rolls back, and explicitly deallocates the prepared statement (closing
+// the connection if cleanup fails so session state never leaks into the pool).
 func (c *PgxClient) ExplainWithParams(ctx context.Context, query string, params []any, analyze bool) (*models.ExplainPlan, error) {
-	if c.pool == nil {
-		return nil, fmt.Errorf("postgres: not connected")
+	if hasMultipleStatements(query) {
+		return nil, fmt.Errorf("postgres: cannot explain multiple statements")
 	}
-
-	// Never auto-analyze write queries
 	if analyze && isWriteQuery(query) {
 		return nil, fmt.Errorf("postgres: cannot use ANALYZE on write queries (INSERT/UPDATE/DELETE)")
 	}
-
-	// If no params provided, fall back to regular Explain
 	if len(params) == 0 {
 		return c.Explain(ctx, query, analyze)
 	}
 
-	// Generate unique statement name to avoid collisions
-	stmtName := fmt.Sprintf("pganalyzer_explain_%d", time.Now().UnixNano())
+	paramLiterals := make([]string, len(params))
+	for i, p := range params {
+		lit, err := formatSQLLiteral(p)
+		if err != nil {
+			return nil, fmt.Errorf("postgres: invalid parameter $%d: %w", i+1, err)
+		}
+		paramLiterals[i] = lit
+	}
 
-	// Use a transaction to ensure PREPARE and DEALLOCATE are paired
-	tx, err := c.pool.Begin(ctx)
+	if c.pool == nil {
+		return nil, fmt.Errorf("postgres: not connected")
+	}
+
+	conn, err := c.pool.Acquire(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("postgres: acquiring connection: %w", err)
+	}
+
+	stmtName := fmt.Sprintf("pganalyzer_explain_%d", time.Now().UnixNano())
+	var tx pgx.Tx
+	prepared := false
+
+	defer func() {
+		cleanCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		if tx != nil {
+			_ = tx.Rollback(cleanCtx)
+		}
+		if prepared {
+			if _, err := conn.Exec(cleanCtx, "DEALLOCATE "+stmtName); err != nil {
+				var pgErr *pgconn.PgError
+				// 26000 = invalid_sql_statement_name (already absent)
+				if !errors.As(err, &pgErr) || pgErr.Code != "26000" {
+					log.Printf("[postgres] failed to deallocate %s, closing connection to avoid leak: %v", stmtName, err)
+					_ = conn.Conn().Close(cleanCtx)
+				}
+			}
+		}
+		conn.Release()
+	}()
+
+	tx, err = conn.BeginTx(ctx, pgx.TxOptions{AccessMode: pgx.ReadOnly})
 	if err != nil {
 		return nil, fmt.Errorf("postgres: failed to begin transaction: %w", err)
 	}
-	defer tx.Rollback(ctx) //nolint:errcheck // Best effort cleanup on defer
 
-	// PREPARE the statement
+	for _, set := range []string{
+		"SET LOCAL statement_timeout = '" + explainTimeout(analyze) + "'",
+		"SET LOCAL lock_timeout = '" + planLockTimeout + "'",
+	} {
+		if _, err := tx.Exec(ctx, set); err != nil {
+			return nil, fmt.Errorf("postgres: %s: %w", set, err)
+		}
+	}
+
+	// Mark prepared before PREPARE so cleanup still attempts DEALLOCATE if the
+	// caller context cancels right as the server finishes preparing.
+	prepared = true
 	prepareQuery := fmt.Sprintf("PREPARE %s AS %s", stmtName, query)
-	_, err = tx.Exec(ctx, prepareQuery)
-	if err != nil {
+	if _, err := tx.Exec(ctx, prepareQuery); err != nil {
 		return nil, fmt.Errorf("postgres: failed to prepare statement: %w", err)
 	}
 
-	// Build EXPLAIN EXECUTE query with SQL literals
-	// Note: EXECUTE takes literal values, not parameter placeholders
-	var explainOpts string
+	explainOpts := "BUFFERS, VERBOSE, SETTINGS, FORMAT JSON"
 	if analyze {
 		explainOpts = "ANALYZE, BUFFERS, VERBOSE, SETTINGS, FORMAT JSON"
-	} else {
-		explainOpts = "BUFFERS, VERBOSE, SETTINGS, FORMAT JSON"
-	}
-
-	// Format parameters as SQL literals
-	paramLiterals := make([]string, len(params))
-	for i, p := range params {
-		paramLiterals[i] = formatSQLLiteral(p)
 	}
 	explainQuery := fmt.Sprintf("EXPLAIN (%s) EXECUTE %s(%s)",
 		explainOpts, stmtName, strings.Join(paramLiterals, ", "))
 
-	// Execute EXPLAIN (no additional params needed - values are in the SQL)
-	// The rows are drained and closed before DEALLOCATE so the transaction is
-	// free to accept another command.
 	planParts, err := readExplainRows(ctx, tx, explainQuery)
 	if err != nil {
 		return nil, err
 	}
 
-	// DEALLOCATE before COMMIT. PREPARE inside a transaction that commits is
-	// session-scoped, so a statement left behind here would outlive this call on
-	// the pooled connection. Running the cleanup after Commit is not an option:
-	// the transaction is closed by then and the Exec would silently fail.
-	deallocQuery := fmt.Sprintf("DEALLOCATE %s", stmtName)
-	if _, err := tx.Exec(ctx, deallocQuery); err != nil {
-		// Roll back instead of committing so the PREPARE is undone regardless.
-		// The plan itself was already read, so the caller still gets a result.
-		log.Printf("[postgres] failed to deallocate %s, rolling back to avoid leaking it: %v", stmtName, err)
-		if rbErr := tx.Rollback(ctx); rbErr != nil {
-			return nil, fmt.Errorf("postgres: failed to deallocate prepared statement %s: %w", stmtName, err)
-		}
-	} else if err := tx.Commit(ctx); err != nil {
-		return nil, fmt.Errorf("postgres: failed to commit: %w", err)
-	}
-
-	planJSON := strings.Join(planParts, "")
-
-	plan := &models.ExplainPlan{
-		PlanJSON:   planJSON,
-		CapturedAt: time.Now(),
-	}
-
-	// Parse JSON to extract plan text and execution time
-	var planData []map[string]any
-	if err := json.Unmarshal([]byte(planJSON), &planData); err == nil && len(planData) > 0 {
-		// Generate text representation from JSON
-		if planText, err := json.MarshalIndent(planData, "", "  "); err == nil {
-			plan.PlanText = string(planText)
-		}
-
-		// Extract execution time if ANALYZE was used
-		if analyze {
-			if planInfo, ok := planData[0]["Plan"].(map[string]any); ok {
-				if actualTime, ok := planInfo["Actual Total Time"].(float64); ok {
-					plan.ExecutionTime = &actualTime
-				}
-			}
-		}
-	} else {
-		plan.PlanText = planJSON
-	}
-
-	return plan, nil
+	return buildExplainPlan(strings.Join(planParts, ""), analyze), nil
 }
 
 // formatSQLLiteral converts a Go value to a PostgreSQL literal string.
 // This is safe for use in EXECUTE statements where parameter binding isn't available.
-func formatSQLLiteral(v any) string {
+func formatSQLLiteral(v any) (string, error) {
 	if v == nil {
-		return "NULL"
+		return "NULL", nil
 	}
 
 	switch val := v.(type) {
 	case bool:
 		if val {
-			return "TRUE"
+			return "TRUE", nil
 		}
-		return "FALSE"
+		return "FALSE", nil
 	case int, int8, int16, int32, int64, uint, uint8, uint16, uint32, uint64:
-		return fmt.Sprintf("%d", val)
-	case float32, float64:
-		return fmt.Sprintf("%v", val)
+		return fmt.Sprintf("%d", val), nil
+	case float32:
+		f := float64(val)
+		if math.IsNaN(f) || math.IsInf(f, 0) {
+			return "", fmt.Errorf("non-finite float %v", val)
+		}
+		return strconv.FormatFloat(f, 'f', -1, 32), nil
+	case float64:
+		if math.IsNaN(val) || math.IsInf(val, 0) {
+			return "", fmt.Errorf("non-finite float %v", val)
+		}
+		return strconv.FormatFloat(val, 'f', -1, 64), nil
 	case string:
-		// Escape single quotes by doubling them
 		escaped := strings.ReplaceAll(val, "'", "''")
-		return fmt.Sprintf("'%s'", escaped)
+		return fmt.Sprintf("'%s'", escaped), nil
 	case time.Time:
-		return fmt.Sprintf("'%s'::timestamptz", val.Format(time.RFC3339))
+		return fmt.Sprintf("'%s'::timestamptz", val.Format(time.RFC3339)), nil
 	default:
-		// For unknown types, convert to string and escape
 		str := fmt.Sprintf("%v", val)
 		escaped := strings.ReplaceAll(str, "'", "''")
-		return fmt.Sprintf("'%s'", escaped)
+		return fmt.Sprintf("'%s'", escaped), nil
 	}
 }
 
@@ -1006,43 +1264,34 @@ func (c *PgxClient) GetLockStats(ctx context.Context) (*models.LockStats, error)
 	return &stats, nil
 }
 
-// GetBlockedQueries retrieves queries blocked by other transactions.
+// GetBlockedQueries retrieves queries blocked by other transactions using
+// PostgreSQL's pg_blocking_pids(), scoped to the connected database.
 func (c *PgxClient) GetBlockedQueries(ctx context.Context) ([]models.BlockedQuery, error) {
 	if c.pool == nil {
 		return nil, fmt.Errorf("postgres: not connected")
 	}
 
 	query := `
-		SELECT
-			blocked.pid as blocked_pid,
-			COALESCE(blocked.usename, '') as blocked_user,
-			COALESCE(blocked.query, '') as blocked_query,
-			blocked.query_start as blocked_start,
-			EXTRACT(EPOCH FROM (NOW() - blocked.query_start)) as wait_duration_seconds,
-			blocking.pid as blocking_pid,
-			COALESCE(blocking.usename, '') as blocking_user,
-			COALESCE(blocking.query, '') as blocking_query,
-			bl.locktype as lock_type,
-			bl.mode as lock_mode,
-			rel.relname as relation
-		FROM pg_locks bl
-		JOIN pg_stat_activity blocked ON bl.pid = blocked.pid
-		JOIN pg_locks kl ON bl.locktype = kl.locktype
-			AND bl.database IS NOT DISTINCT FROM kl.database
-			AND bl.relation IS NOT DISTINCT FROM kl.relation
-			AND bl.page IS NOT DISTINCT FROM kl.page
-			AND bl.tuple IS NOT DISTINCT FROM kl.tuple
-			AND bl.virtualxid IS NOT DISTINCT FROM kl.virtualxid
-			AND bl.transactionid IS NOT DISTINCT FROM kl.transactionid
-			AND bl.classid IS NOT DISTINCT FROM kl.classid
-			AND bl.objid IS NOT DISTINCT FROM kl.objid
-			AND bl.objsubid IS NOT DISTINCT FROM kl.objsubid
-			AND bl.pid != kl.pid
-		JOIN pg_stat_activity blocking ON kl.pid = blocking.pid
+		SELECT DISTINCT ON (blocked.pid, blocking.pid)
+			blocked.pid AS blocked_pid,
+			COALESCE(blocked.usename, '') AS blocked_user,
+			COALESCE(blocked.query, '') AS blocked_query,
+			COALESCE(blocked.query_start, NOW()) AS blocked_start,
+			COALESCE(EXTRACT(EPOCH FROM (NOW() - blocked.query_start)), 0) AS wait_duration_seconds,
+			blocking.pid AS blocking_pid,
+			COALESCE(blocking.usename, '') AS blocking_user,
+			COALESCE(blocking.query, '') AS blocking_query,
+			COALESCE(bl.locktype, '') AS lock_type,
+			COALESCE(bl.mode, '') AS lock_mode,
+			rel.relname AS relation
+		FROM pg_stat_activity blocked
+		CROSS JOIN LATERAL unnest(pg_blocking_pids(blocked.pid)) AS blocker_pid
+		JOIN pg_stat_activity blocking ON blocking.pid = blocker_pid
+		LEFT JOIN pg_locks bl ON bl.pid = blocked.pid AND NOT bl.granted
 		LEFT JOIN pg_class rel ON bl.relation = rel.oid
-		WHERE NOT bl.granted
-		  AND kl.granted
-		ORDER BY wait_duration_seconds DESC
+			AND bl.database = (SELECT oid FROM pg_database WHERE datname = current_database())
+		WHERE blocked.datname = current_database()
+		ORDER BY blocked.pid, blocking.pid, bl.locktype NULLS LAST
 	`
 
 	rows, err := c.pool.Query(ctx, query)
@@ -1077,32 +1326,43 @@ func (c *PgxClient) GetBlockedQueries(ctx context.Context) ([]models.BlockedQuer
 		return nil, fmt.Errorf("postgres: error iterating blocked queries: %w", err)
 	}
 
+	sort.Slice(queries, func(i, j int) bool {
+		if queries[i].WaitDuration != queries[j].WaitDuration {
+			return queries[i].WaitDuration > queries[j].WaitDuration
+		}
+		if queries[i].BlockedPID != queries[j].BlockedPID {
+			return queries[i].BlockedPID < queries[j].BlockedPID
+		}
+		return queries[i].BlockingPID < queries[j].BlockingPID
+	})
+
 	return queries, nil
 }
 
-// GetExtendedDatabaseStats retrieves extended database statistics.
+// GetExtendedDatabaseStats retrieves extended database statistics including
+// standby recovery conflicts from pg_stat_database_conflicts.
 func (c *PgxClient) GetExtendedDatabaseStats(ctx context.Context) (*models.ExtendedDatabaseStats, error) {
 	if c.pool == nil {
 		return nil, fmt.Errorf("postgres: not connected")
 	}
 
-	// Try query with confl_lock and confl_snapshot columns (PostgreSQL 17+)
-	queryPG17 := `
+	query := `
 		SELECT
-			datname,
-			xact_commit,
-			xact_rollback,
-			COALESCE(temp_files, 0) as temp_files,
-			COALESCE(temp_bytes, 0) as temp_bytes,
-			COALESCE(deadlocks, 0) as deadlocks,
-			COALESCE(confl_lock, 0) as confl_lock,
-			COALESCE(confl_snapshot, 0) as confl_snapshot
-		FROM pg_stat_database
-		WHERE datname = current_database()
+			d.datname,
+			d.xact_commit,
+			d.xact_rollback,
+			COALESCE(d.temp_files, 0) AS temp_files,
+			COALESCE(d.temp_bytes, 0) AS temp_bytes,
+			COALESCE(d.deadlocks, 0) AS deadlocks,
+			COALESCE(c.confl_lock, 0) AS confl_lock,
+			COALESCE(c.confl_snapshot, 0) AS confl_snapshot
+		FROM pg_stat_database d
+		LEFT JOIN pg_stat_database_conflicts c ON c.datid = d.datid
+		WHERE d.datname = current_database()
 	`
 
 	var stats models.ExtendedDatabaseStats
-	err := c.pool.QueryRow(ctx, queryPG17).Scan(
+	err := c.pool.QueryRow(ctx, query).Scan(
 		&stats.DatabaseName,
 		&stats.XactCommit,
 		&stats.XactRollback,
@@ -1113,33 +1373,6 @@ func (c *PgxClient) GetExtendedDatabaseStats(ctx context.Context) (*models.Exten
 		&stats.ConflSnapshot,
 	)
 	if err != nil {
-		// If columns don't exist (PostgreSQL < 17), use fallback query
-		if strings.Contains(err.Error(), "does not exist") {
-			queryLegacy := `
-				SELECT
-					datname,
-					xact_commit,
-					xact_rollback,
-					COALESCE(temp_files, 0) as temp_files,
-					COALESCE(temp_bytes, 0) as temp_bytes,
-					COALESCE(deadlocks, 0) as deadlocks
-				FROM pg_stat_database
-				WHERE datname = current_database()
-			`
-			err = c.pool.QueryRow(ctx, queryLegacy).Scan(
-				&stats.DatabaseName,
-				&stats.XactCommit,
-				&stats.XactRollback,
-				&stats.TempFiles,
-				&stats.TempBytes,
-				&stats.Deadlocks,
-			)
-			if err != nil {
-				return nil, fmt.Errorf("postgres: failed to query extended database stats: %w", err)
-			}
-			// confl_lock and confl_snapshot remain 0 (default)
-			return &stats, nil
-		}
 		return nil, fmt.Errorf("postgres: failed to query extended database stats: %w", err)
 	}
 

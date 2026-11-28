@@ -49,9 +49,10 @@ func main() {
 	// Parse command-line flags
 	var (
 		showVersion = flag.Bool("version", false, "Print version information and exit")
-		configPath  = flag.String("config", "configs/config.yaml", "Path to configuration file")
+		configPath  = flag.String("config", "", "Path to configuration file (default: $PGANALYZER_CONFIG, or configs/config.yaml)")
 		notifyTest  = flag.Bool("notify-test", false, "Send a test message to the configured notification channels and exit")
 		setupCheck  = flag.Bool("check", false, "Check the PostgreSQL setup (extension, privileges, collected history) and exit; non-zero on failure")
+		migrateOnly = flag.Bool("migrate-only", false, "Run SQLite database migrations and exit")
 	)
 	flag.Parse()
 
@@ -63,6 +64,8 @@ func main() {
 		os.Exit(0)
 	}
 
+	resolvedConfig := resolveConfigPath(*configPath)
+
 	// Setup initial logger (will be reconfigured after loading config)
 	slog.SetDefault(slog.New(slog.NewTextHandler(os.Stdout, &slog.HandlerOptions{
 		Level: slog.LevelInfo,
@@ -70,7 +73,7 @@ func main() {
 
 	slog.Info("starting pganalyzer",
 		"version", version,
-		"config", *configPath,
+		"config", resolvedConfig,
 	)
 
 	// Create root context with cancellation
@@ -88,7 +91,7 @@ func main() {
 	}()
 
 	if *notifyTest {
-		if err := sendTestNotification(ctx, *configPath); err != nil {
+		if err := sendTestNotification(ctx, resolvedConfig); err != nil {
 			slog.Error("test notification failed", "error", err)
 			os.Exit(1)
 		}
@@ -97,7 +100,7 @@ func main() {
 	}
 
 	if *setupCheck {
-		ok, err := runSetupCheck(ctx, *configPath, os.Stdout)
+		ok, err := runSetupCheck(ctx, resolvedConfig, os.Stdout)
 		if err != nil {
 			slog.Error("setup check failed", "error", err)
 			os.Exit(1)
@@ -108,13 +111,51 @@ func main() {
 		return
 	}
 
+	if *migrateOnly {
+		if err := runMigrationsOnly(resolvedConfig); err != nil {
+			slog.Error("migration failed", "error", err)
+			os.Exit(1)
+		}
+		slog.Info("database migrations completed")
+		return
+	}
+
 	// Run the application
-	if err := run(ctx, *configPath); err != nil {
+	if err := run(ctx, resolvedConfig); err != nil {
 		slog.Error("application error", "error", err)
 		os.Exit(1)
 	}
 
 	slog.Info("pganalyzer stopped")
+}
+
+// resolveConfigPath picks the config file path with precedence:
+// explicit -config flag -> PGANALYZER_CONFIG env var -> configs/config.yaml
+// (when present) -> config.Load default (./config.yaml).
+func resolveConfigPath(flagPath string) string {
+	if flagPath != "" {
+		return flagPath
+	}
+	if envPath := os.Getenv(config.EnvConfigPath); envPath != "" {
+		return envPath
+	}
+	if _, err := os.Stat("configs/config.yaml"); err == nil {
+		return "configs/config.yaml"
+	}
+	return ""
+}
+
+func runMigrationsOnly(configPath string) error {
+	cfg, err := config.Load(configPath)
+	if err != nil {
+		return fmt.Errorf("loading config: %w", err)
+	}
+	logging.Setup(cfg.Logging)
+	storage, err := sqlite.NewStorage(cfg.Storage.Path)
+	if err != nil {
+		return fmt.Errorf("initializing storage: %w", err)
+	}
+	return storage.Close()
 }
 
 // run contains the main application logic
@@ -302,6 +343,9 @@ func run(ctx context.Context, configPath string) error {
 	)
 	slog.Info("suggester initialized", "rules", len(mainSuggester.Rules()))
 
+	runCtx, runCancel := context.WithCancel(ctx)
+	defer runCancel()
+
 	// Create and start scheduler
 	sched, err := scheduler.NewScheduler(scheduler.Config{
 		SchedulerConfig: &cfg.Scheduler,
@@ -315,7 +359,7 @@ func run(ctx context.Context, configPath string) error {
 	if err != nil {
 		return fmt.Errorf("creating scheduler: %w", err)
 	}
-	if err := sched.Start(ctx); err != nil {
+	if err := sched.Start(runCtx); err != nil {
 		return fmt.Errorf("starting scheduler: %w", err)
 	}
 	defer func() {
@@ -332,6 +376,7 @@ func run(ctx context.Context, configPath string) error {
 	// each side of a suggestion's resolution.
 	verifier := verify.New(storage, time.Duration(cfg.Thresholds.SlowQueryWindow))
 
+	var notifierDone chan struct{}
 	if cfg.Notifications.Enabled {
 		channels, err := notifier.NewChannels(cfg.Notifications.Channels, nil)
 		if err != nil {
@@ -349,7 +394,20 @@ func run(ctx context.Context, configPath string) error {
 		if err != nil {
 			return fmt.Errorf("creating notifier: %w", err)
 		}
-		go n.Run(ctx)
+		notifierDone = make(chan struct{})
+		go func() {
+			defer close(notifierDone)
+			n.Run(runCtx)
+		}()
+		// Ensure notifier finishes any in-flight tick before storage.Close() runs.
+		defer func() {
+			runCancel()
+			select {
+			case <-notifierDone:
+			case <-time.After(10 * time.Second):
+				slog.Warn("timed out waiting for notifier shutdown")
+			}
+		}()
 		slog.Info("notifications enabled",
 			"channels", len(channels),
 			"min_severity", cfg.Notifications.MinSeverity,

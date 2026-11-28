@@ -2,8 +2,11 @@ package handlers
 
 import (
 	"context"
+	"net/http"
 	"sort"
 	"time"
+
+	"github.com/labstack/echo/v4"
 
 	"github.com/elqsar/pganalyzer/internal/analyzer"
 	"github.com/elqsar/pganalyzer/internal/models"
@@ -30,38 +33,124 @@ type OutageRiskConfig struct {
 // RiskPanel is the dashboard's summary of the outage-risk signals. Severity
 // is left to the rules: each row shows how many active suggestions it has.
 type RiskPanel struct {
-	CollectedAt time.Time
-	InRecovery  bool
+	CollectedAt time.Time `json:"collected_at"`
+	InRecovery  bool      `json:"in_recovery"`
 
 	// Wraparound, as a fraction of the point where writes stop.
-	XIDDatabase  string
-	XIDFraction  float64
-	MXIDDatabase string
-	MXIDFraction float64
-	XIDIssues    int
+	XIDDatabase  string  `json:"xid_database"`
+	XIDFraction  float64 `json:"xid_fraction"`
+	MXIDDatabase string  `json:"mxid_database"`
+	MXIDFraction float64 `json:"mxid_fraction"`
+	XIDIssues    int     `json:"xid_issues"`
 
-	Slots            int
-	InactiveSlots    int
-	RetainedWALBytes int64
-	MaxReplayLagSecs float64
-	SlotIssues       int
+	Slots            int     `json:"slots"`
+	InactiveSlots    int     `json:"inactive_slots"`
+	RetainedWALBytes int64   `json:"retained_wal_bytes"`
+	MaxReplayLagSecs float64 `json:"max_replay_lag_seconds"`
+	SlotIssues       int     `json:"slot_issues"`
 
-	TopSequence         *models.SequenceUsage
-	SequencesOverHalf   int
-	SequencesUnreadable int
-	SequenceIssues      int
+	TopSequence         *models.SequenceUsage `json:"top_sequence,omitempty"`
+	SequencesOverHalf   int                   `json:"sequences_over_half"`
+	SequencesUnreadable int                   `json:"sequences_unreadable"`
+	SequenceIssues      int                   `json:"sequence_issues"`
 
-	PreparedXacts  int
-	PreparedIssues int
-	ClusterBytes   int64
-	CapacityBytes  int64
-	GrowthPerDay   float64 // 0 without a trend
-	GrowthBytes    int64   // |GrowthPerDay|, for display
-	Shrinking      bool
-	HasTrend       bool
-	DaysToFull     float64 // -1 without a capacity or with shrinking size
-	DiskIssues     int
-	Unavailable    []string
+	PreparedXacts  int      `json:"prepared_xacts"`
+	PreparedIssues int      `json:"prepared_issues"`
+	ClusterBytes   int64    `json:"cluster_bytes"`
+	CapacityBytes  int64    `json:"capacity_bytes"`
+	GrowthPerDay   float64  `json:"growth_per_day"` // 0 without a trend
+	GrowthBytes    int64    `json:"growth_bytes"`   // |GrowthPerDay|, for display
+	Shrinking      bool     `json:"shrinking"`
+	HasTrend       bool     `json:"has_trend"`
+	DaysToFull     float64  `json:"days_to_full"` // -1 without a capacity or with shrinking size
+	DiskIssues     int      `json:"disk_issues"`
+	Unavailable    []string `json:"unavailable,omitempty"`
+}
+
+// RiskStorage defines the storage interface needed by the outage-risk API handler.
+type RiskStorage interface {
+	OutageRiskStorage
+	GetSuggestionsByStatus(ctx context.Context, instanceID int64, status string) ([]models.Suggestion, error)
+}
+
+// RiskResponse represents the GET /api/v1/risk response payload.
+type RiskResponse struct {
+	CollectedAt *time.Time         `json:"collected_at,omitempty"`
+	Summary     *RiskPanel         `json:"summary"`
+	OutageRisk  *models.OutageRisk `json:"outage_risk"`
+}
+
+// RiskHandler handles outage-risk API requests.
+type RiskHandler struct {
+	storage    RiskStorage
+	cfg        OutageRiskConfig
+	instanceID int64
+}
+
+// NewRiskHandler creates a new RiskHandler.
+func NewRiskHandler(storage RiskStorage, cfg OutageRiskConfig, instanceID int64) *RiskHandler {
+	if cfg.Storage == nil {
+		cfg.Storage = storage
+	}
+	return &RiskHandler{
+		storage:    storage,
+		cfg:        cfg,
+		instanceID: instanceID,
+	}
+}
+
+// GetRisk handles GET /api/v1/risk requests.
+func (h *RiskHandler) GetRisk(c echo.Context) error {
+	ctx := c.Request().Context()
+
+	snap, err := h.storage.GetLatestSnapshotWithCollector(ctx, h.instanceID, analyzer.DomainOutageRisk, time.Now())
+	if err != nil {
+		c.Logger().Errorf("failed to get latest outage-risk snapshot: %v", err)
+		return c.JSON(http.StatusInternalServerError, map[string]string{
+			"error": "failed to get outage-risk snapshot",
+			"code":  "DATABASE_ERROR",
+		})
+	}
+	if snap == nil {
+		return c.JSON(http.StatusOK, RiskResponse{})
+	}
+
+	risk, err := h.storage.GetOutageRisk(ctx, snap.ID)
+	if err != nil {
+		c.Logger().Errorf("failed to get outage-risk data: %v", err)
+		return c.JSON(http.StatusInternalServerError, map[string]string{
+			"error": "failed to get outage-risk data",
+			"code":  "DATABASE_ERROR",
+		})
+	}
+	if risk == nil {
+		return c.JSON(http.StatusOK, RiskResponse{})
+	}
+
+	active, err := h.storage.GetSuggestionsByStatus(ctx, h.instanceID, models.StatusActive)
+	if err != nil {
+		c.Logger().Errorf("failed to get active suggestions for risk summary: %v", err)
+		return c.JSON(http.StatusInternalServerError, map[string]string{
+			"error": "failed to get active suggestions",
+			"code":  "DATABASE_ERROR",
+		})
+	}
+
+	panel, err := buildRiskPanelFromData(ctx, &h.cfg, h.instanceID, snap, risk, active)
+	if err != nil {
+		c.Logger().Errorf("failed to build outage-risk summary: %v", err)
+		return c.JSON(http.StatusInternalServerError, map[string]string{
+			"error": "failed to build outage-risk summary",
+			"code":  "DATABASE_ERROR",
+		})
+	}
+
+	collectedAt := snap.CapturedAt.UTC()
+	return c.JSON(http.StatusOK, RiskResponse{
+		CollectedAt: &collectedAt,
+		Summary:     panel,
+		OutageRisk:  risk,
+	})
 }
 
 // buildRiskPanel reads the latest outage-risk snapshot. It returns nil before
@@ -78,7 +167,10 @@ func buildRiskPanel(ctx context.Context, cfg *OutageRiskConfig, instanceID int64
 	if err != nil || risk == nil {
 		return nil, err
 	}
+	return buildRiskPanelFromData(ctx, cfg, instanceID, snap, risk, active)
+}
 
+func buildRiskPanelFromData(ctx context.Context, cfg *OutageRiskConfig, instanceID int64, snap *models.Snapshot, risk *models.OutageRisk, active []models.Suggestion) (*RiskPanel, error) {
 	p := &RiskPanel{CollectedAt: snap.CapturedAt, InRecovery: risk.InRecovery, CapacityBytes: cfg.DiskCapacityBytes, DaysToFull: -1}
 	for _, db := range risk.Databases {
 		if f := float64(db.XIDAge) / wraparoundLimit; f > p.XIDFraction || p.XIDDatabase == "" {

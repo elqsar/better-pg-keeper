@@ -101,15 +101,17 @@ func validatePostgres(cfg *PostgresConfig) ValidationErrors {
 	}
 
 	validSSLModes := map[string]bool{
-		"disable": true,
-		"allow":   true,
-		"prefer":  true,
-		"require": true,
+		"disable":     true,
+		"allow":       true,
+		"prefer":      true,
+		"require":     true,
+		"verify-ca":   true,
+		"verify-full": true,
 	}
 	if cfg.SSLMode != "" && !validSSLModes[cfg.SSLMode] {
 		errs = append(errs, ValidationError{
 			Field:   "postgres.sslmode",
-			Message: fmt.Sprintf("invalid sslmode %q, must be one of: disable, allow, prefer, require", cfg.SSLMode),
+			Message: fmt.Sprintf("invalid sslmode %q, must be one of: disable, allow, prefer, require, verify-ca, verify-full", cfg.SSLMode),
 		})
 	}
 

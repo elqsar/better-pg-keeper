@@ -63,8 +63,8 @@ func (r *MissingIndexRule) Evaluate(ctx context.Context, analysis *analyzer.Anal
 			continue
 		}
 
-		// Skip small tables
-		if issue.TableSize < r.minTableSize {
+		// Skip small tables (MinTableSizeForIndex is in live rows, matching TableAnalyzer)
+		if issue.NLiveTup < r.minTableSize {
 			continue
 		}
 

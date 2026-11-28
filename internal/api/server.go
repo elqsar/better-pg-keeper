@@ -6,7 +6,6 @@ import (
 	"io/fs"
 	"log"
 	"net/http"
-	"os"
 	"time"
 
 	"github.com/labstack/echo/v4"
@@ -115,31 +114,24 @@ func NewServer(cfg ServerConfig) (*Server, error) {
 		e.Use(middleware.Metrics())
 	}
 
-	// Use custom structured request logger if configured, otherwise use echo's logger
-	if cfg.LoggingConfig != nil && cfg.LoggingConfig.Requests {
+	// Enable structured request logging unless explicitly disabled in config.
+	if cfg.LoggingConfig == nil || cfg.LoggingConfig.Requests {
 		e.Use(middleware.RequestLoggerWithConfig(true, "/health"))
-	} else {
-		e.Use(echomiddleware.RequestLoggerWithConfig(echomiddleware.RequestLoggerConfig{
-			LogMethod:  true,
-			LogURI:     true,
-			LogStatus:  true,
-			LogLatency: true,
-			LogValuesFunc: func(c echo.Context, v echomiddleware.RequestLoggerValues) error {
-				fmt.Fprintf(os.Stdout, "%s %s %s %d %s\n",
-					v.StartTime.Format(time.RFC3339), v.Method, v.URI, v.Status, v.Latency)
-				return nil
-			},
-		}))
 	}
 
-	e.Use(echomiddleware.CORSWithConfig(echomiddleware.CORSConfig{
-		AllowOrigins: []string{"*"},
-		AllowMethods: []string{http.MethodGet, http.MethodPost, http.MethodPut, http.MethodDelete, http.MethodOptions},
-		AllowHeaders: []string{echo.HeaderOrigin, echo.HeaderContentType, echo.HeaderAccept, echo.HeaderAuthorization},
-	}))
+	// Reject cross-origin state-changing browser requests (CSRF protection)
+	e.Use(middleware.CrossOriginProtection())
 
-	// Apply Basic Auth middleware
-	e.Use(middleware.BasicAuth(cfg.Config.Auth))
+	// Apply Basic Auth middleware, exempting the configured metrics path if enabled.
+	var authSkip []string
+	if cfg.MetricsConfig != nil && cfg.MetricsConfig.Enabled {
+		metricsPath := cfg.MetricsConfig.Path
+		if metricsPath == "" {
+			metricsPath = "/metrics"
+		}
+		authSkip = append(authSkip, metricsPath)
+	}
+	e.Use(middleware.BasicAuth(cfg.Config.Auth, authSkip...))
 
 	version := cfg.Version
 	if version == "" {
@@ -179,8 +171,11 @@ func (s *Server) registerRoutes() {
 	dashboardHandler := handlers.NewDashboardHandler(s.storage, s.instanceID).WithQueryWindow(s.queries)
 	queriesHandler := handlers.NewQueriesHandler(s.storage, s.pgClient, s.instanceID)
 	schemaHandler := handlers.NewSchemaHandler(s.storage, s.instanceID)
-	suggestionsHandler := handlers.NewSuggestionsHandler(s.storage, s.instanceID)
+	suggestionsHandler := handlers.NewSuggestionsHandler(s.storage, s.instanceID).WithVerifier(s.verifier)
 	snapshotsHandler := handlers.NewSnapshotsHandler(s.storage, s.scheduler, s.instanceID)
+	activityHandler := handlers.NewActivityHandler(s.storage, s.instanceID)
+	riskHandler := handlers.NewRiskHandler(s.storage, s.risk, s.instanceID)
+	setupAPIHandler := handlers.NewSetupAPIHandler(s.setup)
 	pageHandler := handlers.NewPageHandler(s.storage, s.instanceID, s.version).WithVerifier(s.verifier).WithSetup(s.setup).WithQueryWindow(s.queries).WithOutageRisk(s.risk)
 
 	// Health endpoint (no auth required - handled in middleware)
@@ -214,6 +209,7 @@ func (s *Server) registerRoutes() {
 	// Queries
 	apiV1.GET("/queries", queriesHandler.ListQueries)
 	apiV1.GET("/queries/top", queriesHandler.GetTopQueries)
+	apiV1.GET("/queries/:id", queriesHandler.GetQuery)
 	apiV1.GET("/queries/:id/history", queriesHandler.GetQueryHistory)
 	apiV1.POST("/queries/:id/explain", queriesHandler.ExplainQuery)
 
@@ -224,7 +220,14 @@ func (s *Server) registerRoutes() {
 
 	// Suggestions
 	apiV1.GET("/suggestions", suggestionsHandler.ListSuggestions)
+	apiV1.GET("/suggestions/:id", suggestionsHandler.GetSuggestion)
 	apiV1.POST("/suggestions/:id/dismiss", suggestionsHandler.DismissSuggestion)
+	apiV1.POST("/suggestions/:id/undismiss", suggestionsHandler.UndismissSuggestion)
+
+	// Activity, Outage Risk, and Setup
+	apiV1.GET("/activity", activityHandler.GetActivity)
+	apiV1.GET("/risk", riskHandler.GetRisk)
+	apiV1.GET("/setup", setupAPIHandler.GetSetup)
 
 	// Snapshots
 	apiV1.GET("/snapshots", snapshotsHandler.ListSnapshots)

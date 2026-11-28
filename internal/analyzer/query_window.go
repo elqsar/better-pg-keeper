@@ -39,7 +39,7 @@ func RecentQueryStats(ctx context.Context, storage QueryWindowStorage, instanceI
 		return nil, err
 	}
 	baseline, err := storage.GetLatestSnapshotWithCollector(ctx, instanceID, DomainQueryStats, latest.CapturedAt.Add(-window))
-	if err != nil || baseline == nil || baseline.ID == latest.ID {
+	if err != nil || baseline == nil || baseline.ID == latest.ID || statsResetBetween(baseline, latest) {
 		return nil, err
 	}
 	deltas, err := storage.GetQueryStatsDelta(ctx, baseline.ID, latest.ID)
@@ -53,4 +53,16 @@ func RecentQueryStats(ctx context.Context, storage QueryWindowStorage, instanceI
 		}
 	}
 	return w, nil
+}
+
+// statsResetBetween reports whether pg_stat_statements was reset between
+// baseline and current.
+func statsResetBetween(baseline, current *models.Snapshot) bool {
+	if baseline == nil || current == nil || current.StatsReset == nil {
+		return false
+	}
+	if baseline.StatsReset != nil {
+		return !current.StatsReset.Equal(*baseline.StatsReset)
+	}
+	return current.StatsReset.After(baseline.CapturedAt)
 }

@@ -722,3 +722,82 @@ func TestQueriesPageSlowFilter(t *testing.T) {
 		t.Error("Queries() with slow filter should show filter banner")
 	}
 }
+
+func TestSchemaPageUnusedIndexBadge(t *testing.T) {
+	e := setupTestEcho()
+	storage := &mockPageStorage{
+		snapshot: &models.Snapshot{ID: 1, CapturedAt: time.Now()},
+		indexStats: []models.IndexStat{
+			{SchemaName: "public", RelName: "orders", IndexRelName: "idx_unused", IdxScan: 0, IndexSize: 4096, IsPrimary: false, IsUnique: false},
+			{SchemaName: "public", RelName: "orders", IndexRelName: "orders_pkey", IdxScan: 0, IndexSize: 4096, IsPrimary: true, IsUnique: true},
+		},
+	}
+	handler := NewPageHandler(storage, 1, "1.0.0")
+
+	req := httptest.NewRequest(http.MethodGet, "/schema?tab=indexes", nil)
+	rec := httptest.NewRecorder()
+	c := e.NewContext(req, rec)
+
+	if err := handler.Schema(c); err != nil {
+		t.Fatalf("Schema() error = %v", err)
+	}
+	body := rec.Body.String()
+	if !strings.Contains(body, `<span class="badge-warning">Unused</span>`) {
+		t.Errorf("expected Unused badge for idx_scan=0 non-PK/unique index")
+	}
+}
+
+func TestQueriesPageLargeQueryIDAndOverflowPage(t *testing.T) {
+	e := setupTestEcho()
+	const largeID int64 = 9007199254740993 // > Number.MAX_SAFE_INTEGER (2^53 - 1)
+	storage := &mockPageStorage{
+		snapshot: &models.Snapshot{ID: 1, CapturedAt: time.Now()},
+		queryStats: []models.QueryStat{
+			{QueryID: largeID, Query: "SELECT 1", Calls: 10, TotalExecTime: 50, MeanExecTime: 5},
+		},
+	}
+	handler := NewPageHandler(storage, 1, "1.0.0")
+
+	// Huge page parameter must not overflow offset or panic.
+	req := httptest.NewRequest(http.MethodGet, "/queries?page=500000000000000000", nil)
+	rec := httptest.NewRecorder()
+	c := e.NewContext(req, rec)
+
+	if err := handler.Queries(c); err != nil {
+		t.Fatalf("Queries() error = %v", err)
+	}
+	if rec.Code != http.StatusOK {
+		t.Fatalf("Queries() status = %d, want 200", rec.Code)
+	}
+	body := rec.Body.String()
+	if !strings.Contains(body, "explainQuery('9007199254740993')") {
+		t.Errorf("expected 64-bit query ID to be passed as a quoted JS string")
+	}
+}
+
+func TestExtractPlaceholdersAndBuildParamSliceBounds(t *testing.T) {
+	got := extractPlaceholders("SELECT $0, $2, $1, '$999999999', $1001, $2")
+	if len(got) != 2 || got[0] != 1 || got[1] != 2 {
+		t.Fatalf("extractPlaceholders() = %v, want [1 2]", got)
+	}
+
+	if params := buildParamSlice([]ExplainParameter{{Position: 1, Value: "x"}}, 1000000); params != nil {
+		t.Fatalf("buildParamSlice() with out-of-bounds maxPos = %v, want nil", params)
+	}
+}
+
+func TestSortStatsStrictWeakOrdering(t *testing.T) {
+	stats := []models.QueryStat{
+		{QueryID: 30, Calls: 10, TotalExecTime: 100, MeanExecTime: 10, Rows: 5},
+		{QueryID: 10, Calls: 10, TotalExecTime: 100, MeanExecTime: 10, Rows: 5},
+		{QueryID: 20, Calls: 10, TotalExecTime: 100, MeanExecTime: 10, Rows: 5},
+		{QueryID: 40, Calls: 20, TotalExecTime: 200, MeanExecTime: 20, Rows: 10},
+	}
+	for _, field := range []string{"calls", "mean_time", "total_time", "rows"} {
+		sortStats(stats, field, true)
+		if stats[0].QueryID != 40 || stats[1].QueryID != 10 || stats[2].QueryID != 20 || stats[3].QueryID != 30 {
+			t.Errorf("sortStats(%s, desc) order = [%d %d %d %d], want [40 10 20 30]",
+				field, stats[0].QueryID, stats[1].QueryID, stats[2].QueryID, stats[3].QueryID)
+		}
+	}
+}

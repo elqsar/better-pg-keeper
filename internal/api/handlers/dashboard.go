@@ -14,6 +14,8 @@ import (
 type DashboardStorage interface {
 	GetLatestSnapshot(ctx context.Context, instanceID int64) (*models.Snapshot, error)
 	GetQueryStats(ctx context.Context, snapshotID int64) ([]models.QueryStat, error)
+	GetCurrentDatabaseStats(ctx context.Context, instanceID int64) (*models.ExtendedDatabaseStats, *float64, error)
+	GetCurrentQueryStats(ctx context.Context, instanceID int64) ([]models.QueryStat, error)
 	GetSuggestionsByStatus(ctx context.Context, instanceID int64, status string) ([]models.Suggestion, error)
 }
 
@@ -80,40 +82,60 @@ func (h *DashboardHandler) GetDashboard(c echo.Context) error {
 		RecentSuggestions: []SuggestionSummary{},
 	}
 
-	// Get latest snapshot
-	snapshot, err := h.storage.GetLatestSnapshot(ctx, h.instanceID)
-	if err != nil {
-		c.Logger().Errorf("failed to get latest snapshot: %v", err)
-		return c.JSON(http.StatusInternalServerError, map[string]string{
-			"error": "failed to get snapshot data",
-			"code":  "DATABASE_ERROR",
-		})
+	// Read current state first so fast 30s partial snapshots (activity/locks)
+	// do not intermittently clear cache_hit_ratio or fallback query stats.
+	if _, cacheHitRatio, err := h.storage.GetCurrentDatabaseStats(ctx, h.instanceID); err != nil {
+		c.Logger().Errorf("failed to get current database stats: %v", err)
+	} else if cacheHitRatio != nil {
+		response.CacheHitRatio = cacheHitRatio
 	}
 
-	if snapshot != nil {
-		response.CacheHitRatio = snapshot.CacheHitRatio
+	stats, err := h.storage.GetCurrentQueryStats(ctx, h.instanceID)
+	if err != nil {
+		c.Logger().Errorf("failed to get current query stats: %v", err)
+	}
 
-		// Get query stats
-		stats, err := h.storage.GetQueryStats(ctx, snapshot.ID)
+	// Fall back to the latest snapshot when current-state tables are empty.
+	if response.CacheHitRatio == nil || len(stats) == 0 {
+		snapshot, err := h.storage.GetLatestSnapshot(ctx, h.instanceID)
 		if err != nil {
-			c.Logger().Errorf("failed to get query stats: %v", err)
-		} else {
-			summary, err := summarizeQueries(ctx, h.queries, h.instanceID, stats, 5)
-			if err != nil {
-				c.Logger().Errorf("failed to get recent query stats: %v", err)
+			c.Logger().Errorf("failed to get latest snapshot: %v", err)
+			return c.JSON(http.StatusInternalServerError, map[string]string{
+				"error": "failed to get snapshot data",
+				"code":  "DATABASE_ERROR",
+			})
+		}
+		if snapshot != nil {
+			if response.CacheHitRatio == nil {
+				response.CacheHitRatio = snapshot.CacheHitRatio
 			}
-			response.TotalQueries = summary.Total
-			response.SlowQueriesCount = summary.Slow
-			response.QueryWindowSeconds = summary.Window.Seconds()
-			for _, q := range summary.Top {
-				response.TopQueries = append(response.TopQueries, TopQuerySummary{
-					QueryID:         q.QueryID,
-					QueryPreview:    truncateQuery(q.QueryPreview, 80),
-					Calls:           q.Calls,
-					MeanExecTimeMs:  q.MeanExecTimeMs,
-					TotalExecTimeMs: q.TotalExecTimeMs,
-				})
+			if len(stats) == 0 {
+				snapStats, err := h.storage.GetQueryStats(ctx, snapshot.ID)
+				if err != nil {
+					c.Logger().Errorf("failed to get query stats: %v", err)
+				} else {
+					stats = snapStats
+				}
 			}
+		}
+	}
+
+	if len(stats) > 0 || h.queries != nil {
+		summary, err := summarizeQueries(ctx, h.queries, h.instanceID, stats, 5)
+		if err != nil {
+			c.Logger().Errorf("failed to get recent query stats: %v", err)
+		}
+		response.TotalQueries = summary.Total
+		response.SlowQueriesCount = summary.Slow
+		response.QueryWindowSeconds = summary.Window.Seconds()
+		for _, q := range summary.Top {
+			response.TopQueries = append(response.TopQueries, TopQuerySummary{
+				QueryID:         q.QueryID,
+				QueryPreview:    truncateQuery(q.QueryPreview, 80),
+				Calls:           q.Calls,
+				MeanExecTimeMs:  q.MeanExecTimeMs,
+				TotalExecTimeMs: q.TotalExecTimeMs,
+			})
 		}
 	}
 	response.SlowQueryMs = defaultSlowQueryMs

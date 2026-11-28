@@ -128,13 +128,22 @@ func (s *Scheduler) executeCollection(ctx context.Context) {
 
 	result, err := s.runCollection(ctx)
 
+	// A tick where no collectors were due (SnapshotID == 0, no errors) did not
+	// contact PostgreSQL, so it must not advance LastSuccessfulCollection or
+	// clear a prior failure.
+	if err == nil && result != nil && result.SnapshotID == 0 && !result.HasErrors() {
+		return
+	}
+
 	duration := time.Since(start)
-	success := err == nil && (result == nil || !result.HasErrors())
+	success := err == nil && result != nil && !result.HasErrors()
 
 	var errMsg string
 	if err != nil {
 		errMsg = err.Error()
-	} else if result != nil && result.HasErrors() {
+	} else if result == nil {
+		errMsg = "collection returned empty result"
+	} else if result.HasErrors() {
 		errMsg = result.Error().Error()
 	}
 
@@ -238,31 +247,45 @@ func (s *Scheduler) executeMaintenance(ctx context.Context) {
 	success := true
 
 	// Purge old snapshots
-	retention := s.retention.Snapshots.Duration()
-	purged, err := s.storage.PurgeOldSnapshots(ctx, retention)
-	if err != nil {
-		s.logger.Printf("[scheduler] failed to purge old snapshots: %v", err)
-		success = false
-	} else if purged > 0 {
-		s.logger.Printf("[scheduler] purged %d old snapshots (retention=%v)", purged, retention)
+	if retention := s.retention.Snapshots.Duration(); retention > 0 {
+		purged, err := s.storage.PurgeOldSnapshots(ctx, retention)
+		if err != nil {
+			s.logger.Printf("[scheduler] failed to purge old snapshots: %v", err)
+			success = false
+		} else if purged > 0 {
+			s.logger.Printf("[scheduler] purged %d old snapshots (retention=%v)", purged, retention)
+		}
+
+		// Explain plans are not tied to snapshots but age the same way.
+		plansPurged, err := s.storage.PurgeOldExplainPlans(ctx, retention)
+		if err != nil {
+			s.logger.Printf("[scheduler] failed to purge explain plans: %v", err)
+			success = false
+		} else if plansPurged > 0 {
+			s.logger.Printf("[scheduler] purged %d explain plans (retention=%v)", plansPurged, retention)
+		}
 	}
 
-	queryRetention := s.retention.QueryStats.Duration()
-	queryPurged, err := s.storage.PurgeOldQueryHistory(ctx, queryRetention)
-	if err != nil {
-		s.logger.Printf("[scheduler] failed to purge query history: %v", err)
-		success = false
-	} else if queryPurged > 0 {
-		s.logger.Printf("[scheduler] purged %d query samples (retention=%v)", queryPurged, queryRetention)
-	}
+	if queryRetention := s.retention.QueryStats.Duration(); queryRetention > 0 {
+		queryPurged, err := s.storage.PurgeOldQueryHistory(ctx, queryRetention)
+		if err != nil {
+			s.logger.Printf("[scheduler] failed to purge query history: %v", err)
+			success = false
+		} else if queryPurged > 0 {
+			s.logger.Printf("[scheduler] purged %d query samples (retention=%v)", queryPurged, queryRetention)
+		}
 
-	// Explain plans are not tied to snapshots but age the same way.
-	plansPurged, err := s.storage.PurgeOldExplainPlans(ctx, retention)
-	if err != nil {
-		s.logger.Printf("[scheduler] failed to purge explain plans: %v", err)
-		success = false
-	} else if plansPurged > 0 {
-		s.logger.Printf("[scheduler] purged %d explain plans (retention=%v)", plansPurged, retention)
+		if purger, ok := s.storage.(interface {
+			PurgeOldSuggestions(ctx context.Context, retention time.Duration) (int64, error)
+		}); ok {
+			sugPurged, err := purger.PurgeOldSuggestions(ctx, queryRetention)
+			if err != nil {
+				s.logger.Printf("[scheduler] failed to purge old suggestions: %v", err)
+				success = false
+			} else if sugPurged > 0 {
+				s.logger.Printf("[scheduler] purged %d old suggestions (retention=%v)", sugPurged, queryRetention)
+			}
+		}
 	}
 
 	// Size samples outlive snapshots so disk growth can be forecast.

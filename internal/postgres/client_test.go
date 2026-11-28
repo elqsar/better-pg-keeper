@@ -2,6 +2,7 @@ package postgres
 
 import (
 	"context"
+	"math"
 	"testing"
 	"time"
 
@@ -272,6 +273,29 @@ func TestIsWriteQuery(t *testing.T) {
 		{"ALTER TABLE users ADD COLUMN email VARCHAR(255)", true},
 		{"CREATE TABLE test (id INT)", true},
 		{"WITH cte AS (SELECT 1) SELECT * FROM cte", false},
+		// Leading comments and parentheses
+		{"/* comment */ DELETE FROM users", true},
+		{"/* outer /* nested */ outer */ UPDATE users SET a = 1", true},
+		{"-- leading line comment\nINSERT INTO users VALUES (1)", true},
+		{"((DELETE FROM users))", true},
+		{"/* comment */ SELECT * FROM users", false},
+		{"-- comment\nSELECT 'DELETE FROM users'", false},
+		// Data-modifying CTEs and additional write/utility commands
+		{"WITH d AS (DELETE FROM users RETURNING *) SELECT * FROM d", true},
+		{"WITH u AS (UPDATE users SET x = 1 RETURNING id) SELECT * FROM u", true},
+		{"WITH i AS (INSERT INTO users VALUES (1) RETURNING id) SELECT * FROM i", true},
+		{"WITH m AS (MERGE INTO users USING src ON users.id = src.id WHEN MATCHED THEN DELETE) SELECT * FROM m", true},
+		{"MERGE INTO users USING src ON users.id = src.id WHEN MATCHED THEN DELETE", true},
+		{"COPY users TO STDOUT", true},
+		{"CALL my_proc()", true},
+		{"DO $$ BEGIN PERFORM 1; END $$", true},
+		{"VACUUM users", true},
+		// Multi-statement queries
+		{"SELECT 1; DROP TABLE users", true},
+		{"SELECT 1;", false},
+		// Write keywords inside literals, dollar-quotes, comments, or quoted identifiers
+		{"WITH cte AS (SELECT 'DELETE' AS op, E'\\'UPDATE\\'' AS op2, $$INSERT$$ AS op3, \"DELETE\" FROM t) SELECT * FROM cte", false},
+		{"SELECT ';' FROM users", false},
 	}
 
 	for _, tt := range tests {
@@ -281,6 +305,121 @@ func TestIsWriteQuery(t *testing.T) {
 				t.Errorf("isWriteQuery(%q) = %v, expected %v", tt.query, result, tt.expected)
 			}
 		})
+	}
+}
+
+func TestHasMultipleStatements(t *testing.T) {
+	tests := []struct {
+		query string
+		want  bool
+	}{
+		{"SELECT 1", false},
+		{"SELECT 1;", false},
+		{"SELECT 1; -- trailing comment", false},
+		{"SELECT ';' AS s", false},
+		{"SELECT $$a;b$$", false},
+		{"SELECT $tag$a;b$tag$", false},
+		{"SELECT 1; SELECT 2", true},
+		{"SELECT 1; DROP TABLE users", true},
+	}
+	for _, tt := range tests {
+		if got := hasMultipleStatements(tt.query); got != tt.want {
+			t.Errorf("hasMultipleStatements(%q) = %v, want %v", tt.query, got, tt.want)
+		}
+	}
+}
+
+func TestExplainableAndMaxPlaceholder(t *testing.T) {
+	explainTests := []struct {
+		query string
+		want  bool
+	}{
+		{"SELECT * FROM orders WHERE id = $1", true},
+		{"/* app=api trace=123 */ SELECT * FROM orders", true},
+		{"/* outer /* nested */ */ WITH cte AS (SELECT 1) SELECT * FROM cte", true},
+		{"-- leading comment\nUPDATE orders SET status = $1 WHERE id = $2", true},
+		{"((SELECT 1))", true},
+		{"TABLE orders", true},
+		{"VALUES (1, 2)", true},
+		{"CREATE INDEX idx ON orders(id)", false},
+		{"VACUUM orders", false},
+		{"SET work_mem = '64MB'", false},
+		{"SELECT 1; DROP TABLE orders", false},
+		{"", false},
+	}
+	for _, tt := range explainTests {
+		if got := Explainable(tt.query); got != tt.want {
+			t.Errorf("Explainable(%q) = %v, want %v", tt.query, got, tt.want)
+		}
+	}
+
+	placeholderTests := []struct {
+		query string
+		want  int
+	}{
+		{"SELECT 1", 0},
+		{"SELECT $0", 0},
+		{"SELECT $1, $3, $2", 3},
+		{"SELECT $1, $999999999", 1},
+		{"SELECT $1000, $1001", 1000},
+	}
+	for _, tt := range placeholderTests {
+		if got := MaxPlaceholder(tt.query); got != tt.want {
+			t.Errorf("MaxPlaceholder(%q) = %d, want %d", tt.query, got, tt.want)
+		}
+	}
+}
+
+func TestFormatSQLLiteral(t *testing.T) {
+	tests := []struct {
+		name    string
+		input   any
+		want    string
+		wantErr bool
+	}{
+		{"nil", nil, "NULL", false},
+		{"bool true", true, "TRUE", false},
+		{"bool false", false, "FALSE", false},
+		{"int", 42, "42", false},
+		{"large float64 whole", float64(1e7), "10000000", false},
+		{"float64 decimal", 3.14, "3.14", false},
+		{"float32", float32(2.5), "2.5", false},
+		{"NaN", math.NaN(), "", true},
+		{"+Inf", math.Inf(1), "", true},
+		{"-Inf", math.Inf(-1), "", true},
+		{"float32 NaN", float32(math.NaN()), "", true},
+		{"string escaping", "O'Reilly", "'O''Reilly'", false},
+		{"time", time.Date(2026, 1, 2, 3, 4, 5, 0, time.UTC), "'2026-01-02T03:04:05Z'::timestamptz", false},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got, err := formatSQLLiteral(tt.input)
+			if (err != nil) != tt.wantErr {
+				t.Fatalf("formatSQLLiteral(%v) err = %v, wantErr = %v", tt.input, err, tt.wantErr)
+			}
+			if !tt.wantErr && got != tt.want {
+				t.Errorf("formatSQLLiteral(%v) = %q, want %q", tt.input, got, tt.want)
+			}
+		})
+	}
+}
+
+func TestBuildExplainPlanExecutionTime(t *testing.T) {
+	withExec := `[{"Plan":{"Node Type":"Seq Scan","Actual Total Time":12.5},"Execution Time":18.75}]`
+	plan := buildExplainPlan(withExec, true)
+	if plan.ExecutionTime == nil || *plan.ExecutionTime != 18.75 {
+		t.Fatalf("ExecutionTime = %v, want 18.75", plan.ExecutionTime)
+	}
+
+	fallback := `[{"Plan":{"Node Type":"Seq Scan","Actual Total Time":12.5}}]`
+	plan2 := buildExplainPlan(fallback, true)
+	if plan2.ExecutionTime == nil || *plan2.ExecutionTime != 12.5 {
+		t.Fatalf("fallback ExecutionTime = %v, want 12.5", plan2.ExecutionTime)
+	}
+
+	nonAnalyze := buildExplainPlan(withExec, false)
+	if nonAnalyze.ExecutionTime != nil {
+		t.Fatalf("non-analyze ExecutionTime = %v, want nil", nonAnalyze.ExecutionTime)
 	}
 }
 

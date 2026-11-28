@@ -20,6 +20,7 @@
                     <a href="/schema" class="nav-link-inactive">Schema</a>
                     <a href="/activity" class="nav-link-inactive">Activity</a>
                     <a href="/suggestions" class="nav-link-active">Suggestions</a>
+                    <a href="/setup" class="nav-link-inactive">Setup</a>
                 </nav>
             </div>
         </div>
@@ -54,11 +55,13 @@
                                 </tr>
                                 <tr>
                                     <td class="py-3 text-gray-500">Status</td>
-                                    <td class="py-3 text-right">
+                                    <td class="py-3 text-right" id="status-badge">
                                         {{if eq .Suggestion.Status "active"}}
                                         <span class="badge-info">Active</span>
+                                        {{else if eq .Suggestion.Status "resolved"}}
+                                        <span class="badge-success">Resolved</span>
                                         {{else}}
-                                        <span class="badge-gray">{{.Suggestion.Status}}</span>
+                                        <span class="badge-gray">Dismissed</span>
                                         {{end}}
                                     </td>
                                 </tr>
@@ -178,6 +181,10 @@
                 <button class="btn-secondary" id="dismiss-btn" onclick="dismissSuggestion({{.Suggestion.ID}})">
                     Dismiss
                 </button>
+                {{else if eq .Suggestion.Status "dismissed"}}
+                <button class="btn-secondary" id="restore-btn" onclick="undismissSuggestion({{.Suggestion.ID}})">
+                    Restore
+                </button>
                 {{end}}
             </div>
         </div>
@@ -204,9 +211,13 @@
         })
         .then(response => {
             if (response.ok) {
+                const statusBadge = document.getElementById('status-badge');
+                if (statusBadge) {
+                    statusBadge.innerHTML = '<span class="badge-gray">Dismissed</span>';
+                }
                 const btn = document.getElementById('dismiss-btn');
                 if (btn) {
-                    btn.outerHTML = '<span class="badge-gray">Dismissed</span>';
+                    btn.outerHTML = '<button class="btn-secondary" id="restore-btn" onclick="undismissSuggestion(' + id + ')">Restore</button>';
                 }
             } else {
                 alert('Failed to dismiss suggestion');
@@ -214,6 +225,33 @@
         })
         .catch(error => {
             alert('Failed to dismiss suggestion: ' + error);
+        });
+    }
+
+    function undismissSuggestion(id) {
+        if (!confirm('Restore this suggestion back to active status?')) {
+            return;
+        }
+
+        fetch('/api/v1/suggestions/' + id + '/undismiss', {
+            method: 'POST'
+        })
+        .then(response => {
+            if (response.ok) {
+                const statusBadge = document.getElementById('status-badge');
+                if (statusBadge) {
+                    statusBadge.innerHTML = '<span class="badge-info">Active</span>';
+                }
+                const btn = document.getElementById('restore-btn');
+                if (btn) {
+                    btn.outerHTML = '<button class="btn-secondary" id="dismiss-btn" onclick="dismissSuggestion(' + id + ')">Dismiss</button>';
+                }
+            } else {
+                alert('Failed to restore suggestion');
+            }
+        })
+        .catch(error => {
+            alert('Failed to restore suggestion: ' + error);
         });
     }
     </script>

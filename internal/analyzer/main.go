@@ -164,9 +164,15 @@ func (a *MainAnalyzer) Analyze(ctx context.Context, snapshotID int64) (*Analysis
 		}
 	}
 
-	// Run table analysis (bloat data usually lives in a different snapshot)
+	// Run table analysis (bloat data usually lives in a different snapshot;
+	// skip stale bloat snapshots so stale TableIssueHighBloat rows do not
+	// suppress fresh MaintenanceIssues).
 	if id := snapshotFor(coverage, DomainTableStats); id != 0 {
-		tableIssues, err := a.tableAnalyzer.AnalyzeSnapshots(ctx, id, snapshotFor(coverage, DomainBloat))
+		bloatID := int64(0)
+		if coverage[DomainBloat].Usable() {
+			bloatID = snapshotFor(coverage, DomainBloat)
+		}
+		tableIssues, err := a.tableAnalyzer.AnalyzeSnapshots(ctx, id, bloatID)
 		if err != nil {
 			invalidateDomain(coverage, DomainBloat)
 			result.Errors = append(result.Errors, fmt.Sprintf("table analysis: %v", err))
@@ -245,7 +251,7 @@ func (a *MainAnalyzer) analyzeOperational(ctx context.Context, coverage map[stri
 	}
 
 	if id := snapshotFor(coverage, DomainDatabaseStats); id != 0 {
-		txStats, err := a.analyzeTransactions(ctx, id)
+		txStats, err := a.analyzeTransactions(ctx, result.InstanceID, id, coverage[DomainDatabaseStats].CapturedAt)
 		if err != nil {
 			invalidateDomain(coverage, DomainDatabaseStats)
 			result.Errors = append(result.Errors, fmt.Sprintf("transaction analysis: %v", err))
@@ -534,8 +540,13 @@ func (a *MainAnalyzer) analyzeLocks(ctx context.Context, snapshotID int64) (*Loc
 	return analysis, nil
 }
 
-// analyzeTransactions analyzes transaction statistics from a snapshot.
-func (a *MainAnalyzer) analyzeTransactions(ctx context.Context, snapshotID int64) (*TransactionAnalysis, error) {
+const transactionDeltaWindow = time.Hour
+
+// analyzeTransactions computes trailing-window deltas of cumulative
+// pg_stat_database counters (transactions, temp usage, deadlocks) against a
+// baseline snapshot at least transactionDeltaWindow old. Without a baseline,
+// lifetime totals are never evaluated as recent spikes.
+func (a *MainAnalyzer) analyzeTransactions(ctx context.Context, instanceID, snapshotID int64, capturedAt time.Time) (*TransactionAnalysis, error) {
 	stats, err := a.storage.GetExtendedDatabaseStats(ctx, snapshotID)
 	if err != nil {
 		return nil, fmt.Errorf("getting extended database stats: %w", err)
@@ -544,12 +555,58 @@ func (a *MainAnalyzer) analyzeTransactions(ctx context.Context, snapshotID int64
 		return nil, nil // No transaction data collected
 	}
 
+	if capturedAt.IsZero() {
+		snap, err := a.storage.GetSnapshotByID(ctx, snapshotID)
+		if err != nil {
+			return nil, fmt.Errorf("getting database stats snapshot: %w", err)
+		}
+		if snap != nil {
+			capturedAt = snap.CapturedAt
+		}
+	}
+	if capturedAt.IsZero() {
+		return &TransactionAnalysis{BaselineObserved: false}, nil
+	}
+
+	baselineSnap, err := a.storage.GetLatestSnapshotWithCollector(ctx, instanceID, DomainDatabaseStats, capturedAt.Add(-transactionDeltaWindow))
+	if err != nil {
+		return nil, fmt.Errorf("getting baseline database stats snapshot: %w", err)
+	}
+	if baselineSnap == nil || baselineSnap.ID == snapshotID {
+		return &TransactionAnalysis{BaselineObserved: false}, nil
+	}
+
+	prev, err := a.storage.GetExtendedDatabaseStats(ctx, baselineSnap.ID)
+	if err != nil {
+		return nil, fmt.Errorf("getting baseline extended database stats: %w", err)
+	}
+	if prev == nil {
+		return &TransactionAnalysis{BaselineObserved: false}, nil
+	}
+
+	// If any monotonic counter decreased, pg_stat_reset() happened during the
+	// window and the current counters already represent activity since reset.
+	reset := stats.XactCommit < prev.XactCommit ||
+		stats.XactRollback < prev.XactRollback ||
+		stats.TempFiles < prev.TempFiles ||
+		stats.TempBytes < prev.TempBytes ||
+		stats.Deadlocks < prev.Deadlocks
+
+	delta := func(cur, old int64) int64 {
+		if reset {
+			return cur
+		}
+		return cur - old
+	}
+
 	return &TransactionAnalysis{
-		XactCommit:   stats.XactCommit,
-		XactRollback: stats.XactRollback,
-		TempFiles:    stats.TempFiles,
-		TempBytes:    stats.TempBytes,
-		Deadlocks:    stats.Deadlocks,
+		XactCommit:       delta(stats.XactCommit, prev.XactCommit),
+		XactRollback:     delta(stats.XactRollback, prev.XactRollback),
+		TempFiles:        delta(stats.TempFiles, prev.TempFiles),
+		TempBytes:        delta(stats.TempBytes, prev.TempBytes),
+		Deadlocks:        delta(stats.Deadlocks, prev.Deadlocks),
+		Window:           capturedAt.Sub(baselineSnap.CapturedAt),
+		BaselineObserved: true,
 	}, nil
 }
 

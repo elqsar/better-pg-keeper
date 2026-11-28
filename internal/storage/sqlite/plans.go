@@ -48,7 +48,7 @@ func (s *SQLiteStorage) GetQueryPlans(ctx context.Context, snapshotID int64) (*m
 
 // PurgeOldExplainPlans removes explain plans captured before the retention period.
 func (s *SQLiteStorage) PurgeOldExplainPlans(ctx context.Context, retention time.Duration) (int64, error) {
-	result, err := s.writeDB.ExecContext(ctx, `DELETE FROM explain_plans WHERE captured_at < ?`, time.Now().Add(-retention).Round(0))
+	result, err := s.writeDB.ExecContext(ctx, `DELETE FROM explain_plans WHERE captured_at < ?`, utcTime(time.Now().Add(-retention)))
 	if err != nil {
 		return 0, fmt.Errorf("purging explain plans: %w", err)
 	}

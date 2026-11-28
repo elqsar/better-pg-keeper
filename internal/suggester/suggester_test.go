@@ -339,6 +339,23 @@ func TestMissingIndexRule_Evaluate(t *testing.T) {
 			wantCount: 0,
 		},
 		{
+			name: "skip small table by row count even with large byte size",
+			analysis: &analyzer.AnalysisResult{
+				Coverage: analyzer.FullCoverage(),
+				TableIssues: []analyzer.TableIssue{
+					{
+						SchemaName:   "public",
+						TableName:    "wide_small",
+						IssueType:    analyzer.TableIssueMissingIndex,
+						TableSize:    100 << 20, // 100MB, but only 500 rows
+						SeqScanRatio: 0.9,
+						NLiveTup:     500,
+					},
+				},
+			},
+			wantCount: 0,
+		},
+		{
 			name: "skip other issue types",
 			analysis: &analyzer.AnalysisResult{
 				Coverage: analyzer.FullCoverage(),

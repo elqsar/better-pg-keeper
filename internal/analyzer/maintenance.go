@@ -36,7 +36,10 @@ func (a *MainAnalyzer) analyzeMaintenance(ctx context.Context, result *AnalysisR
 		return fmt.Errorf("table baseline: %w", err)
 	}
 	var baseline map[string]models.TableStat
-	if baselineSnapshot != nil && baselineSnapshot.ID != currentID && sameReset(baselineSnapshot.StatsReset, currentSnapshot.StatsReset) {
+	// Do not check Snapshot.StatsReset here: it tracks pg_stat_statements_info,
+	// not pg_stat_user_tables. Table stats resets are detected per table below
+	// when maintenance counters decrease.
+	if baselineSnapshot != nil && baselineSnapshot.ID != currentID {
 		old, err := a.storage.GetTableStats(ctx, baselineSnapshot.ID)
 		if err != nil {
 			return fmt.Errorf("baseline table stats: %w", err)
@@ -53,12 +56,13 @@ func (a *MainAnalyzer) analyzeMaintenance(ctx context.Context, result *AnalysisR
 		}
 	}
 
-	// The existing bloat and stale-maintenance suggestions remain the primary
-	// finding when they already explain the same table.
+	// The existing bloat and stale-vacuum suggestions remain the primary
+	// finding when they already explain the same table. TableIssueStaleAnalyze
+	// has no suggester rule, so it must not suppress maintenance findings.
 	covered := make(map[string]bool)
 	for _, issue := range result.TableIssues {
 		switch issue.IssueType {
-		case TableIssueHighBloat, TableIssueStaleVacuum, TableIssueStaleAnalyze:
+		case TableIssueHighBloat, TableIssueStaleVacuum:
 			covered[tableKey(issue.SchemaName, issue.TableName)] = true
 		}
 	}
@@ -70,26 +74,28 @@ func (a *MainAnalyzer) analyzeMaintenance(ctx context.Context, result *AnalysisR
 			// these targets count as observed and an earlier finding resolves.
 			continue
 		}
+		if t.HeapBytes < 64<<20 {
+			continue
+		}
+		var vacReset, anaReset bool
 		if result.MaintenanceBaselineObserved {
 			previous, ok := baseline[key]
-			if !ok || previous.VacuumTrigger == nil || t.VacuumTrigger == nil {
+			vacReset = ok && (t.VacuumCount < previous.VacuumCount || t.AutovacuumCount < previous.AutovacuumCount)
+			anaReset = ok && (t.AnalyzeCount < previous.AnalyzeCount || t.AutoanalyzeCount < previous.AutoanalyzeCount)
+			if !ok || previous.VacuumTrigger == nil || t.VacuumTrigger == nil || vacReset {
 				result.MaintenanceUnobservedTargets = append(result.MaintenanceUnobservedTargets, "vacuum:"+t.SchemaName+"."+t.RelName)
 			}
-			if !ok || previous.AnalyzeTrigger == nil || t.AnalyzeTrigger == nil {
+			if !ok || previous.AnalyzeTrigger == nil || t.AnalyzeTrigger == nil || anaReset {
 				result.MaintenanceUnobservedTargets = append(result.MaintenanceUnobservedTargets, "analyze:"+t.SchemaName+"."+t.RelName)
 			}
 		}
 		if covered[key] {
 			continue
 		}
-		if t.HeapBytes < 64<<20 {
-			continue
-		}
 		if result.MaintenanceBaselineObserved {
 			if previous, ok := baseline[key]; ok {
-				if issue := maintenanceBacklog(t, previous); issue != nil {
-					result.MaintenanceIssues = append(result.MaintenanceIssues, *issue)
-					continue
+				if issues := maintenanceBacklogFiltered(t, previous, !vacReset, !anaReset); len(issues) > 0 {
+					result.MaintenanceIssues = append(result.MaintenanceIssues, issues...)
 				}
 			}
 		}
@@ -102,36 +108,41 @@ func (a *MainAnalyzer) analyzeMaintenance(ctx context.Context, result *AnalysisR
 
 func tableKey(schema, table string) string { return schema + "\x00" + table }
 
-func maintenanceBacklog(now, before models.TableStat) *TableIssue {
-	if now.VacuumTrigger != nil && before.VacuumTrigger != nil &&
+func maintenanceBacklog(now, before models.TableStat) []TableIssue {
+	return maintenanceBacklogFiltered(now, before, true, true)
+}
+
+func maintenanceBacklogFiltered(now, before models.TableStat, checkVacuum, checkAnalyze bool) []TableIssue {
+	var issues []TableIssue
+	if checkVacuum && now.VacuumTrigger != nil && before.VacuumTrigger != nil &&
 		*now.VacuumTrigger > 0 && *before.VacuumTrigger > 0 &&
 		now.NDeadTup >= 10000 &&
 		float64(now.NDeadTup) > 2*(*now.VacuumTrigger) &&
 		float64(before.NDeadTup) > 2*(*before.VacuumTrigger) &&
 		now.VacuumCount == before.VacuumCount &&
 		now.AutovacuumCount == before.AutovacuumCount {
-		return &TableIssue{
+		issues = append(issues, TableIssue{
 			SchemaName: now.SchemaName, TableName: now.RelName,
 			IssueType: TableIssueVacuumBacklog, Severity: models.SeverityWarning,
 			NDeadTup: now.NDeadTup, NLiveTup: now.NLiveTup,
 			HeapBytes: now.HeapBytes, VacuumTrigger: now.VacuumTrigger,
-		}
+		})
 	}
-	if now.AnalyzeTrigger != nil && before.AnalyzeTrigger != nil &&
+	if checkAnalyze && now.AnalyzeTrigger != nil && before.AnalyzeTrigger != nil &&
 		*now.AnalyzeTrigger > 0 && *before.AnalyzeTrigger > 0 &&
 		now.NModSinceAnalyze >= 10000 &&
 		float64(now.NModSinceAnalyze) > 2*(*now.AnalyzeTrigger) &&
 		float64(before.NModSinceAnalyze) > 2*(*before.AnalyzeTrigger) &&
 		now.AnalyzeCount == before.AnalyzeCount &&
 		now.AutoanalyzeCount == before.AutoanalyzeCount {
-		return &TableIssue{
+		issues = append(issues, TableIssue{
 			SchemaName: now.SchemaName, TableName: now.RelName,
 			IssueType: TableIssueAnalyzeBacklog, Severity: models.SeverityWarning,
 			NModSinceAnalyze: now.NModSinceAnalyze, AnalyzeTrigger: now.AnalyzeTrigger,
 			HeapBytes: now.HeapBytes,
-		}
+		})
 	}
-	return nil
+	return issues
 }
 
 func maintenanceTuning(t models.TableStat) *TableIssue {

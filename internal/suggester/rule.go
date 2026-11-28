@@ -41,8 +41,12 @@ type Rule interface {
 // PartiallyObserved is implemented by rules whose data can be partly missing
 // even when their domains are usable, such as an outage-risk check that failed
 // for lack of a privilege. The rule still reports what it could see, and the
-// suggester leaves existing suggestions whose target starts with one of the
-// returned prefixes unresolved: not seeing them is not the same as them being gone.
+// suggester leaves matching existing suggestions unresolved: not seeing them
+// is not the same as them being gone.
+//
+// Entries ending in ":" act as target prefixes (e.g. "slot:", "vacuum:"); all
+// other entries match only the exact target (e.g. "vacuum:public.order",
+// "instance:disk", "setting:shared_buffers").
 type PartiallyObserved interface {
 	UnobservedTargets(analysis *analyzer.AnalysisResult) []string
 }
@@ -134,7 +138,7 @@ func DefaultConfig() *Config {
 		UnusedIndexDays:       30,    // 30 days
 		SeqScanRatioWarning:   0.5,   // 50%
 		SeqScanRatioCritical:  0.8,   // 80%
-		MinTableSizeForIndex:  10000, // 10KB
+		MinTableSizeForIndex:  10000, // 10,000 rows
 		VacuumStaleDays:       7,     // 7 days
 
 		// Operational defaults

@@ -439,3 +439,70 @@ func TestAlertTitle(t *testing.T) {
 		t.Errorf("alertTitle = %q", got)
 	}
 }
+
+func TestDigestOverflowSummaryRendered(t *testing.T) {
+	var newItems, resolvedItems []Item
+	for i := 0; i < maxListed; i++ {
+		newItems = append(newItems, Item{Event: EventOpened, Severity: models.SeverityWarning, Title: "new issue"})
+		resolvedItems = append(resolvedItems, Item{Event: EventResolved, Severity: models.SeverityWarning, Title: "fixed issue"})
+	}
+	msg := Message{
+		Kind:     KindDigest,
+		Instance: "db",
+		Title:    "Weekly digest",
+		Digest: &Digest{
+			New:           newItems,
+			NewTotal:      maxListed + 5,
+			Resolved:      resolvedItems,
+			ResolvedTotal: maxListed + 3,
+		},
+	}
+	rendered := render(msg, markdown)
+	if !strings.Contains(rendered, "…and 5 more") {
+		t.Errorf("digest missing new overflow indicator:\n%s", rendered)
+	}
+	if !strings.Contains(rendered, "…and 3 more") {
+		t.Errorf("digest missing resolved overflow indicator:\n%s", rendered)
+	}
+}
+
+func TestLastDigestSlotSpringForwardDST(t *testing.T) {
+	loc, err := time.LoadLocation("America/New_York")
+	if err != nil {
+		t.Skipf("America/New_York tz unavailable: %v", err)
+	}
+	daily := config.DigestConfig{Enabled: true, Schedule: "daily", Hour: 2}
+	// 2026-03-08 is US spring-forward day (02:00 jumps to 03:00 EDT).
+	// At 01:30 EST before the jump, the last slot must be 2026-03-07 02:00 EST,
+	// NOT 2026-03-07 03:00 EST.
+	beforeJump := time.Date(2026, 3, 8, 1, 30, 0, 0, loc)
+	got, err := lastDigestSlot(daily, beforeJump)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := time.Date(2026, 3, 7, 2, 0, 0, 0, loc)
+	if !got.Equal(want) {
+		t.Fatalf("lastDigestSlot(spring-forward 01:30) = %v, want %v", got, want)
+	}
+
+	// After the jump (03:30 EDT), previousSlot must land at 2026-03-07 02:00 EST.
+	afterJump := time.Date(2026, 3, 8, 3, 30, 0, 0, loc)
+	slot, err := lastDigestSlot(daily, afterJump)
+	if err != nil {
+		t.Fatal(err)
+	}
+	prev := previousSlot(daily, slot)
+	if !prev.Equal(want) {
+		t.Fatalf("previousSlot(spring-forward) = %v, want %v", prev, want)
+	}
+
+	// Next day before 02:00 EDT must still resolve to yesterday's 03:00 EDT slot (no duplicate).
+	nextMorning := time.Date(2026, 3, 9, 1, 30, 0, 0, loc)
+	gotNext, err := lastDigestSlot(daily, nextMorning)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !gotNext.Equal(slot) {
+		t.Fatalf("lastDigestSlot(day after spring-forward 01:30) = %v, want %v", gotNext, slot)
+	}
+}

@@ -85,7 +85,7 @@ func (c *PgxClient) riskWraparound(ctx context.Context, risk *models.OutageRisk)
 
 func (c *PgxClient) riskTableAges(ctx context.Context, risk *models.OutageRisk) error {
 	// A table's TOAST data is frozen separately, so its horizon counts too.
-	rows, err := c.pool.Query(ctx, `
+	const tableAgeQuery = `
 		SELECT n.nspname, c.relname,
 		       GREATEST(age(c.relfrozenxid), COALESCE(age(t.relfrozenxid), 0)),
 		       GREATEST(mxid_age(c.relminmxid), COALESCE(mxid_age(t.relminmxid), 0)),
@@ -94,18 +94,27 @@ func (c *PgxClient) riskTableAges(ctx context.Context, risk *models.OutageRisk) 
 		JOIN pg_namespace n ON n.oid = c.relnamespace
 		LEFT JOIN pg_class t ON t.oid = c.reltoastrelid
 		WHERE c.relkind IN ('r', 'm')
-		ORDER BY 3 DESC
-		LIMIT 10
-	`)
-	if err != nil {
+	`
+	collect := func(orderCol int) ([]models.TableAge, error) {
+		rows, err := c.pool.Query(ctx, fmt.Sprintf("%s ORDER BY %d DESC LIMIT 10", tableAgeQuery, orderCol))
+		if err != nil {
+			return nil, err
+		}
+		return pgx.CollectRows(rows, func(row pgx.CollectableRow) (models.TableAge, error) {
+			var t models.TableAge
+			err := row.Scan(&t.SchemaName, &t.RelName, &t.XIDAge, &t.MXIDAge, &t.TotalBytes)
+			return t, err
+		})
+	}
+
+	var err error
+	if risk.OldestTables, err = collect(3); err != nil {
 		return err
 	}
-	risk.OldestTables, err = pgx.CollectRows(rows, func(row pgx.CollectableRow) (models.TableAge, error) {
-		var t models.TableAge
-		err := row.Scan(&t.SchemaName, &t.RelName, &t.XIDAge, &t.MXIDAge, &t.TotalBytes)
-		return t, err
-	})
-	return err
+	if risk.OldestMXIDTables, err = collect(4); err != nil {
+		return err
+	}
+	return nil
 }
 
 func (c *PgxClient) riskXminBackends(ctx context.Context, risk *models.OutageRisk) error {

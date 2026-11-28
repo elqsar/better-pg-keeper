@@ -6,6 +6,7 @@ import (
 	"github.com/labstack/echo/v4"
 
 	"github.com/elqsar/pganalyzer/internal/models"
+	"github.com/elqsar/pganalyzer/internal/setup"
 )
 
 // SetupBanner summarises the setup checklist for the dashboard.
@@ -61,4 +62,32 @@ func (h *PageHandler) Setup(c echo.Context) error {
 		}
 	}
 	return c.Render(http.StatusOK, "setup", data)
+}
+
+// SetupAPIHandler handles GET /api/v1/setup requests.
+type SetupAPIHandler struct {
+	setup *setup.Checker
+}
+
+// NewSetupAPIHandler creates a new SetupAPIHandler.
+func NewSetupAPIHandler(checker *setup.Checker) *SetupAPIHandler {
+	return &SetupAPIHandler{setup: checker}
+}
+
+// GetSetup handles GET /api/v1/setup requests. Pass ?refresh=1 to bypass the cache.
+func (h *SetupAPIHandler) GetSetup(c echo.Context) error {
+	if h.setup == nil {
+		return c.JSON(http.StatusServiceUnavailable, map[string]string{
+			"error": "setup checker is not configured",
+			"code":  "UNAVAILABLE",
+		})
+	}
+	ctx := c.Request().Context()
+	var report *models.SetupReport
+	if c.QueryParam("refresh") != "" {
+		report = h.setup.Refresh(ctx)
+	} else {
+		report = h.setup.Report(ctx)
+	}
+	return c.JSON(http.StatusOK, report)
 }

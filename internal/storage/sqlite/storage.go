@@ -7,12 +7,33 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 	"time"
 
 	"github.com/elqsar/pganalyzer/internal/models"
 
 	_ "modernc.org/sqlite"
 )
+
+func sqliteDSN(dbPath, params string) string {
+	if strings.Contains(dbPath, "?") {
+		return dbPath + "&" + params
+	}
+	return dbPath + "?" + params
+}
+
+// utcTime normalizes a timestamp to UTC and strips the monotonic clock reading
+// so modernc.org/sqlite serializes consistent, lexicographically comparable text.
+func utcTime(t time.Time) time.Time {
+	return t.UTC().Round(0)
+}
+
+func utcTimePtr(t *time.Time) any {
+	if t == nil {
+		return nil
+	}
+	return utcTime(*t)
+}
 
 // Storage defines the interface for pganalyzer storage operations.
 type Storage interface {
@@ -103,7 +124,9 @@ type Storage interface {
 	GetSuggestionsByStatus(ctx context.Context, instanceID int64, status string) ([]models.Suggestion, error)
 	GetSuggestionByID(ctx context.Context, id int64) (*models.Suggestion, error)
 	DismissSuggestion(ctx context.Context, id int64) error
+	UndismissSuggestion(ctx context.Context, id int64) error
 	ResolveSuggestion(ctx context.Context, id int64) error
+	PurgeOldSuggestions(ctx context.Context, retention time.Duration) (int64, error)
 
 	// Explain plan operations
 	SaveExplainPlan(ctx context.Context, plan *models.ExplainPlan) (int64, error)
@@ -203,8 +226,9 @@ func newFileStorage(dbPath string) (*SQLiteStorage, error) {
 		}
 	}
 
-	// Open write connection (single connection for serialized writes)
-	writeDB, err := sql.Open("sqlite", dbPath+"?_pragma=busy_timeout(5000)&_pragma=journal_mode(WAL)&_pragma=foreign_keys(ON)")
+	// Open write connection (single connection for serialized writes with IMMEDIATE
+	// transactions so read-then-write transactions respect busy_timeout).
+	writeDB, err := sql.Open("sqlite", sqliteDSN(dbPath, "_pragma=busy_timeout(5000)&_pragma=journal_mode(WAL)&_pragma=foreign_keys(ON)&_txlock=immediate"))
 	if err != nil {
 		return nil, fmt.Errorf("opening write database: %w", err)
 	}
@@ -227,9 +251,10 @@ func newFileStorage(dbPath string) (*SQLiteStorage, error) {
 		return nil, fmt.Errorf("running migrations: %w", err)
 	}
 
-	// Open read connection pool (multiple connections for concurrent reads)
-	// WAL mode allows concurrent readers with a single writer
-	readDB, err := sql.Open("sqlite", dbPath+"?_pragma=busy_timeout(5000)&_pragma=journal_mode(WAL)&_pragma=foreign_keys(ON)&mode=ro")
+	// Open read connection pool (multiple connections for concurrent reads).
+	// WAL mode is persistent on the file after writeDB sets it; query_only(ON)
+	// enforces read-only connections without taking WAL write locks on connect.
+	readDB, err := sql.Open("sqlite", sqliteDSN(dbPath, "_pragma=busy_timeout(5000)&_pragma=foreign_keys(ON)&_pragma=query_only(ON)"))
 	if err != nil {
 		writeDB.Close()
 		return nil, fmt.Errorf("opening read database: %w", err)
@@ -385,13 +410,13 @@ func (s *SQLiteStorage) ListInstances(ctx context.Context) ([]models.Instance, e
 
 // CreateSnapshot creates a new snapshot and returns its ID.
 func (s *SQLiteStorage) CreateSnapshot(ctx context.Context, snap *models.Snapshot) (int64, error) {
-	// modernc SQLite serializes time.Time.String(), including its monotonic clock
-	// suffix. A scanned timestamp has no suffix, so equality bounds would miss it.
-	capturedAt := snap.CapturedAt.Round(0)
+	// Normalize to UTC without monotonic suffix so TEXT comparisons remain valid
+	// across timezones and DST transitions.
+	capturedAt := utcTime(snap.CapturedAt)
 	result, err := s.writeDB.ExecContext(ctx, `
 		INSERT INTO snapshots (instance_id, captured_at, pg_version, stats_reset, cache_hit_ratio)
 		VALUES (?, ?, ?, ?, ?)
-	`, snap.InstanceID, capturedAt, snap.PGVersion, snap.StatsReset, snap.CacheHitRatio)
+	`, snap.InstanceID, capturedAt, snap.PGVersion, utcTimePtr(snap.StatsReset), snap.CacheHitRatio)
 
 	if err != nil {
 		return 0, fmt.Errorf("creating snapshot: %w", err)
@@ -456,7 +481,7 @@ func (s *SQLiteStorage) RecordCollectorRun(ctx context.Context, snapshotID int64
 			status = excluded.status,
 			collected_at = excluded.collected_at,
 			error = excluded.error
-	`, snapshotID, collector, status, at.Round(0), errValue)
+	`, snapshotID, collector, status, utcTime(at), errValue)
 	if err != nil {
 		return fmt.Errorf("recording collector run: %w", err)
 	}
@@ -477,10 +502,8 @@ func (s *SQLiteStorage) GetLatestSnapshotWithCollector(ctx context.Context, inst
 	`
 	args := []any{instanceID, collector, models.CollectorStatusSuccess}
 	if !notAfter.IsZero() {
-		// Strip the monotonic component just as CreateSnapshot does, so the
-		// anchor itself is included by the bound.
 		query += " AND s.captured_at <= ?"
-		args = append(args, notAfter.Round(0))
+		args = append(args, utcTime(notAfter))
 	}
 	query += " ORDER BY s.captured_at DESC LIMIT 1"
 
@@ -587,7 +610,7 @@ func (s *SQLiteStorage) SaveQueryStats(ctx context.Context, snapshotID int64, st
 	if _, err := tx.ExecContext(ctx, `DELETE FROM query_stats WHERE snapshot_id = ?`, snapshotID); err != nil {
 		return fmt.Errorf("replacing query stats: %w", err)
 	}
-	sampledAt := time.Now().UTC()
+	sampledAt := utcTime(time.Now())
 
 	stmt, err := tx.PrepareContext(ctx, `
 		INSERT INTO query_stats (
@@ -667,22 +690,51 @@ func (s *SQLiteStorage) GetQueryStats(ctx context.Context, snapshotID int64) ([]
 }
 
 // GetQueryStatsDelta calculates the difference in query statistics between two snapshots.
-// If stats were reset (indicated by negative deltas), uses current values as-is.
+// If pg_stat_statements was reset between the snapshots (snapshots.stats_reset changed)
+// or any monotonic counter for a query decreased (eviction + re-entry), all five delta
+// columns use the post-reset current values together rather than mixing reset and
+// non-reset columns.
 func (s *SQLiteStorage) GetQueryStatsDelta(ctx context.Context, fromSnapshotID, toSnapshotID int64) ([]models.QueryStatDelta, error) {
 	rows, err := s.readDB.QueryContext(ctx, `
+		WITH reset_flags AS (
+			SELECT
+				t.queryid,
+				t.query,
+				t.calls AS t_calls,
+				t.total_exec_time AS t_total,
+				COALESCE(t.rows, 0) AS t_rows,
+				COALESCE(t.shared_blks_hit, 0) AS t_hit,
+				COALESCE(t.shared_blks_read, 0) AS t_read,
+				COALESCE(f.calls, 0) AS f_calls,
+				COALESCE(f.total_exec_time, 0) AS f_total,
+				COALESCE(f.rows, 0) AS f_rows,
+				COALESCE(f.shared_blks_hit, 0) AS f_hit,
+				COALESCE(f.shared_blks_read, 0) AS f_read,
+				(
+					(s_to.stats_reset IS NOT NULL AND (s_from.stats_reset IS NULL OR s_to.stats_reset != s_from.stats_reset))
+					OR t.calls < COALESCE(f.calls, 0)
+					OR t.total_exec_time < COALESCE(f.total_exec_time, 0)
+					OR COALESCE(t.rows, 0) < COALESCE(f.rows, 0)
+					OR COALESCE(t.shared_blks_hit, 0) < COALESCE(f.shared_blks_hit, 0)
+					OR COALESCE(t.shared_blks_read, 0) < COALESCE(f.shared_blks_read, 0)
+				) AS was_reset
+			FROM query_stats t
+			JOIN snapshots s_to ON s_to.id = t.snapshot_id
+			LEFT JOIN snapshots s_from ON s_from.id = ?
+			LEFT JOIN query_stats f ON t.queryid = f.queryid AND f.snapshot_id = ?
+			WHERE t.snapshot_id = ?
+		)
 		SELECT
-			t.queryid,
-			t.query,
-			CASE WHEN t.calls - COALESCE(f.calls, 0) < 0 THEN t.calls ELSE t.calls - COALESCE(f.calls, 0) END as delta_calls,
-			CASE WHEN t.total_exec_time - COALESCE(f.total_exec_time, 0) < 0 THEN t.total_exec_time ELSE t.total_exec_time - COALESCE(f.total_exec_time, 0) END as delta_total_time,
-			CASE WHEN t.rows - COALESCE(f.rows, 0) < 0 THEN t.rows ELSE t.rows - COALESCE(f.rows, 0) END as delta_rows,
-			CASE WHEN t.shared_blks_hit - COALESCE(f.shared_blks_hit, 0) < 0 THEN t.shared_blks_hit ELSE t.shared_blks_hit - COALESCE(f.shared_blks_hit, 0) END as delta_blks_hit,
-			CASE WHEN t.shared_blks_read - COALESCE(f.shared_blks_read, 0) < 0 THEN t.shared_blks_read ELSE t.shared_blks_read - COALESCE(f.shared_blks_read, 0) END as delta_blks_read
-		FROM query_stats t
-		LEFT JOIN query_stats f ON t.queryid = f.queryid AND f.snapshot_id = ?
-		WHERE t.snapshot_id = ?
+			queryid,
+			query,
+			CASE WHEN was_reset THEN t_calls ELSE t_calls - f_calls END AS delta_calls,
+			CASE WHEN was_reset THEN t_total ELSE t_total - f_total END AS delta_total_time,
+			CASE WHEN was_reset THEN t_rows ELSE t_rows - f_rows END AS delta_rows,
+			CASE WHEN was_reset THEN t_hit ELSE t_hit - f_hit END AS delta_blks_hit,
+			CASE WHEN was_reset THEN t_read ELSE t_read - f_read END AS delta_blks_read
+		FROM reset_flags
 		ORDER BY delta_total_time DESC
-	`, fromSnapshotID, toSnapshotID)
+	`, fromSnapshotID, fromSnapshotID, toSnapshotID)
 	if err != nil {
 		return nil, fmt.Errorf("querying delta stats: %w", err)
 	}
@@ -844,7 +896,7 @@ func (s *SQLiteStorage) SaveIndexStats(ctx context.Context, snapshotID int64, st
 			stat.IdxScan, stat.IdxTupRead, stat.IdxTupFetch, stat.IndexSize,
 			stat.IsUnique, stat.IsPrimary,
 			stat.AccessMethod, stat.IndexDef, stat.KeyColumns, stat.IncludeColumns,
-			stat.Expressions, stat.Predicate, stat.BacksForeignKey, stat.StatsSince,
+			stat.Expressions, stat.Predicate, stat.BacksForeignKey, utcTimePtr(stat.StatsSince),
 		)
 		if err != nil {
 			return fmt.Errorf("inserting index stat: %w", err)
@@ -919,7 +971,7 @@ func (s *SQLiteStorage) SaveBloatStats(ctx context.Context, snapshotID int64, st
 		_, err := stmt.ExecContext(ctx,
 			snapshotID, stat.SchemaName, stat.RelName,
 			stat.NDeadTup, stat.NLiveTup, stat.BloatPercent, stat.HeapBytes,
-			stat.DeadTupleBytes, stat.FreeBytes, stat.MeasurementSource, stat.MeasuredAt,
+			stat.DeadTupleBytes, stat.FreeBytes, stat.MeasurementSource, utcTimePtr(stat.MeasuredAt),
 		)
 		if err != nil {
 			return fmt.Errorf("inserting bloat stat: %w", err)
@@ -1343,7 +1395,7 @@ func (s *SQLiteStorage) GetExtendedDatabaseStats(ctx context.Context, snapshotID
 // UpsertSuggestion creates or updates a suggestion.
 // Suggestions are deduplicated by (instance_id, rule_id, target_object).
 func (s *SQLiteStorage) UpsertSuggestion(ctx context.Context, sug *models.Suggestion) error {
-	now := time.Now().Round(0)
+	now := utcTime(time.Now())
 
 	// Try to update existing suggestion
 	result, err := s.writeDB.ExecContext(ctx, `
@@ -1449,17 +1501,32 @@ func (s *SQLiteStorage) GetSuggestionByID(ctx context.Context, id int64) (*model
 	return &sug, nil
 }
 
-// DismissSuggestion marks a suggestion as dismissed.
+// DismissSuggestion marks an active suggestion as dismissed.
 func (s *SQLiteStorage) DismissSuggestion(ctx context.Context, id int64) error {
-	now := time.Now().Round(0)
+	now := utcTime(time.Now())
 	_, err := s.writeDB.ExecContext(ctx, `
 		UPDATE suggestions
 		SET status = 'dismissed', dismissed_at = ?
-		WHERE id = ?
+		WHERE id = ? AND status = 'active'
 	`, now, id)
 
 	if err != nil {
 		return fmt.Errorf("dismissing suggestion: %w", err)
+	}
+
+	return nil
+}
+
+// UndismissSuggestion restores a dismissed suggestion back to active status.
+func (s *SQLiteStorage) UndismissSuggestion(ctx context.Context, id int64) error {
+	_, err := s.writeDB.ExecContext(ctx, `
+		UPDATE suggestions
+		SET status = 'active', dismissed_at = NULL
+		WHERE id = ? AND status = 'dismissed'
+	`, id)
+
+	if err != nil {
+		return fmt.Errorf("undismissing suggestion: %w", err)
 	}
 
 	return nil
@@ -1472,13 +1539,29 @@ func (s *SQLiteStorage) ResolveSuggestion(ctx context.Context, id int64) error {
 		UPDATE suggestions
 		SET status = 'resolved', resolved_at = ?
 		WHERE id = ? AND status = 'active'
-	`, time.Now().Round(0), id)
+	`, utcTime(time.Now()), id)
 
 	if err != nil {
 		return fmt.Errorf("resolving suggestion: %w", err)
 	}
 
 	return nil
+}
+
+// PurgeOldSuggestions deletes resolved and dismissed suggestions older than the retention period.
+func (s *SQLiteStorage) PurgeOldSuggestions(ctx context.Context, retention time.Duration) (int64, error) {
+	cutoff := utcTime(time.Now().Add(-retention))
+
+	result, err := s.writeDB.ExecContext(ctx, `
+		DELETE FROM suggestions
+		WHERE status IN ('resolved', 'dismissed')
+			AND COALESCE(resolved_at, dismissed_at, last_seen_at) < ?
+	`, cutoff)
+	if err != nil {
+		return 0, fmt.Errorf("purging old suggestions: %w", err)
+	}
+
+	return result.RowsAffected()
 }
 
 // =============================================================================
@@ -1490,7 +1573,7 @@ func (s *SQLiteStorage) SaveExplainPlan(ctx context.Context, plan *models.Explai
 	result, err := s.writeDB.ExecContext(ctx, `
 		INSERT INTO explain_plans (queryid, plan_text, plan_json, captured_at, execution_time)
 		VALUES (?, ?, ?, ?, ?)
-	`, plan.QueryID, plan.PlanText, plan.PlanJSON, plan.CapturedAt.Round(0), plan.ExecutionTime)
+	`, plan.QueryID, plan.PlanText, plan.PlanJSON, utcTime(plan.CapturedAt), plan.ExecutionTime)
 
 	if err != nil {
 		return 0, fmt.Errorf("saving explain plan: %w", err)
@@ -1530,7 +1613,7 @@ func (s *SQLiteStorage) GetExplainPlan(ctx context.Context, queryID int64) (*mod
 // PurgeOldSnapshots deletes snapshots older than the retention period.
 // Related stats are cascade-deleted due to foreign key constraints.
 func (s *SQLiteStorage) PurgeOldSnapshots(ctx context.Context, retention time.Duration) (int64, error) {
-	cutoff := time.Now().Add(-retention).Round(0)
+	cutoff := utcTime(time.Now().Add(-retention))
 
 	result, err := s.writeDB.ExecContext(ctx, `
 		DELETE FROM snapshots WHERE captured_at < ?
@@ -1897,12 +1980,11 @@ func (s *SQLiteStorage) SaveCurrentBlockedQueries(ctx context.Context, instanceI
 			wait_duration_seconds, blocking_pid, blocking_user, blocking_query,
 			lock_type, lock_mode, relation, updated_at
 		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-		ON CONFLICT(instance_id, blocked_pid) DO UPDATE SET
+		ON CONFLICT(instance_id, blocked_pid, blocking_pid) DO UPDATE SET
 			blocked_user = excluded.blocked_user,
 			blocked_query = excluded.blocked_query,
 			blocked_start = excluded.blocked_start,
 			wait_duration_seconds = excluded.wait_duration_seconds,
-			blocking_pid = excluded.blocking_pid,
 			blocking_user = excluded.blocking_user,
 			blocking_query = excluded.blocking_query,
 			lock_type = excluded.lock_type,
@@ -2187,8 +2269,10 @@ func (s *SQLiteStorage) SaveCurrentIndexStats(ctx context.Context, instanceID in
 	stmt, err := tx.PrepareContext(ctx, `
 		INSERT INTO current_index_stats (
 			instance_id, schemaname, relname, indexrelname, idx_scan,
-			idx_tup_read, idx_tup_fetch, index_size, is_unique, is_primary, updated_at
-		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+			idx_tup_read, idx_tup_fetch, index_size, is_unique, is_primary,
+			access_method, index_def, key_columns, include_columns, expressions,
+			predicate, backs_foreign_key, stats_since, updated_at
+		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 		ON CONFLICT(instance_id, schemaname, relname, indexrelname) DO UPDATE SET
 			idx_scan = excluded.idx_scan,
 			idx_tup_read = excluded.idx_tup_read,
@@ -2196,6 +2280,14 @@ func (s *SQLiteStorage) SaveCurrentIndexStats(ctx context.Context, instanceID in
 			index_size = excluded.index_size,
 			is_unique = excluded.is_unique,
 			is_primary = excluded.is_primary,
+			access_method = excluded.access_method,
+			index_def = excluded.index_def,
+			key_columns = excluded.key_columns,
+			include_columns = excluded.include_columns,
+			expressions = excluded.expressions,
+			predicate = excluded.predicate,
+			backs_foreign_key = excluded.backs_foreign_key,
+			stats_since = excluded.stats_since,
 			updated_at = excluded.updated_at
 	`)
 	if err != nil {
@@ -2207,7 +2299,10 @@ func (s *SQLiteStorage) SaveCurrentIndexStats(ctx context.Context, instanceID in
 		_, err := stmt.ExecContext(ctx,
 			instanceID, stat.SchemaName, stat.RelName, stat.IndexRelName,
 			stat.IdxScan, stat.IdxTupRead, stat.IdxTupFetch, stat.IndexSize,
-			stat.IsUnique, stat.IsPrimary, batchTime,
+			stat.IsUnique, stat.IsPrimary,
+			stat.AccessMethod, stat.IndexDef, stat.KeyColumns, stat.IncludeColumns,
+			stat.Expressions, stat.Predicate, stat.BacksForeignKey, utcTimePtr(stat.StatsSince),
+			batchTime,
 		)
 		if err != nil {
 			return fmt.Errorf("upserting index stat: %w", err)
@@ -2229,7 +2324,9 @@ func (s *SQLiteStorage) SaveCurrentIndexStats(ctx context.Context, instanceID in
 func (s *SQLiteStorage) GetCurrentIndexStats(ctx context.Context, instanceID int64) ([]models.IndexStat, error) {
 	rows, err := s.readDB.QueryContext(ctx, `
 		SELECT instance_id, schemaname, relname, indexrelname, idx_scan,
-			idx_tup_read, idx_tup_fetch, index_size, is_unique, is_primary
+			idx_tup_read, idx_tup_fetch, index_size, is_unique, is_primary,
+			access_method, index_def, key_columns, include_columns, expressions,
+			predicate, backs_foreign_key, stats_since
 		FROM current_index_stats
 		WHERE instance_id = ?
 		ORDER BY index_size DESC
@@ -2246,6 +2343,8 @@ func (s *SQLiteStorage) GetCurrentIndexStats(ctx context.Context, instanceID int
 			&stat.SnapshotID, &stat.SchemaName, &stat.RelName, &stat.IndexRelName,
 			&stat.IdxScan, &stat.IdxTupRead, &stat.IdxTupFetch,
 			&stat.IndexSize, &stat.IsUnique, &stat.IsPrimary,
+			&stat.AccessMethod, &stat.IndexDef, &stat.KeyColumns, &stat.IncludeColumns,
+			&stat.Expressions, &stat.Predicate, &stat.BacksForeignKey, &stat.StatsSince,
 		)
 		if err != nil {
 			return nil, fmt.Errorf("scanning index stat: %w", err)
@@ -2292,7 +2391,7 @@ func (s *SQLiteStorage) SaveCurrentBloatStats(ctx context.Context, instanceID in
 			instanceID, stat.SchemaName, stat.RelName,
 			stat.NDeadTup, stat.NLiveTup, stat.BloatPercent,
 			stat.HeapBytes, stat.DeadTupleBytes, stat.FreeBytes,
-			stat.MeasurementSource, stat.MeasuredAt, batchTime,
+			stat.MeasurementSource, utcTimePtr(stat.MeasuredAt), batchTime,
 		)
 		if err != nil {
 			return fmt.Errorf("upserting bloat stat: %w", err)
